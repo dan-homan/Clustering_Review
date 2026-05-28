@@ -19,12 +19,17 @@ from dash import (
     ALL, Dash, Input, Output, Patch, State, ctx, no_update, html,
 )
 
-from ..data.loader import load_bundle
+import numpy as np
+
+from ..data.loader import _SOURCE_DIR_RE, load_bundle
+from ..recommendations.apply import apply_recommendation
+from ..recommendations.notebook_format import format_submission_text
 from ..recommendations.schema import (
     ClusterFeedback, EpochFeedback, Edit, Recommendation,
 )
 from ..recommendations.store import (
-    load_recommendation, load_recommendation_by_slug, save_recommendation,
+    is_submitted, load_recommendation, load_recommendation_by_slug,
+    save_recommendation, save_submitted, submitted_at,
 )
 
 
@@ -104,6 +109,144 @@ def _derived_robust_edits(
             "comment": (row.get("comment") or "").strip(),
             "_derived": True,
         })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Conflict-detection helpers for the renumber action buttons
+# ---------------------------------------------------------------------------
+
+
+_RESERVED_IDS = {0, 999}        # core + park-overlap
+_AUTO_DECONFLICT_COMMENT = "auto-deconfliction for next edit"
+
+
+def _next_free_cluster_id(df, exclude: set[int]) -> int:
+    """Smallest int ≥ 1 not used as a clusterID anywhere in `df`, excluding
+    the reserved core/park IDs and any caller-supplied exclusions."""
+    existing = set(df["clusterID"].astype(int).unique())
+    existing |= _RESERVED_IDS
+    existing |= set(exclude)
+    i = 1
+    while i in existing:
+        i += 1
+    return i
+
+
+def _effective_df(bundle_df, edits_data):
+    """Apply any already-staged edits before checking for conflicts.
+
+    Without this, a sequence of renumbers that *would* collide (e.g.
+    second edit goes to a cluster that the first edit just created)
+    silently slips past the check and trips the 999-park rule at
+    `mojave-apply` time. We rebuild the effective `cluster_df` from
+    `bundle.cluster_df` + the pending edits so the second click sees
+    the world the first click left behind.
+    """
+    if not edits_data:
+        return bundle_df
+    rec = Recommendation(source="", model="", reviewer="")
+    rec.edits = [Edit(
+        op=e.get("op") or "", scope=e.get("scope") or "",
+        epoch=e.get("epoch"), clusterID=e.get("clusterID"),
+        from_id=e.get("from_id"), to_id=e.get("to_id"),
+        value=e.get("value"), comment=e.get("comment", ""),
+    ) for e in edits_data]
+    return apply_recommendation(bundle_df, rec)
+
+
+def _detect_renumber_single_conflicts(
+    df, selection: list[dict], target: int,
+) -> list[float]:
+    """Return sorted list of epochs where the target ID is already taken
+    by some row OTHER than the one(s) being renumbered."""
+    sel_keys = {(int(s["cid"]), round(float(s["epoch"]), 4))
+                for s in selection}
+    bad: set[float] = set()
+    for s in selection:
+        cid = int(s["cid"])
+        if cid == target:
+            continue                     # no-op renumber
+        ep = round(float(s["epoch"]), 4)
+        em = np.isclose(df["epoch"].astype(float), ep, atol=1e-4)
+        # any row at this epoch already labeled `target` that isn't being
+        # renumbered itself
+        target_rows = em & (df["clusterID"] == target)
+        if not target_rows.any():
+            continue
+        # exclude rows in the selection (the row being renamed)
+        for idx in df.index[target_rows]:
+            other_cid = int(df.at[idx, "clusterID"])
+            other_ep = round(float(df.at[idx, "epoch"]), 4)
+            if (other_cid, other_ep) in sel_keys:
+                continue
+            bad.add(ep)
+            break
+    return sorted(bad)
+
+
+def _detect_renumber_all_epochs_conflict(
+    df, selection: list[dict], target: int,
+) -> bool:
+    """True if the target cluster exists in `df` outside the cids being
+    renumbered."""
+    sel_cids = {int(s["cid"]) for s in selection}
+    if target in sel_cids:
+        return False
+    return bool((df["clusterID"] == target).any())
+
+
+def _build_renumber_user_edits(
+    selection: list[dict], trig: str, target: int, comment: str,
+) -> list[dict]:
+    """The renumber edits the user originally asked for (without
+    deconfliction). Used both on the no-conflict fast-path and on the
+    confirm-dialog path."""
+    edits: list[dict] = []
+    if trig == "apply-renumber-single-btn":
+        for s in selection:
+            edits.append({
+                "op": "change_clusterID", "scope": "single",
+                "epoch": float(s["epoch"]), "clusterID": None,
+                "from_id": int(s["cid"]), "to_id": target,
+                "value": None, "comment": comment,
+            })
+    else:                                # apply-renumber-all-btn
+        for cid in sorted({int(s["cid"]) for s in selection}):
+            edits.append({
+                "op": "change_clusterID", "scope": "all_epochs",
+                "epoch": None, "clusterID": None,
+                "from_id": cid, "to_id": target,
+                "value": None, "comment": comment,
+            })
+    return edits
+
+
+def _build_deconflict_edits(
+    target: int, substitute: int,
+    *, single_epochs: list[float] | None = None, all_epochs: bool = False,
+) -> list[dict]:
+    """Edits that move existing cluster `target` out to `substitute`.
+
+    Always returned BEFORE the user's renumber edits so by the time the
+    user's edits apply, the target ID is free.
+    """
+    out: list[dict] = []
+    if all_epochs:
+        out.append({
+            "op": "change_clusterID", "scope": "all_epochs",
+            "epoch": None, "clusterID": None,
+            "from_id": int(target), "to_id": int(substitute),
+            "value": None, "comment": _AUTO_DECONFLICT_COMMENT,
+        })
+    else:
+        for ep in (single_epochs or []):
+            out.append({
+                "op": "change_clusterID", "scope": "single",
+                "epoch": float(ep), "clusterID": None,
+                "from_id": int(target), "to_id": int(substitute),
+                "value": None, "comment": _AUTO_DECONFLICT_COMMENT,
+            })
     return out
 
 
@@ -245,8 +388,10 @@ def build_rec_from_ui_state(
 
 def register(
     app: Dash, *,
+    results_dir: Path,
     recommendations_dir: Path,
     reviewer: str,
+    admin: bool = False,
 ) -> None:
 
     # ---- 1) Load on source/model change ----------------------------------
@@ -386,11 +531,17 @@ def register(
 
     # Apply a selection action -> append edit(s) to the manual edits store.
     # The Comment input above the action buttons becomes the `comment` field
-    # on every edit produced by this click.
+    # on every edit produced by this click. For renumber actions we ALSO
+    # check for "target cluster already in use in some epoch" collisions
+    # and route the user through a confirmation dialog if so — see
+    # _confirm_conflict_action / _cancel_conflict_action below.
     @app.callback(
         Output("edits-store", "data", allow_duplicate=True),
         Output("selection-action-hint", "children"),
         Output("selection-comment", "value"),
+        Output("pending-conflict-action", "data", allow_duplicate=True),
+        Output("conflict-confirm", "message"),
+        Output("conflict-confirm", "displayed"),
         Input("apply-uif-single-btn", "n_clicks"),
         Input("apply-uif-epoch-btn", "n_clicks"),
         Input("apply-renumber-single-btn", "n_clicks"),
@@ -399,74 +550,149 @@ def register(
         State("renumber-to-id", "value"),
         State("selection-comment", "value"),
         State("edits-store", "data"),
+        State("source-picker", "value"),
+        State("model-picker", "value"),
+        State("uif-value", "value"),
         prevent_initial_call=True,
     )
-    def _apply_selection_action(_a, _b, _c, _d, selection, to_id, comment,
-                                current_edits):
+    def _apply_selection_action(
+        _a, _b, _c, _d, selection, to_id, comment, current_edits,
+        source_folder, model_key, uif_value_str,
+    ):
         trig = ctx.triggered_id
         if not trig:
-            return no_update, no_update, no_update
+            return (no_update,) * 6
         sel = selection or []
         if not sel:
-            return no_update, "Selection is empty.", no_update
+            return no_update, "Selection is empty.", no_update, no_update, no_update, no_update
         cmt = (comment or "").strip()
-        new_edits: list[dict] = []
-        msg = ""
 
-        if trig == "apply-uif-single-btn":
-            for s in sel:
-                new_edits.append({
-                    "op": "set_use_in_fit", "scope": "single",
-                    "epoch": float(s["epoch"]), "clusterID": int(s["cid"]),
-                    "from_id": None, "to_id": None,
-                    "value": False, "comment": cmt,
-                })
-            msg = f"Added {len(new_edits)} use_in_fit=False edit(s)."
-
-        elif trig == "apply-uif-epoch-btn":
-            epochs = sorted({round(float(s["epoch"]), 4) for s in sel})
-            for e in epochs:
-                new_edits.append({
-                    "op": "set_use_in_fit", "scope": "epoch",
-                    "epoch": float(e), "clusterID": None,
-                    "from_id": None, "to_id": None,
-                    "value": False, "comment": cmt,
-                })
-            msg = f"Added {len(new_edits)} whole-epoch use_in_fit=False edit(s)."
-
-        elif trig in ("apply-renumber-single-btn", "apply-renumber-all-btn"):
-            if to_id is None:
-                return no_update, "Enter a target clusterID first.", no_update
-            try:
-                target = int(to_id)
-            except (TypeError, ValueError):
-                return no_update, "Target clusterID must be an integer.", no_update
-            if trig == "apply-renumber-single-btn":
+        # ---- Non-renumber paths (no conflict possible) ------------------
+        if trig in ("apply-uif-single-btn", "apply-uif-epoch-btn"):
+            uif_value = (uif_value_str or "false").lower() == "true"
+            new_edits: list[dict] = []
+            if trig == "apply-uif-single-btn":
                 for s in sel:
                     new_edits.append({
-                        "op": "change_clusterID", "scope": "single",
-                        "epoch": float(s["epoch"]), "clusterID": None,
-                        "from_id": int(s["cid"]), "to_id": target,
-                        "value": None, "comment": cmt,
+                        "op": "set_use_in_fit", "scope": "single",
+                        "epoch": float(s["epoch"]), "clusterID": int(s["cid"]),
+                        "from_id": None, "to_id": None,
+                        "value": uif_value, "comment": cmt,
                     })
-                msg = f"Added {len(new_edits)} per-point renumber edit(s)."
+                msg = f"Added {len(new_edits)} use_in_fit={uif_value} edit(s)."
             else:
-                cids = sorted({int(s["cid"]) for s in sel})
-                for cid in cids:
+                epochs = sorted({round(float(s["epoch"]), 4) for s in sel})
+                for e in epochs:
                     new_edits.append({
-                        "op": "change_clusterID", "scope": "all_epochs",
-                        "epoch": None, "clusterID": None,
-                        "from_id": cid, "to_id": target,
-                        "value": None, "comment": cmt,
+                        "op": "set_use_in_fit", "scope": "epoch",
+                        "epoch": float(e), "clusterID": None,
+                        "from_id": None, "to_id": None,
+                        "value": uif_value, "comment": cmt,
                     })
-                if len(cids) > 1:
-                    msg = (f"Added {len(new_edits)} renumber-all-epochs edit(s) "
-                           f"— this MERGES clusters {cids} into {target}.")
-                else:
-                    msg = f"Added 1 renumber-all-epochs edit for cluster {cids[0]} → {target}."
+                msg = f"Added {len(new_edits)} whole-epoch use_in_fit={uif_value} edit(s)."
+            return (current_edits or []) + new_edits, msg, "", None, no_update, no_update
 
-        # Reset the comment input so the next click starts fresh.
-        return (current_edits or []) + new_edits, msg, ""
+        # ---- Renumber paths --------------------------------------------
+        if to_id is None:
+            return no_update, "Enter a target clusterID first.", no_update, no_update, no_update, no_update
+        try:
+            target = int(to_id)
+        except (TypeError, ValueError):
+            return no_update, "Target clusterID must be an integer.", no_update, no_update, no_update, no_update
+
+        user_edits = _build_renumber_user_edits(sel, trig, target, cmt)
+        if not user_edits:
+            return no_update, no_update, no_update, no_update, no_update, no_update
+
+        # Build the effective df (base + already-staged edits) so a second
+        # renumber click sees the state the first one left.
+        if source_folder and model_key:
+            bundle = load_bundle(source_folder,
+                                 "current" if (model_key or "").startswith("rec:") else model_key)
+            eff_df = _effective_df(bundle.cluster_df, current_edits or [])
+        else:
+            eff_df = None
+
+        deconflict_edits: list[dict] = []
+        message = ""
+        if eff_df is not None:
+            sel_cids = {int(s["cid"]) for s in sel}
+            substitute = _next_free_cluster_id(eff_df,
+                                                exclude=sel_cids | {target})
+            if trig == "apply-renumber-single-btn":
+                conflict_epochs = _detect_renumber_single_conflicts(
+                    eff_df, sel, target,
+                )
+                if conflict_epochs:
+                    deconflict_edits = _build_deconflict_edits(
+                        target, substitute, single_epochs=conflict_epochs,
+                    )
+                    eps_str = ", ".join(f"{e:.4f}" for e in conflict_epochs)
+                    message = (
+                        f"Cluster {target} already exists at {len(conflict_epochs)} "
+                        f"epoch(s) ({eps_str}) where your selection points are. "
+                        f"To avoid an in-epoch ID collision, those instances will "
+                        f"first be renumbered to {substitute} (the smallest unused "
+                        f"ID). Then your selection becomes cluster {target}.\n\n"
+                        f"Apply both changes?"
+                    )
+            else:  # apply-renumber-all-btn
+                if _detect_renumber_all_epochs_conflict(eff_df, sel, target):
+                    deconflict_edits = _build_deconflict_edits(
+                        target, substitute, all_epochs=True,
+                    )
+                    message = (
+                        f"Cluster {target} currently exists in the data. To "
+                        f"avoid in-epoch ID collisions when your selection "
+                        f"becomes cluster {target}, the existing cluster "
+                        f"{target} will first be renumbered to {substitute} "
+                        f"(the smallest unused ID) across all epochs.\n\n"
+                        f"Apply both changes?"
+                    )
+
+        if deconflict_edits:
+            # Stash the pending action; the dialog drives the actual write.
+            pending = {
+                "deconflict_edits": deconflict_edits,
+                "user_edits": user_edits,
+            }
+            return no_update, "", no_update, pending, message, True
+
+        # No conflict — apply directly.
+        return ((current_edits or []) + user_edits,
+                f"Added {len(user_edits)} renumber edit(s).",
+                "", None, no_update, no_update)
+
+    # Confirm dialog: OK -> deconflict edit(s) then user's renumber edits.
+    @app.callback(
+        Output("edits-store", "data", allow_duplicate=True),
+        Output("selection-action-hint", "children", allow_duplicate=True),
+        Output("selection-comment", "value", allow_duplicate=True),
+        Output("pending-conflict-action", "data", allow_duplicate=True),
+        Input("conflict-confirm", "submit_n_clicks"),
+        State("pending-conflict-action", "data"),
+        State("edits-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _confirm_conflict_action(_n, pending, current_edits):
+        if not pending:
+            return no_update, no_update, no_update, None
+        deconflict = pending.get("deconflict_edits") or []
+        user_edits = pending.get("user_edits") or []
+        all_new = deconflict + user_edits
+        msg = (f"Added {len(deconflict)} deconfliction + "
+               f"{len(user_edits)} renumber edit(s).")
+        return (current_edits or []) + all_new, msg, "", None
+
+    # Confirm dialog: Cancel -> drop the pending action; no edits added.
+    @app.callback(
+        Output("selection-action-hint", "children", allow_duplicate=True),
+        Output("pending-conflict-action", "data", allow_duplicate=True),
+        Input("conflict-confirm", "cancel_n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _cancel_conflict_action(_n):
+        return "Conflict resolution cancelled. No edits added.", None
 
     # Clear-selection button.
     @app.callback(
@@ -477,6 +703,76 @@ def register(
     )
     def _clear_selection(_n):
         return [], ""
+
+    # ---- 4b2) Re-sync Robustness table to the visualize-effective df ----
+    # Whenever the visualize checkbox toggles or the staged edits change,
+    # recompute the eligible-clusters list (and each cluster's
+    # "Current Robust Status") from the effective DataFrame. This makes
+    # the table reflect what the visualize plots show: clusters that
+    # dropped below the use_in_fit threshold disappear, newly-eligible
+    # clusters appear, and current-state auto-demotions / auto-promotions
+    # are visible.
+    #
+    # The effective df here is built from STRUCTURAL edits only
+    # (change_clusterID / set_use_in_fit) — NOT from cluster_feedback —
+    # so the "Current Robust Status" stays a meaningful baseline for the
+    # user's Recommended Changes column to differ from. (If we folded
+    # cluster_feedback into the baseline, the user's picks would
+    # self-neutralize on every keystroke.)
+    @app.callback(
+        Output("cluster-feedback-table", "data", allow_duplicate=True),
+        Input("visualize-checkbox", "value"),
+        Input("edits-store", "data"),
+        State("cluster-feedback-table", "data"),
+        State("source-picker", "value"),
+        State("model-picker", "value"),
+        prevent_initial_call=True,
+    )
+    def _resync_table_with_effective(
+        visualize_val, edits, current_rows, source_folder, model_key,
+    ):
+        if not source_folder or not model_key:
+            return no_update
+        # rec:<slug> reads from the current model; backup_* uses the backup.
+        effective_model = "current" if (model_key or "").startswith("rec:") else model_key
+        bundle = load_bundle(source_folder, effective_model)
+
+        if visualize_val and edits:
+            # Build an edits-only Recommendation so the displayed status
+            # reflects use_in_fit / change_clusterID effects + auto-eligibility,
+            # but stays independent of the user's robust picks.
+            transient = Recommendation(
+                source=bundle.source.source, model="(transient)", reviewer="(transient)",
+            )
+            transient.edits = [Edit(
+                op=e.get("op") or "", scope=e.get("scope") or "",
+                epoch=e.get("epoch"), clusterID=e.get("clusterID"),
+                from_id=e.get("from_id"), to_id=e.get("to_id"),
+                value=e.get("value"), comment=e.get("comment", ""),
+            ) for e in edits]
+            eff_df = apply_recommendation(bundle.cluster_df, transient)
+        else:
+            eff_df = bundle.cluster_df
+
+        # Build new table rows from the effective df using the same
+        # eligibility filter the load callback uses.
+        from dataclasses import replace as _replace
+        new_rows = _table_for_clusters(_replace(bundle, cluster_df=eff_df))
+
+        # Preserve whatever the user has already entered in the Recommended
+        # Changes / Comment columns — by clusterID, so the merge survives
+        # the eligibility-list reshuffle.
+        user_input: dict[int, tuple[str, str]] = {
+            int(r.get("clusterID", -1)):
+                (r.get("recommended_robust") or "",
+                 r.get("comment") or "")
+            for r in (current_rows or [])
+        }
+        for row in new_rows:
+            cid = int(row["clusterID"])
+            if cid in user_input:
+                row["recommended_robust"], row["comment"] = user_input[cid]
+        return new_rows
 
     # ---- 4c) "No changes suggested" toggle: greys out the cluster table -
     # `editable=False` blocks both regular and dropdown cells; the opacity
@@ -491,6 +787,133 @@ def register(
         wrapper_style = {"opacity": 0.45, "pointerEvents": "none"} if on else {}
         # When the table is "off", the dropdown column is also un-clickable.
         return (not on), wrapper_style
+
+    def _source_name_from_folder(folder_str: str | None) -> str | None:
+        if not folder_str:
+            return None
+        m = _SOURCE_DIR_RE.match(Path(folder_str).name)
+        return m.group("source") if m else None
+
+    # ---- Submit Recommendation: button state, click handler, modal -------
+    # Button label flips to "Resubmit Recommendation" once a submitted/
+    # file exists for (source, reviewer). Style includes a hidden-when-
+    # non-current state so backup_* / rec:<slug> views can't submit.
+    @app.callback(
+        Output("submit-recommendation-btn", "children"),
+        Output("submit-recommendation-btn", "style"),
+        Output("submit-status", "children"),
+        Input("source-picker", "value"),
+        Input("model-picker", "value"),
+        Input("submit-recommendation-btn", "n_clicks"),
+    )
+    def _submit_button_state(source_folder, model_key, _n):
+        base_style = {
+            "padding": "0.35em 0.9em", "fontSize": "0.9em",
+            "background": "#1f77b4", "color": "white",
+            "border": "none", "borderRadius": "4px", "cursor": "pointer",
+        }
+        if not source_folder or model_key != "current":
+            return ("Submit Recommendation",
+                    {**base_style, "display": "none"}, "")
+        source_name = _source_name_from_folder(source_folder)
+        if source_name is None:
+            return ("Submit Recommendation",
+                    {**base_style, "display": "none"}, "")
+        when = submitted_at(recommendations_dir, source_name, reviewer)
+        if when:
+            return ("Resubmit Recommendation", base_style,
+                    f"Last submitted {when}")
+        return ("Submit Recommendation", base_style, "Not yet submitted")
+
+    # Click handler: build a fresh Recommendation from current UI state,
+    # write it to submitted/, format the notebook text, open the modal.
+    @app.callback(
+        Output("submission-modal", "style"),
+        Output("submission-text", "value"),
+        Input("submit-recommendation-btn", "n_clicks"),
+        State("source-picker", "value"),
+        State("model-picker", "value"),
+        State("source-comment", "value"),
+        State("cluster-feedback-table", "data"),
+        State("epoch-feedback-table", "data"),
+        State("edits-store", "data"),
+        State("no-changes-checkbox", "value"),
+        prevent_initial_call=True,
+    )
+    def _do_submit(_n, source_folder, model_key, source_comment,
+                   cluster_rows, epoch_rows, edits, no_changes_val):
+        # Defensive: don't fire on non-current models (button is hidden but
+        # could still be triggered by stale state).
+        if not source_folder or model_key != "current":
+            return no_update, no_update
+        source_name = _source_name_from_folder(source_folder)
+        if source_name is None:
+            return no_update, no_update
+        bundle = load_bundle(source_folder, "current")
+        rec = build_rec_from_ui_state(
+            source=source_name, model="current", reviewer=reviewer,
+            source_comment=source_comment,
+            no_robustness_changes=bool(no_changes_val),
+            cluster_rows=cluster_rows, epoch_rows=epoch_rows,
+            edits=edits,
+        )
+        # Write the submission JSON.
+        save_submitted(recommendations_dir, rec, model_sha=bundle.csv_sha)
+        # Generate the notebook block from the same Recommendation.
+        eff_df = apply_recommendation(bundle.cluster_df, rec)
+        text = format_submission_text(rec, bundle.cluster_df, eff_df, reviewer)
+        overlay_style = {
+            "display": "block", "position": "fixed",
+            "top": "0", "left": "0", "right": "0", "bottom": "0",
+            "background": "rgba(0,0,0,0.4)", "zIndex": 1000,
+            "overflow": "auto",
+        }
+        return overlay_style, text
+
+    # Close button (header X or footer "Close") — both hide the modal.
+    @app.callback(
+        Output("submission-modal", "style", allow_duplicate=True),
+        Input("close-submission-modal", "n_clicks"),
+        Input("close-submission-modal-2", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _close_submission_modal(_a, _b):
+        return {"display": "none"}
+
+    # Clientside "Copy text" inside the submission modal — writes the
+    # textarea contents to the clipboard and flashes the button label.
+    app.clientside_callback(
+        """
+        function(n_clicks, text) {
+            if (!n_clicks) return window.dash_clientside.no_update;
+            if (!text) return window.dash_clientside.no_update;
+            // Modern path
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(() => {});
+            } else {
+                // Fallback for non-https / older browsers
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand("copy"); } catch (_) {}
+                document.body.removeChild(ta);
+            }
+            // Revert the label after a short delay.
+            setTimeout(() => {
+                const btn = document.getElementById("copy-submission-text");
+                if (btn) btn.textContent = "Copy text";
+            }, 1500);
+            return "Copied!";
+        }
+        """,
+        Output("copy-submission-text", "children"),
+        Input("copy-submission-text", "n_clicks"),
+        State("submission-text", "value"),
+        prevent_initial_call=True,
+    )
 
     # ---- Recommendations panel read-only style for non-current models ----
     # backup_* and rec:<slug> models are view-only; lock the whole panel.
@@ -540,3 +963,17 @@ def register(
         save_recommendation(recommendations_dir, rec, model_sha=bundle.csv_sha)
         when = datetime.now().strftime("%H:%M:%S")
         return f"Saved {when}"
+
+    # =====================================================================
+    # Admin-only: "Generate Apply Command" button.
+    # =====================================================================
+    if not admin:
+        return
+
+    from .recommendations_callbacks_admin import register_admin
+    register_admin(
+        app,
+        results_dir=results_dir,
+        recommendations_dir=recommendations_dir,
+        reviewer=reviewer,
+    )

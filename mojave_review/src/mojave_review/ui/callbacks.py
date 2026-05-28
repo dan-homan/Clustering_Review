@@ -26,12 +26,15 @@ def register_callbacks(
     recommendations_dir: Path,
     cache_dir: Path,
     reviewer: str,
+    admin: bool = False,
 ) -> None:
     # Recommendations tab — load + autosave behavior.
     recommendations_callbacks.register(
         app,
+        results_dir=results_dir,
         recommendations_dir=recommendations_dir,
         reviewer=reviewer,
+        admin=admin,
     )
 
     # Local helpers that resolve a (source, model) pair into a possibly
@@ -419,12 +422,16 @@ def register_callbacks(
             var ex = new Array(n), ey = new Array(n);
             var cosPa = Math.cos(bpa * Math.PI / 180);
             var sinPa = Math.sin(bpa * Math.PI / 180);
+            // Astronomical PA: 0 = major along +y (north), positive rotates
+            // CCW from north in the displayed plot. The overlay axis has
+            // +x reversed, so display-CCW is data-CW — sin signs flipped
+            // accordingly. Keep in lock-step with plots/overlay._ellipse_xy.
             for (var i = 0; i < n; i++) {
                 var t = 2 * Math.PI * i / (n - 1);
                 var xr = (bmin / 2) * Math.cos(t);
                 var yr = (bmaj / 2) * Math.sin(t);
-                ex[i] = bx + xr * cosPa - yr * sinPa;
-                ey[i] = by + xr * sinPa + yr * cosPa;
+                ex[i] = bx + xr * cosPa + yr * sinPa;
+                ey[i] = by - xr * sinPa + yr * cosPa;
             }
             // Plotly.restyle update values must be wrapped in arrays
             // (one element per trace being updated).

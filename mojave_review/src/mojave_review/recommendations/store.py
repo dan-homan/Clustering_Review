@@ -83,6 +83,66 @@ def list_reviewer_files(recommendations_dir: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Submission — the reviewer's "I'm done with this source" snapshot
+# ---------------------------------------------------------------------------
+# Each reviewer can have at most one submitted recommendation per source at
+# a time (resubmit overwrites). Submissions live at
+# `<recs>/<source>/submitted/<slug>.json` so they don't get picked up by the
+# multi-reviewer model dropdown (which reads from `<source>/current/`).
+
+
+def submission_path(
+    recommendations_dir: Path, source: str, reviewer: str,
+) -> Path:
+    return recommendations_dir / source / "submitted" / f"{reviewer_slug(reviewer)}.json"
+
+
+def is_submitted(
+    recommendations_dir: Path, source: str, reviewer: str,
+) -> bool:
+    return submission_path(recommendations_dir, source, reviewer).is_file()
+
+
+def submitted_at(
+    recommendations_dir: Path, source: str, reviewer: str,
+) -> str | None:
+    """``updated_at`` of the submitted JSON, or None if not submitted."""
+    p = submission_path(recommendations_dir, source, reviewer)
+    if not p.is_file():
+        return None
+    try:
+        with p.open() as f:
+            return json.load(f).get("updated_at")
+    except Exception:
+        return None
+
+
+def save_submitted(
+    recommendations_dir: Path, rec: Recommendation, *, model_sha: str | None = None,
+) -> Path:
+    """Write atomically to ``<recs>/<source>/submitted/<slug>.json`` —
+    overwrites any previous submission from the same reviewer."""
+    if model_sha is not None:
+        rec.model_sha = model_sha
+    rec.touch()
+    p = submission_path(recommendations_dir, rec.source, rec.reviewer)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(rec.to_dict(), indent=2, sort_keys=False)
+    fd, tmp_path = tempfile.mkstemp(prefix=p.name + ".", dir=str(p.parent), suffix=".part")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(payload)
+        os.replace(tmp_path, p)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+    return p
+
+
+# ---------------------------------------------------------------------------
 # Multi-reviewer support — used by the model dropdown to show "Rec: <slug>"
 # entries from other reviewers' files in <recs>/<source>/current/.
 # ---------------------------------------------------------------------------

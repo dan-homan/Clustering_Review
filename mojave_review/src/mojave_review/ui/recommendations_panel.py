@@ -224,14 +224,28 @@ def _edits_tab() -> dcc.Tab:
             ),
             html.Div(
                 [
-                    html.Button("Mark use_in_fit = False on selected points",
+                    html.Label("Set use_in_fit to:",
+                               style={"fontSize": "0.85em", "color": "#444",
+                                      "marginRight": "0.5em"}),
+                    dcc.RadioItems(
+                        id="uif-value",
+                        options=[{"label": "False", "value": "false"},
+                                 {"label": "True",  "value": "true"}],
+                        value="false",
+                        inline=True,
+                        inputStyle={"marginRight": "0.25em",
+                                    "marginLeft": "0.5em"},
+                        style={"marginRight": "1em"},
+                    ),
+                    html.Button("Apply to selected points",
                                 id="apply-uif-single-btn", n_clicks=0,
                                 style={"marginRight": "0.5em"}),
-                    html.Button("Mark whole epoch use_in_fit = False",
+                    html.Button("Apply to whole epoch",
                                 id="apply-uif-epoch-btn", n_clicks=0,
                                 style={"marginRight": "0.5em"}),
                 ],
                 style={"display": "flex", "flexWrap": "wrap",
+                       "alignItems": "center",
                        "gap": "0.4em", "marginBottom": "0.5em"},
             ),
             html.Div(
@@ -304,18 +318,54 @@ def _edits_tab() -> dcc.Tab:
 # Composite panel
 # ---------------------------------------------------------------------------
 
-def build_recommendations_panel() -> html.Div:
+def build_recommendations_panel(admin: bool = False) -> html.Div:
+    header_buttons = [
+        html.Span(id="submit-status",
+                  style={"marginRight": "0.75em",
+                         "fontSize": "0.85em",
+                         "color": "#666"}),
+        html.Button(
+            "Submit Recommendation",
+            id="submit-recommendation-btn",
+            n_clicks=0,
+            style={"padding": "0.35em 0.9em", "fontSize": "0.9em",
+                   "background": "#1f77b4", "color": "white",
+                   "border": "none", "borderRadius": "4px",
+                   "cursor": "pointer"},
+        ),
+    ]
+    if admin:
+        header_buttons.append(
+            html.Button(
+                "Generate Apply Command",
+                id="generate-apply-cmd-btn",
+                n_clicks=0,
+                style={"padding": "0.35em 0.9em", "fontSize": "0.9em",
+                       "background": "#d68a00", "color": "white",
+                       "border": "none", "borderRadius": "4px",
+                       "cursor": "pointer", "marginLeft": "0.5em"},
+            ),
+        )
+
     return html.Div(
         [
             html.Div(
                 [
                     html.H4("Recommendations",
-                            style={"margin": "0", "display": "inline-block"}),
+                            style={"margin": "0"}),
                     html.Span(id="save-indicator",
                               style={"marginLeft": "1em",
                                      "fontSize": "0.85em", "color": "#888"}),
+                    html.Div(
+                        header_buttons,
+                        style={"marginLeft": "auto",
+                               "display": "flex",
+                               "alignItems": "center"},
+                    ),
                 ],
-                style={"padding": "0.25em 0.75em"},
+                style={"padding": "0.25em 0.75em",
+                       "display": "flex",
+                       "alignItems": "center"},
             ),
             dcc.Tabs(
                 id="rec-tabs", value="clusters",
@@ -325,6 +375,175 @@ def build_recommendations_panel() -> html.Div:
             # Owns the in-memory edits list (the dash_table data fields
             # already store the cluster/epoch feedback).
             dcc.Store(id="edits-store", data=[]),
+            # Holds the renumber action that's waiting on the conflict
+            # dialog's confirmation; cleared whenever the dialog resolves.
+            dcc.Store(id="pending-conflict-action", data=None),
+            # Native confirm dialog used to warn about clusterID collisions
+            # before adding renumber edits.
+            dcc.ConfirmDialog(id="conflict-confirm", message=""),
+            # Admin-only modal: a copy-pasteable mojave-apply command line.
+            # Only emitted into the layout when admin=True so non-admin
+            # users can't trigger any of the related callbacks (also not
+            # registered in that case).
+            *([] if not admin else [
+                html.Div(
+                    id="apply-cmd-modal",
+                    style={"display": "none"},
+                    children=[
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.H4("Apply command",
+                                                style={"margin": "0"}),
+                                        html.Button(
+                                            "×", id="close-apply-cmd-modal",
+                                            n_clicks=0,
+                                            style={"border": "none",
+                                                   "background": "transparent",
+                                                   "fontSize": "1.5em",
+                                                   "lineHeight": "1",
+                                                   "cursor": "pointer",
+                                                   "color": "#888"},
+                                        ),
+                                    ],
+                                    style={"display": "flex",
+                                           "justifyContent": "space-between",
+                                           "alignItems": "center",
+                                           "marginBottom": "0.4em"},
+                                ),
+                                html.P("Copy this and run it in a terminal "
+                                       "where you have write access to the "
+                                       "Results/ directory:",
+                                       style={"color": "#666",
+                                              "fontSize": "0.9em",
+                                              "margin": "0 0 0.5em"}),
+                                dcc.Textarea(
+                                    id="apply-cmd-text",
+                                    value="",
+                                    readOnly=True,
+                                    style={"width": "100%",
+                                           "height": "140px",
+                                           "fontFamily": "ui-monospace, monospace",
+                                           "fontSize": "0.85em",
+                                           "padding": "0.5em",
+                                           "border": "1px solid #ccc",
+                                           "borderRadius": "4px",
+                                           "resize": "vertical",
+                                           "whiteSpace": "pre"},
+                                ),
+                                html.Div(id="apply-cmd-hint",
+                                         style={"fontSize": "0.8em",
+                                                "color": "#888",
+                                                "marginTop": "0.4em"}),
+                                html.Div(
+                                    [
+                                        html.Button(
+                                            "Copy command",
+                                            id="copy-apply-cmd",
+                                            n_clicks=0,
+                                            style={"padding": "0.4em 1em",
+                                                   "marginRight": "0.5em"},
+                                        ),
+                                        html.Button(
+                                            "Close",
+                                            id="close-apply-cmd-modal-2",
+                                            n_clicks=0,
+                                            style={"padding": "0.4em 1em"},
+                                        ),
+                                    ],
+                                    style={"textAlign": "right",
+                                           "marginTop": "0.75em"},
+                                ),
+                            ],
+                            style={
+                                "background": "white",
+                                "padding": "1.5em",
+                                "borderRadius": "6px",
+                                "maxWidth": "780px",
+                                "margin": "5% auto",
+                                "boxShadow": "0 4px 20px rgba(0,0,0,0.25)",
+                            },
+                        ),
+                    ],
+                ),
+            ]),
+            # Modal shown after a successful Submit — contains the
+            # copy-pasteable notebook block.
+            html.Div(
+                id="submission-modal",
+                style={"display": "none"},
+                children=[
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H4("Recommendation submitted",
+                                            style={"margin": "0"}),
+                                    html.Button(
+                                        "×", id="close-submission-modal",
+                                        n_clicks=0,
+                                        style={"border": "none",
+                                               "background": "transparent",
+                                               "fontSize": "1.5em",
+                                               "lineHeight": "1",
+                                               "cursor": "pointer",
+                                               "color": "#888"},
+                                    ),
+                                ],
+                                style={"display": "flex",
+                                       "justifyContent": "space-between",
+                                       "alignItems": "center",
+                                       "marginBottom": "0.4em"},
+                            ),
+                            html.P("Copy this to your notebook for your "
+                                   "records:",
+                                   style={"color": "#666",
+                                          "fontSize": "0.9em",
+                                          "margin": "0 0 0.5em"}),
+                            dcc.Textarea(
+                                id="submission-text",
+                                value="",
+                                readOnly=True,
+                                style={"width": "100%",
+                                       "height": "420px",
+                                       "fontFamily": "ui-monospace, monospace",
+                                       "fontSize": "0.85em",
+                                       "padding": "0.5em",
+                                       "border": "1px solid #ccc",
+                                       "borderRadius": "4px",
+                                       "resize": "vertical",
+                                       "whiteSpace": "pre"},
+                            ),
+                            html.Div(
+                                [
+                                    html.Button(
+                                        "Copy text", id="copy-submission-text",
+                                        n_clicks=0,
+                                        style={"padding": "0.4em 1em",
+                                               "marginRight": "0.5em"},
+                                    ),
+                                    html.Button(
+                                        "Close", id="close-submission-modal-2",
+                                        n_clicks=0,
+                                        style={"padding": "0.4em 1em"},
+                                    ),
+                                ],
+                                style={"textAlign": "right",
+                                       "marginTop": "0.75em"},
+                            ),
+                        ],
+                        style={
+                            "background": "white",
+                            "padding": "1.5em",
+                            "borderRadius": "6px",
+                            "maxWidth": "780px",
+                            "margin": "5% auto",
+                            "boxShadow": "0 4px 20px rgba(0,0,0,0.25)",
+                        },
+                    ),
+                ],
+            ),
         ],
         id="recommendations-panel",
         style={"borderTop": "1px solid #ddd", "background": "#fafafa",

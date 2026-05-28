@@ -10,7 +10,7 @@ from ..data.loader import list_sources
 from .recommendations_panel import build_recommendations_panel
 
 
-def build_layout(results_dir: Path, reviewer: str) -> html.Div:
+def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.Div:
     sources = list_sources(results_dir)
     source_options = [{"label": s.label, "value": str(s.folder)} for s in sources]
     initial = source_options[0]["value"] if source_options else None
@@ -165,7 +165,7 @@ def build_layout(results_dir: Path, reviewer: str) -> html.Div:
             dcc.Store(id="selection-store", data=[]),
             header,
             body,
-            build_recommendations_panel(),
+            build_recommendations_panel(admin=admin),
         ],
         style={"fontFamily": "system-ui, sans-serif"},
     )

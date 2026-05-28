@@ -89,8 +89,13 @@ def _ellipse_xy(cx: float, cy: float, major: float, minor: float,
                 pa_deg: float, n: int = 60) -> tuple[np.ndarray, np.ndarray]:
     """Return (x, y) arrays tracing a FWHM-sized ellipse at (cx, cy).
 
-    `pa_deg` follows the matplotlib convention used by the original
-    `overplot_clusters` (CCW from +x axis, major axis along +y at PA=0).
+    ``pa_deg`` is the astronomical position angle: 0° puts the major axis
+    along +y (north) and positive PA rotates **counter-clockwise from
+    north** in the displayed plot (north through east). Because the
+    overlay panel reverses the x-axis (+x to the left = east in the sky
+    convention), display-CCW corresponds to mathematical-CW in the
+    underlying data coordinates — hence the sign flip on the sin terms
+    compared with a textbook math-CCW rotation.
     """
     theta = np.linspace(0, 2 * np.pi, n)
     a = major / 2.0
@@ -99,8 +104,9 @@ def _ellipse_xy(cx: float, cy: float, major: float, minor: float,
     sin_pa = np.sin(np.deg2rad(pa_deg))
     xr = b * np.cos(theta)        # minor along x
     yr = a * np.sin(theta)        # major along y
-    x = cx + xr * cos_pa - yr * sin_pa
-    y = cy + xr * sin_pa + yr * cos_pa
+    # math-CW in data coords <=> display-CCW with reversed x-axis
+    x = cx + xr * cos_pa + yr * sin_pa
+    y = cy - xr * sin_pa + yr * cos_pa
     return x, y
 
 

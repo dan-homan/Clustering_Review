@@ -119,16 +119,20 @@ The web app fetches these on demand and caches under
 - **+x to the left** (astronomical convention). Use explicit `range=[hi, lo]`
   to reverse the x-axis rather than `autorange="reversed"` so it composes
   cleanly with `scaleanchor`.
-- **Equal mas/pixel + free-form zoom** on x[mas] vs y[mas] plots.
-  Initial range from `plots/_extent.compute_source_extent` on both axes,
-  PLUS `scaleanchor="x"` + `scaleratio=1.0` on the y-axis AND
-  `constrain="domain"` on **both** axes. That combo keeps equal scale
-  (ellipses stay round) while letting the user drag any rectangular
-  zoom — Plotly shrinks the drawable panel to honor a non-square zoom
-  instead of expanding the range. Whitespace bars beside/above the
-  panel are expected under non-square zoom. The default
-  `constrain="range"` would expand the range and feel "locked aspect" —
-  don't use it here.
+- **Equal mas/pixel** on x[mas] vs y[mas] plots. Initial range from
+  `plots/_extent.compute_source_extent` on both axes, PLUS
+  `scaleanchor="x"` + `scaleratio=1.0` on the y-axis AND
+  `constrain="domain"` on **both** axes. That keeps ellipses (FWHM, 3σ,
+  beam) round at every zoom level.
+  Reviewer-confirmed trade-off (2026-05-28): the Plotly drag-zoom tool
+  is also locked to the panel's current aspect when `scaleanchor` is
+  on — there's no native way to keep equal scale AND get a free-form
+  drag rectangle, and the reviewer explicitly preferred locked-aspect
+  drag over breaking equal scale. Don't try to "fix" this by dropping
+  `scaleanchor`; you'd revisit a decision that's already been made.
+  (`constrain="range"`, the default, would also force the **post-drag
+  range** to expand to match aspect — different mechanism, same lock
+  feel; `constrain="domain"` is what we want.)
 - **Arrows use `fig.add_annotation(showarrow=True, arrowhead=2, ...)`** —
   never line-mode hacks with a triangle marker at the end.
 - Always show a black `×` at `(0,0)` on spatial plots (the core).

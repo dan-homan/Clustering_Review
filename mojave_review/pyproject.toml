@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 mojave-review = "mojave_review.cli:main"
+mojave-apply  = "mojave_review.cli.apply:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
