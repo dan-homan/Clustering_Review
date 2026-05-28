@@ -1,0 +1,1 @@
+python find_clusters.py 0003-066 --band u --results_dir ./Results/ --ccfile_dir ./full_ccfiles/ --cpus 20 --SigmaCut 7 --min_epoch 1994.0 --max_epoch 2026.0 --maxGap 2.03 --coreIDMethod JetEnd --JetDir=-45.0 --max_clusters 16 --complex 3 --editN --recalc_IDs
