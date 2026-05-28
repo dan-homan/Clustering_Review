@@ -31,12 +31,20 @@ Clustering_Review/
 └── mojave_review/               # the web app (pip-installable)
     ├── pyproject.toml
     └── src/mojave_review/
-        ├── cli.py               # `mojave-review` entry point
-        ├── app.py               # Dash factory
-        ├── data/loader.py       # source/model discovery, CSV+NPZ load
-        ├── plots/summary.py     # Plotly port of make_summary_plots
+        ├── cli.py                       # `mojave-review` entry point
+        ├── app.py                       # Dash factory (points assets_folder at the pkg)
+        ├── data/
+        │   ├── loader.py                # source/model discovery, CSV+NPZ load
+        │   └── fits_cache.py            # MOJAVE URL + on-disk FITS cache
+        ├── plots/
+        │   ├── summary.py               # Plotly port of make_summary_plots
+        │   ├── overlay.py               # FITS + cluster + beam overlay per epoch
+        │   └── _extent.py               # initial zoom-box from cluster footprint
+        ├── assets/                      # Dash auto-loads .js/.css from here
+        │   ├── resizable.js             # draggable splitter between panels
+        │   └── resizable.css
         ├── ui/{layout,callbacks}.py
-        └── recommendations/     # (planned) JSON store
+        └── recommendations/             # (planned) JSON store
 ```
 
 `<prefix>` = `<source>.<emin>-<emax>` (e.g. `0003-066u.1994.00-2026.00`).
@@ -104,13 +112,41 @@ The web app fetches these on demand and caches under
 - **+x to the left** (astronomical convention). Use explicit `range=[hi, lo]`
   to reverse the x-axis rather than `autorange="reversed"` so it composes
   cleanly with `scaleanchor`.
-- **Equal aspect** on any x[mas] vs y[mas] plot. Set `scaleanchor="x2"` (or
-  appropriate axis ref) and `scaleratio=1.0` on the y-axis, plus
-  `constrain="domain"` on both.
+- **Equal mas/pixel + free-form zoom** on x[mas] vs y[mas] plots.
+  Initial range from `plots/_extent.compute_source_extent` on both axes,
+  PLUS `scaleanchor="x"` + `scaleratio=1.0` on the y-axis AND
+  `constrain="domain"` on **both** axes. That combo keeps equal scale
+  (ellipses stay round) while letting the user drag any rectangular
+  zoom — Plotly shrinks the drawable panel to honor a non-square zoom
+  instead of expanding the range. Whitespace bars beside/above the
+  panel are expected under non-square zoom. The default
+  `constrain="range"` would expand the range and feel "locked aspect" —
+  don't use it here.
 - **Arrows use `fig.add_annotation(showarrow=True, arrowhead=2, ...)`** —
   never line-mode hacks with a triangle marker at the end.
 - Always show a black `×` at `(0,0)` on spatial plots (the core).
 - Include `(0,0)` in the auto-range computation.
+
+### Overlay panel (FITS + cluster overlay per epoch)
+
+`overlay_figure_for_epoch(bundle, epoch_int, cache_dir, source_no_band, band)`
+returns `(figure, beam_params)`. Layered traces in z-order (bottom to top):
+
+1. Contour of the FITS Stokes-I image. Levels are at `cbase × 2ⁿ` with
+   `cbase = 3.5 × inoise` from `epoch_info`. The CLEAN image is already
+   convolved with the restoring beam — do NOT apply additional smoothing.
+   `line.smoothing=1.0` (Bezier) is the most we add.
+2. Clean components, scattered, colored by their cluster (uses
+   `cc_labels` mapped through `origID → clusterID`).
+3. Per-cluster 3σ inclusion ellipse: `2.548 × FWHM`, dotted outline,
+   `rgba(<cluster>, 0.04)` fill — drawn first so the FWHM layers on top.
+4. Per-cluster FWHM ellipse: solid outline, `rgba(<cluster>, 0.15)` fill.
+5. Black-text cluster numbers at each cluster center (skipped for the
+   core).
+6. Black `×` at the core (0, 0).
+7. Beam ellipse in the lower-left of the initial zoom — handled by a
+   **clientside callback** so it tracks the viewport on every zoom/pan
+   without a server round-trip. See "Don't / gotchas".
 
 ### Cluster styling (ported from cluster_code.py)
 
@@ -122,7 +158,9 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
               "none","full","none","full","none","full","full","none"]
 ```
 
-- Non-robust clusters → all cyan, but keep marker/fill from the rotation.
+- Non-robust clusters → all slategray (`#708090`), but keep marker/fill from
+  the rotation. (Original matplotlib used cyan; on a white background it
+  washed out, so the web app moved to slategray for legibility.)
 - `clusterID < 0` or `>= 1000` → black `+`, never in legend.
 - `use_in_fit == False` → black slash overlay on the marker.
 - `select == True` → gold open-diamond overlay.
@@ -207,6 +245,20 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
   `plotdata=None` in that case — overlay panel must handle it gracefully.
 - **`autorange="reversed"` + explicit `range=[hi, lo]`** fight. Pick one;
   the codebase uses explicit reversed ranges so `scaleanchor` composes.
+- **Don't smooth the FITS image before contouring.** CLEAN images are
+  already convolved with the restoring beam; additional smoothing blurs
+  real structure. Use `line.smoothing` on the contour trace if you need
+  to soften jaggy contour lines.
+- **Clientside callbacks that "patch" a figure must call `Plotly.restyle`
+  directly and return `no_update`**, not return a modified figure. The
+  beam-positioning callback (`assets/`/inline in `ui/callbacks.py`) does
+  this. Returning a modified figure breaks `uirevision`-driven zoom
+  persistence across server callbacks — Dash treats it as a fresh
+  figure replacement and resets the user's zoom. See the comment block
+  near the clientside callback for the full story.
+- **Dash's `assets_folder` defaults to `./assets`** relative to CWD, not
+  the package install dir. `app.py` explicitly sets
+  `assets_folder=<package-dir>/assets` so `pip install` ships the JS/CSS.
 
 ## Useful local commands
 

@@ -1,0 +1,32 @@
+/* Vertical drag handle between the two main panels. */
+#split-handle {
+    flex: 0 0 6px;
+    background: #e6e6e6;
+    cursor: col-resize;
+    align-self: stretch;
+    position: relative;
+    transition: background 0.12s ease-in-out;
+}
+#split-handle:hover,
+#split-handle.split-handle-active {
+    background: #b8b8b8;
+}
+/* Gripper dots, centered vertically. */
+#split-handle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+    height: 28px;
+    background: repeating-linear-gradient(
+        to bottom,
+        #888 0px,
+        #888 2px,
+        transparent 2px,
+        transparent 4px
+    );
+    border-radius: 1px;
+    pointer-events: none;
+}

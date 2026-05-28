@@ -77,30 +77,71 @@ def build_layout(results_dir: Path, reviewer: str) -> html.Div:
             html.H4("Summary plots", style={"margin": "0.25em 0"}),
             vector_scale_row,
             dcc.Loading(
-                dcc.Graph(id="summary-graph", style={"height": "720px"}),
+                dcc.Graph(
+                    id="summary-graph",
+                    style={"height": "720px"},
+                    responsive=True,
+                ),
                 type="default",
             ),
         ],
+        id="summary-panel",
         style={"flex": "1 1 0", "padding": "0.5em", "minWidth": "0"},
+    )
+
+    epoch_controls = html.Div(
+        [
+            html.Button("◀", id="epoch-prev", n_clicks=0,
+                        style={"width": "2.2em", "marginRight": "0.5em"}),
+            html.Button("▶", id="epoch-next", n_clicks=0,
+                        style={"width": "2.2em", "marginRight": "1em"}),
+            html.Div(
+                dcc.Slider(
+                    id="epoch-slider", min=0, max=0, step=1, value=0,
+                    marks={}, included=False,
+                    tooltip={"placement": "bottom", "always_visible": False},
+                    updatemode="mouseup",
+                ),
+                style={"flex": "1 1 0", "minWidth": "200px"},
+            ),
+            html.Span(id="epoch-label",
+                      style={"marginLeft": "1em", "minWidth": "9em",
+                             "color": "#555", "fontFamily": "ui-monospace, monospace"}),
+        ],
+        style={"display": "flex", "alignItems": "center",
+               "padding": "0.25em 0.5em"},
     )
 
     overlay_panel = html.Div(
         [
             html.H4("Epoch overlay", style={"margin": "0.25em 0"}),
-            html.Div("Coming next: FITS + cluster markers per epoch.",
-                     style={"color": "#888", "fontStyle": "italic"}),
+            epoch_controls,
+            dcc.Loading(
+                dcc.Graph(
+                    id="overlay-graph",
+                    style={"height": "720px"},
+                    responsive=True,
+                ),
+                type="default",
+            ),
         ],
+        id="overlay-panel",
         style={"flex": "1 1 0", "padding": "0.5em", "minWidth": "0"},
     )
 
+    # Vertical drag handle between the two panels — wired up by
+    # assets/resizable.js. Initial flex is 1/1, drag updates to fixed-px.
+    split_handle = html.Div(id="split-handle", title="Drag to resize panels")
+
     body = html.Div(
-        [summary_panel, overlay_panel],
-        style={"display": "flex", "gap": "0.5em", "padding": "0.5em"},
+        [summary_panel, split_handle, overlay_panel],
+        style={"display": "flex", "padding": "0.5em"},
     )
 
     return html.Div(
         [
             dcc.Store(id="reviewer-store", data=reviewer),
+            dcc.Store(id="beam-params"),
             header,
             body,
         ],

@@ -49,20 +49,29 @@ No database. No special system packages.
 
 ## Status as of 2026-05-28
 
-Phase 1 skeleton landed and live-tested end-to-end on the example sources:
+Phase 1 read-only viewer is feature-complete and live-tested end-to-end on
+the example sources:
 
 - Package + CLI install (`mojave-review`) ✓
 - Source / model discovery (current + backups) ✓
 - CSV + NPZ load ✓
 - Plotly summary plots — Position / Flux / Polarization / Kinematics ✓
-- Kinematics view: arrowheads, +x left, equal aspect, core marker,
-  user-tunable vector scale ✓
-
-Right panel (FITS overlay) is still a placeholder.
+- Kinematics view: arrowheads, +x left, equal mas/pixel + free zoom,
+  core marker, user-tunable vector scale ✓
+- FITS cache + epoch overlay panel ✓
+  - Live fetch from `cv.nrao.edu` with on-disk caching
+  - Contour image (no smoothing — beam-convolved already)
+  - Per-cluster FWHM ellipse (filled) + 3σ inclusion outline (dotted, fill at 0.04)
+  - Black cluster-number labels, core marked with `×`
+  - Beam ellipse: clientside-tracked so it stays in the visible corner on zoom
+  - Equal mas/pixel + free-form zoom rectangle (scaleanchor + constrain="domain")
+  - Initial range from `compute_source_extent` (cluster footprint)
+- Draggable splitter between summary and overlay panels ✓
+- `uirevision`-preserved zoom across epoch / source / model changes ✓
 
 ## Agreed next-chunk order (do not widen scope)
 
-1. FITS cache + epoch overlay panel.
-2. Recommendations sidebar + JSON store.
+1. ~~FITS cache + epoch overlay panel.~~ Done.
+2. **Recommendations sidebar + JSON store.** (Next)
 3. Reference PDF / MP4 tab on the overlay side.
 4. Keyboard shortcuts (mirror the matplotlib keys `n / b / i / a / u / r`).

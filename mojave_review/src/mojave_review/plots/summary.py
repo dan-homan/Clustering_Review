@@ -53,7 +53,7 @@ def _cluster_style(cid: int, robust: bool) -> tuple[str, str, bool]:
         return "black", "cross-thin", False
     if not robust:
         idx = cid % len(_CL_MARKERS)
-        return "cyan", _MPL_TO_PLOTLY_SYMBOL.get(_CL_MARKERS[idx], "circle"), _CL_FILL[idx] == "full"
+        return "slategray", _MPL_TO_PLOTLY_SYMBOL.get(_CL_MARKERS[idx], "circle"), _CL_FILL[idx] == "full"
     color = _MPL_COLOR[_CL_COLORS[cid % len(_CL_COLORS)]]
     idx = cid % len(_CL_MARKERS)
     return color, _MPL_TO_PLOTLY_SYMBOL.get(_CL_MARKERS[idx], "circle"), _CL_FILL[idx] == "full"
@@ -382,12 +382,16 @@ def build_summary_figure(
         fig.update_yaxes(title_text="EVPA [deg]", row=2, col=1)
 
     elif view == "Kinematics":
+        from ._extent import compute_source_extent
         _draw_kinematics(fig, slices, motion_fits,
-                         vector_scale_factor=vector_scale_factor)
+                         vector_scale_factor=vector_scale_factor,
+                         extent=compute_source_extent(cluster_df))
         fig.update_xaxes(title_text="Distance from origin [mas]", row=1, col=1)
         fig.update_yaxes(title_text="Apparent speed [mas/yr]", row=1, col=1)
-        # +x to the left (astro convention) — explicit range below reverses it.
-        # scaleanchor enforces equal data-per-pixel on both axes.
+        # +x to the left (astro convention). scaleanchor + constrain="domain"
+        # keeps mas/pixel equal on both axes while still allowing the user
+        # to drag a free-form zoom rectangle (panel shrinks instead of
+        # expanding the data range to match aspect).
         fig.update_xaxes(title_text="X [mas]", row=2, col=1,
                          constrain="domain")
         fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
@@ -414,6 +418,7 @@ def _draw_kinematics(
     slices: list[_Slice],
     motion_fits: dict[int, "_MotionFit | None"],
     vector_scale_factor: float = 1.0,
+    extent: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
     fits = [mf for mf in motion_fits.values() if mf is not None and mf.cid > 0]
     if not fits:
@@ -485,13 +490,22 @@ def _draw_kinematics(
             arrowcolor=color, standoff=0,
         )
 
-    # Pad axes to fit arrow tips, then set x reversed (+x left).
+    # Base extent: prefer the data-driven cluster box (matches the overlay
+    # panel's initial zoom); fall back to the fit-cluster positions. Then
+    # always expand by arrow-tip length so vectors don't run off-panel.
     arrow_pad_x = float(np.abs(vx).max() * arrow_scale)
     arrow_pad_y = float(np.abs(vy).max() * arrow_scale)
-    pad = 0.15
-    xlo = float(all_xs.min()) - pad * xspan - arrow_pad_x
-    xhi = float(all_xs.max()) + pad * xspan + arrow_pad_x
-    ylo = float(all_ys.min()) - pad * yspan - arrow_pad_y
-    yhi = float(all_ys.max()) + pad * yspan + arrow_pad_y
+    if extent is not None:
+        (xlo, xhi), (ylo, yhi) = extent
+    else:
+        pad = 0.15
+        xlo = float(all_xs.min()) - pad * xspan
+        xhi = float(all_xs.max()) + pad * xspan
+        ylo = float(all_ys.min()) - pad * yspan
+        yhi = float(all_ys.max()) + pad * yspan
+    xlo -= arrow_pad_x
+    xhi += arrow_pad_x
+    ylo -= arrow_pad_y
+    yhi += arrow_pad_y
     fig.update_xaxes(range=[xhi, xlo], row=2, col=1)  # reversed
     fig.update_yaxes(range=[ylo, yhi], row=2, col=1)

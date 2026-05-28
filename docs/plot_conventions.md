@@ -10,15 +10,23 @@ velocity vectors, ...). Apply them by default when adding new plots.
    `autorange="reversed"` together with an explicit `range` — they fight,
    and `scaleanchor` does not compose cleanly with the former.
 
-2. **Equal data-per-pixel on both axes.** Plotly recipe:
+2. **Equal mas/pixel scale AND free-form zoom.** Set explicit `range` on
+   both axes from `plots/_extent.compute_source_extent` so each source
+   opens framed on its jet. Apply `scaleanchor` + `scaleratio=1.0` on the
+   y-axis AND `constrain="domain"` on **both** axes:
    ```python
-   fig.update_xaxes(constrain="domain", row=R, col=C)
-   fig.update_yaxes(scaleanchor=f"x{N}", scaleratio=1.0,
-                    constrain="domain", row=R, col=C)
+   fig.update_xaxes(constrain="domain", ...)
+   fig.update_yaxes(scaleanchor="x", scaleratio=1.0,
+                    constrain="domain", ...)
    ```
-   `f"x{N}"` is the axis ID of the paired x-axis (e.g. `"x2"` for the
-   second subplot). Equal aspect prevents misreading apparent vs. true
-   geometry on jets.
+   The combination preserves equal mas/pixel (so a square in data is a
+   square on screen and ellipses don't stretch) while letting the user
+   drag any rectangular zoom — Plotly shrinks the panel domain to honor
+   non-square zooms rather than expanding the data range to keep aspect.
+   Side effect: whitespace appears beside or above/below the panel under
+   non-square zooms — explicitly accepted by the reviewer (2026-05-28).
+   The default (`constrain="range"`) instead expands the range and feels
+   like a "locked aspect ratio" to the user — don't use it here.
 
 3. **Real arrowheads on vector / quiver plots.** Use
    `fig.add_annotation(showarrow=True, arrowhead=2, arrowwidth=2,
