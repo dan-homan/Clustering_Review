@@ -1,0 +1,60 @@
+# --- Original clustering pipeline (kept locally for reference, not the web app) ---
+/cluster_code.py
+/find_clusters.py
+
+# --- Example data the author provided for development ---
+# Reviewers should mirror Results/ via Google Drive for Desktop instead.
+/Results/
+
+# --- Runtime output from the web app ---
+/recommendations/
+/.mojave_review/
+
+# --- Local-only editor / Claude Code settings ---
+.claude/settings.local.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Test / coverage / type-check caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- IDEs / editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets / env files (defense in depth — none expected today) ---
+.env
+.env.*
+!.env.example

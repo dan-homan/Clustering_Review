@@ -1,2 +1,0 @@
-[console_scripts]
-mojave-review = mojave_review.cli:main
