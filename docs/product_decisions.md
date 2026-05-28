@@ -49,11 +49,12 @@ No database. No special system packages.
 
 ## Status as of 2026-05-28
 
-Phase 1 read-only viewer is feature-complete and live-tested end-to-end on
-the example sources:
+Phase 1 is **feature-complete**. The application is suitable for daily use
+by a small group of reviewers. Live-tested end-to-end on the example
+sources.
 
 - Package + CLI install (`mojave-review`) ✓
-- Source / model discovery (current + backups) ✓
+- Source / model discovery (current + backups + multi-reviewer) ✓
 - CSV + NPZ load ✓
 - Plotly summary plots — Position / Flux / Polarization / Kinematics ✓
 - Kinematics view: arrowheads, +x left, equal mas/pixel + free zoom,
@@ -68,10 +69,27 @@ the example sources:
   - Initial range from `compute_source_extent` (cluster footprint)
 - Draggable splitter between summary and overlay panels ✓
 - `uirevision`-preserved zoom across epoch / source / model changes ✓
+- Recommendations panel (4 tabs: Robustness / ID-use-in-fit Edits /
+  Source Notes / Epoch Notes) ✓
+- Selection-driven edit generation on click + box/lasso, gold halo
+  highlight, comment field per action ✓
+- "No changes suggested" Robustness checkbox + cluster-0 dropdown lock ✓
+- "Visualize recommendations" checkbox: apply your in-progress recs to the
+  plots before they render ✓
+- Multi-reviewer view: other reviewers' JSON files appear in the model
+  dropdown as `Rec: <slug>`; selecting one shows their recommendations
+  applied to the plots, with the recommendations panel locked read-only ✓
+- Recommendations only writable against `current`; backup_NNN and Rec:
+  models lock the panel to read-only ✓
 
 ## Agreed next-chunk order (do not widen scope)
 
 1. ~~FITS cache + epoch overlay panel.~~ Done.
-2. **Recommendations sidebar + JSON store.** (Next)
-3. Reference PDF / MP4 tab on the overlay side.
+2. ~~Recommendations sidebar + JSON store.~~ Done.
+3. ~~Reference PDF / MP4 tab on the overlay side.~~ **Dropped** —
+   reviewer decided this isn't needed.
 4. Keyboard shortcuts (mirror the matplotlib keys `n / b / i / a / u / r`).
+   Optional polish; phase 1 is usable without it.
+
+When that's done (or skipped), the codebase is ready to move to Phase 2
+(university web server deploy + Google OAuth).

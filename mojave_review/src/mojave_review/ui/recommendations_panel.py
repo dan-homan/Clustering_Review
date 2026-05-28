@@ -1,0 +1,332 @@
+"""Layout for the bottom-of-page Recommendations panel.
+
+Four tabs:
+
+* **Source** — free-text comment about the source as a whole.
+* **Clusters** — editable table, one row per cluster in the current model.
+* **Epochs** — editable table, one row per epoch.
+* **Edits** — form to add a structured edit (clusterID change, use_in_fit
+  toggle) plus a list of edits the reviewer has accumulated.
+
+The panel autosaves to disk on every field change — there is no "save"
+button. Last-saved timestamp is shown in the header.
+"""
+
+from __future__ import annotations
+
+from dash import dash_table, dcc, html
+
+
+# ---------------------------------------------------------------------------
+# Tab: Source
+# ---------------------------------------------------------------------------
+
+def _source_tab() -> dcc.Tab:
+    return dcc.Tab(
+        label="Source Notes",
+        value="source",
+        children=[
+            html.Div(
+                [
+                    html.Label("Overall comment about this source:",
+                               style={"fontSize": "0.9em", "color": "#444"}),
+                    dcc.Textarea(
+                        id="source-comment",
+                        placeholder="Anything notable about this source as a whole — "
+                                    "e.g. unusual jet morphology, epochs to be wary of, "
+                                    "overall agreement / disagreement with the model.",
+                        style={"width": "100%", "minHeight": "120px",
+                               "fontFamily": "system-ui, sans-serif"},
+                    ),
+                ],
+                style={"padding": "0.75em"},
+            ),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tab: Clusters
+# ---------------------------------------------------------------------------
+
+def _clusters_tab() -> dcc.Tab:
+    return dcc.Tab(
+        label="Robustness",
+        value="clusters",
+        children=[
+            html.Div(
+                [
+                    # Quick "agree with everything" shortcut. When checked, the
+                    # cluster table below becomes uneditable and visually greys
+                    # out; derived set_robust edits are suppressed.
+                    html.Div(
+                        [
+                            dcc.Checklist(
+                                id="no-changes-checkbox",
+                                options=[{"label": " No changes suggested",
+                                          "value": "yes"}],
+                                value=[],
+                                inputStyle={"marginRight": "0.4em"},
+                                style={"fontWeight": 600},
+                            ),
+                        ],
+                        style={"marginBottom": "0.5em"},
+                    ),
+                    html.Div(
+                        "Only eligible clusters are listed — those with at least 5 "
+                        "epochs of use_in_fit=True. Pick a 'Recommended Changes' "
+                        "value that differs from 'Current Robust Status' and an "
+                        "edit is added to the list automatically.",
+                        style={"fontSize": "0.85em", "color": "#666",
+                               "marginBottom": "0.5em"},
+                    ),
+                    html.Div(
+                        id="cluster-table-wrapper",
+                        children=[
+                    dash_table.DataTable(
+                        id="cluster-feedback-table",
+                        columns=[
+                            {"name": "Eligible Clusters", "id": "clusterID",
+                             "type": "numeric", "editable": False},
+                            {"name": "Current Robust Status", "id": "current_robust",
+                             "editable": False},
+                            {"name": "Recommended Changes", "id": "recommended_robust",
+                             "presentation": "dropdown", "editable": True},
+                            {"name": "Comment", "id": "comment", "editable": True},
+                        ],
+                        data=[],
+                        dropdown={
+                            "recommended_robust": {
+                                "options": [
+                                    {"label": "—", "value": ""},
+                                    {"label": "Robust", "value": "robust"},
+                                    {"label": "Non-robust", "value": "non-robust"},
+                                ],
+                            },
+                        },
+                        # Cluster 0 is the fitted core — its robust status is
+                        # immutable, so restrict its dropdown to just "—" and
+                        # grey the cell. The Comment cell stays editable.
+                        dropdown_conditional=[
+                            {
+                                "if": {"column_id": "recommended_robust",
+                                       "filter_query": "{clusterID} = 0"},
+                                "options": [{"label": "—", "value": ""}],
+                            },
+                        ],
+                        editable=True,
+                        style_table={"maxHeight": "320px", "overflowY": "auto"},
+                        style_cell={"textAlign": "left", "padding": "4px 8px",
+                                    "fontFamily": "system-ui, sans-serif",
+                                    "fontSize": "0.9em"},
+                        style_header={"fontWeight": 600, "background": "#f0f0f0"},
+                        style_data_conditional=[
+                            # Recommendation differs from current → highlight.
+                            {"if": {"filter_query":
+                                    "{recommended_robust} = 'non-robust' && "
+                                    "{current_robust} = 'Robust'"},
+                             "backgroundColor": "#fff5f5"},
+                            {"if": {"filter_query":
+                                    "{recommended_robust} = 'robust' && "
+                                    "{current_robust} = 'Non-robust'"},
+                             "backgroundColor": "#fff5f5"},
+                            # Recommendation matches current → soft confirm.
+                            {"if": {"filter_query":
+                                    "{recommended_robust} = 'robust' && "
+                                    "{current_robust} = 'Robust'"},
+                             "backgroundColor": "#f5fff5"},
+                            {"if": {"filter_query":
+                                    "{recommended_robust} = 'non-robust' && "
+                                    "{current_robust} = 'Non-robust'"},
+                             "backgroundColor": "#f5fff5"},
+                            # Core row — grey out the Recommended Changes cell
+                            # so the lock is visually obvious.
+                            {"if": {"column_id": "recommended_robust",
+                                    "filter_query": "{clusterID} = 0"},
+                             "backgroundColor": "#eee",
+                             "color": "#999",
+                             "fontStyle": "italic"},
+                        ],
+                    ),
+                        ],
+                    ),  # /cluster-table-wrapper
+                ],
+                style={"padding": "0.75em"},
+            ),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tab: Epochs
+# ---------------------------------------------------------------------------
+
+def _epochs_tab() -> dcc.Tab:
+    return dcc.Tab(
+        label="Epoch Notes",
+        value="epochs",
+        children=[
+            html.Div(
+                [
+                    html.Div(
+                        "Leave comments per epoch. To suggest excluding an entire "
+                        "epoch from the fit, add a 'use_in_fit=False, scope=epoch' "
+                        "entry on the Edits tab.",
+                        style={"fontSize": "0.85em", "color": "#666",
+                               "marginBottom": "0.5em"},
+                    ),
+                    dash_table.DataTable(
+                        id="epoch-feedback-table",
+                        columns=[
+                            {"name": "Epoch", "id": "epoch", "editable": False},
+                            {"name": "Year", "id": "epoch_val",
+                             "type": "numeric", "editable": False},
+                            {"name": "Comment", "id": "comment", "editable": True},
+                        ],
+                        data=[],
+                        editable=True,
+                        style_table={"maxHeight": "320px", "overflowY": "auto"},
+                        style_cell={"textAlign": "left", "padding": "4px 8px",
+                                    "fontFamily": "system-ui, sans-serif",
+                                    "fontSize": "0.9em"},
+                        style_header={"fontWeight": 600, "background": "#f0f0f0"},
+                    ),
+                ],
+                style={"padding": "0.75em"},
+            ),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tab: Edits
+# ---------------------------------------------------------------------------
+
+def _edits_tab() -> dcc.Tab:
+    # ---- Selection-driven action panel -----------------------------------
+    # Visibility toggled by a callback based on selection-store contents.
+    selection_actions = html.Div(
+        id="selection-actions",
+        children=[
+            html.Div(id="selection-summary",
+                     style={"fontWeight": 600, "marginBottom": "0.5em"}),
+            html.Div(
+                [
+                    html.Label("Comment for these edits (optional):",
+                               style={"fontSize": "0.85em", "color": "#444",
+                                      "marginRight": "0.5em"}),
+                    dcc.Input(id="selection-comment", type="text",
+                              placeholder="will be attached to each edit (shown after '#')",
+                              style={"width": "min(420px, 70%)"}),
+                ],
+                style={"display": "flex", "alignItems": "center",
+                       "gap": "0.4em", "marginBottom": "0.5em"},
+            ),
+            html.Div(
+                [
+                    html.Button("Mark use_in_fit = False on selected points",
+                                id="apply-uif-single-btn", n_clicks=0,
+                                style={"marginRight": "0.5em"}),
+                    html.Button("Mark whole epoch use_in_fit = False",
+                                id="apply-uif-epoch-btn", n_clicks=0,
+                                style={"marginRight": "0.5em"}),
+                ],
+                style={"display": "flex", "flexWrap": "wrap",
+                       "gap": "0.4em", "marginBottom": "0.5em"},
+            ),
+            html.Div(
+                [
+                    html.Label("New clusterID:",
+                               style={"fontSize": "0.85em", "color": "#444",
+                                      "marginRight": "0.4em"}),
+                    dcc.Input(id="renumber-to-id", type="number",
+                              style={"width": "80px", "marginRight": "0.75em"}),
+                    html.Button("Renumber selected points to this ID",
+                                id="apply-renumber-single-btn", n_clicks=0,
+                                style={"marginRight": "0.5em"}),
+                    html.Button("Renumber all epochs of selected clusters to this ID",
+                                id="apply-renumber-all-btn", n_clicks=0),
+                ],
+                style={"display": "flex", "flexWrap": "wrap",
+                       "alignItems": "center", "gap": "0.4em",
+                       "marginBottom": "0.5em"},
+            ),
+            html.Div(
+                [
+                    html.Button("Clear selection", id="clear-selection-btn",
+                                n_clicks=0,
+                                style={"fontSize": "0.85em"}),
+                    html.Span(id="selection-action-hint",
+                              style={"marginLeft": "1em", "color": "#0a8",
+                                     "fontSize": "0.85em"}),
+                ],
+            ),
+        ],
+        style={"display": "none",
+               "padding": "0.5em 0.75em",
+               "background": "#f0f7ff",
+               "borderBottom": "1px solid #d6e8f7",
+               "borderTop": "1px solid #d6e8f7",
+               "marginBottom": "0.5em"},
+    )
+
+    # Visible only when the selection is empty.
+    no_selection_note = html.Div(
+        id="no-selection-note",
+        children=(
+            "Click a point in the Position, Flux, or Polarization plots to "
+            "select it (click again to deselect, or use the Box-Select / "
+            "Lasso tools in the plot's modebar). Then come back here to "
+            "turn that selection into edits."
+        ),
+        style={"padding": "0.75em 0.75em 0.5em",
+               "color": "#666", "fontStyle": "italic", "fontSize": "0.9em"},
+    )
+
+    edit_list_view = html.Div(
+        [
+            html.Hr(style={"margin": "0.5em 0"}),
+            html.Div("Pending edits", style={"fontWeight": 600,
+                                              "marginBottom": "0.25em",
+                                              "padding": "0 0.75em"}),
+            html.Div(id="edits-list",
+                     style={"padding": "0 0.75em 0.75em"}),
+        ],
+    )
+
+    return dcc.Tab(
+        label="ID / use-in-fit Edits", value="edits",
+        children=[selection_actions, no_selection_note, edit_list_view],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Composite panel
+# ---------------------------------------------------------------------------
+
+def build_recommendations_panel() -> html.Div:
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.H4("Recommendations",
+                            style={"margin": "0", "display": "inline-block"}),
+                    html.Span(id="save-indicator",
+                              style={"marginLeft": "1em",
+                                     "fontSize": "0.85em", "color": "#888"}),
+                ],
+                style={"padding": "0.25em 0.75em"},
+            ),
+            dcc.Tabs(
+                id="rec-tabs", value="clusters",
+                children=[_clusters_tab(), _edits_tab(),
+                          _source_tab(), _epochs_tab()],
+            ),
+            # Owns the in-memory edits list (the dash_table data fields
+            # already store the cluster/epoch feedback).
+            dcc.Store(id="edits-store", data=[]),
+        ],
+        id="recommendations-panel",
+        style={"borderTop": "1px solid #ddd", "background": "#fafafa",
+               "marginTop": "0.5em"},
+    )

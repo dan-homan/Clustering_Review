@@ -11,6 +11,12 @@ from ..data.fits_cache import split_source_band
 from ..data.loader import _SOURCE_DIR_RE, SourceRef, list_models, load_bundle
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
+from ..recommendations.apply import apply_recommendation
+from ..recommendations.store import (
+    list_other_reviewer_slugs, load_recommendation_by_slug, reviewer_slug,
+)
+from . import recommendations_callbacks
+from .recommendations_callbacks import build_rec_from_ui_state
 
 
 def register_callbacks(
@@ -21,8 +27,49 @@ def register_callbacks(
     cache_dir: Path,
     reviewer: str,
 ) -> None:
+    # Recommendations tab — load + autosave behavior.
+    recommendations_callbacks.register(
+        app,
+        recommendations_dir=recommendations_dir,
+        reviewer=reviewer,
+    )
+
+    # Local helpers that resolve a (source, model) pair into a possibly
+    # rec-applied DataFrame, closing over recommendations_dir + reviewer.
+    def _effective_model_for_load(model_key: str) -> str:
+        return "current" if (model_key or "").startswith("rec:") else model_key
+
+    def _resolve_df_for_plot(
+        source_folder: str, source_name: str, model_key: str,
+        *, visualize_val, cluster_rows, edits, no_changes_val,
+    ):
+        eff_key = _effective_model_for_load(model_key)
+        bundle = load_bundle(source_folder, eff_key)
+        df = bundle.cluster_df.copy()
+        if (model_key or "").startswith("rec:"):
+            slug = model_key[4:]
+            rec = load_recommendation_by_slug(
+                recommendations_dir, source_name, "current", slug,
+            )
+            if rec is not None:
+                df = apply_recommendation(df, rec)
+        elif model_key == "current" and visualize_val:
+            own_rec = build_rec_from_ui_state(
+                source=source_name, model="current", reviewer=reviewer,
+                source_comment=None,
+                no_robustness_changes=bool(no_changes_val),
+                cluster_rows=cluster_rows, epoch_rows=None,
+                edits=edits,
+            )
+            df = apply_recommendation(df, own_rec)
+        return df
 
     # ---- model picker (depends on source) --------------------------------
+    # Options include:
+    #   - "current"                        — the live model
+    #   - "backup_NNN"                     — saved backup runs
+    #   - "rec:<slug>"                     — other reviewers' pending recommendations
+    #                                         applied on top of "current"
     @app.callback(
         Output("model-picker", "options"),
         Output("model-picker", "value"),
@@ -36,6 +83,11 @@ def register_callbacks(
             return [], None
         models = list_models(src)
         opts = [{"label": mf.label, "value": mf.key} for mf in models]
+        # Other reviewers' rec files at <recs>/<source>/current/<slug>.json,
+        # excluding the current user's own slug.
+        own_slug = reviewer_slug(reviewer)
+        for slug in list_other_reviewer_slugs(recommendations_dir, src.source, own_slug):
+            opts.append({"label": f"Rec: {slug}", "value": f"rec:{slug}"})
         return opts, (opts[0]["value"] if opts else None)
 
     # ---- summary figure --------------------------------------------------
@@ -45,15 +97,154 @@ def register_callbacks(
         Input("model-picker", "value"),
         Input("view-picker", "value"),
         Input("vector-scale", "value"),
+        Input("selection-store", "data"),
+        Input("visualize-checkbox", "value"),
+        Input("cluster-feedback-table", "data"),
+        Input("edits-store", "data"),
+        Input("no-changes-checkbox", "value"),
     )
-    def _refresh_summary(source_folder, model_key, view, vector_scale):
+    def _refresh_summary(source_folder, model_key, view, vector_scale,
+                         selection, visualize_val, cluster_rows, edits,
+                         no_changes_val):
         if not source_folder or not model_key:
             return go.Figure()
-        bundle = load_bundle(source_folder, model_key)
+        src = _source_from_folder(source_folder)
+        if src is None:
+            return go.Figure()
+        df = _resolve_df_for_plot(
+            source_folder, src.source, model_key,
+            visualize_val=visualize_val, cluster_rows=cluster_rows,
+            edits=edits, no_changes_val=no_changes_val,
+        )
+        # Apply the user's current selection to the dataframe so the existing
+        # gold open-diamond overlay highlights the chosen points across views.
+        df["select"] = False
+        if selection:
+            sel_keys = {(int(s["cid"]), round(float(s["epoch"]), 4))
+                        for s in selection
+                        if s.get("cid") is not None and s.get("epoch") is not None}
+            if sel_keys:
+                cids = df["clusterID"].astype(int).to_numpy()
+                eps = df["epoch"].round(4).to_numpy()
+                mask = [(int(c), float(e)) in sel_keys for c, e in zip(cids, eps)]
+                df.loc[mask, "select"] = True
         return build_summary_figure(
-            bundle.cluster_df, view=view,
+            df, view=view,
             vector_scale_factor=vector_scale or 1.0,
         )
+
+    # ---- selection store: click toggles, box/lasso replaces --------------
+    # Both events fire only on Position / Flux / Polarization views. The
+    # summary graph carries customdata=[cid, epoch] on every cluster point,
+    # so identifying selected points is just reading that field.
+    #
+    # We must reset clickData to None after each handled click — Dash only
+    # fires the callback when the Input *value* changes, and re-clicking
+    # the same point would otherwise yield an identical clickData dict and
+    # the toggle would silently fail to deselect on the second click.
+    @app.callback(
+        Output("selection-store", "data", allow_duplicate=True),
+        Output("summary-graph", "clickData", allow_duplicate=True),
+        Input("summary-graph", "clickData"),
+        State("selection-store", "data"),
+        State("view-picker", "value"),
+        prevent_initial_call=True,
+    )
+    def _toggle_on_click(click_data, current, view):
+        if view == "Kinematics" or not click_data:
+            return no_update, no_update
+        pts = click_data.get("points") or []
+        out = list(current or [])
+        existing = {(int(s["cid"]), round(float(s["epoch"]), 4))
+                    for s in out
+                    if s.get("cid") is not None and s.get("epoch") is not None}
+        changed = False
+        for p in pts:
+            cd = p.get("customdata")
+            if not cd or len(cd) < 2:
+                continue
+            try:
+                cid = int(cd[0])
+                epoch = round(float(cd[1]), 4)
+            except (TypeError, ValueError):
+                continue
+            key = (cid, epoch)
+            if key in existing:
+                out = [s for s in out
+                       if not (int(s["cid"]) == cid
+                               and round(float(s["epoch"]), 4) == epoch)]
+                existing.discard(key)
+            else:
+                out.append({"cid": cid, "epoch": epoch})
+                existing.add(key)
+            changed = True
+        # Reset clickData so a repeat click on the same point fires again.
+        return (out if changed else no_update), None
+
+    @app.callback(
+        Output("selection-store", "data", allow_duplicate=True),
+        Input("summary-graph", "selectedData"),
+        State("view-picker", "value"),
+        prevent_initial_call=True,
+    )
+    def _replace_on_box(selected_data, view):
+        if view == "Kinematics":
+            return no_update
+        # Plotly sends `null` when the user clears via the modebar — wipe.
+        if selected_data is None:
+            return []
+        pts = selected_data.get("points") or []
+        out: list[dict] = []
+        seen: set[tuple[int, float]] = set()
+        for p in pts:
+            cd = p.get("customdata")
+            if not cd or len(cd) < 2:
+                continue
+            try:
+                cid = int(cd[0])
+                epoch = round(float(cd[1]), 4)
+            except (TypeError, ValueError):
+                continue
+            key = (cid, epoch)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"cid": cid, "epoch": epoch})
+        return out
+
+    # ---- visualize-checkbox state managed by the current model -----------
+    # model=current  -> user-controllable, default off
+    # model=backup_* -> disabled, off  (no recs apply to a backup)
+    # model=rec:<>   -> disabled, on   (visualization is the whole point)
+    @app.callback(
+        Output("visualize-checkbox", "options"),
+        Output("visualize-checkbox", "value", allow_duplicate=True),
+        Input("model-picker", "value"),
+        prevent_initial_call=True,
+    )
+    def _manage_visualize_checkbox(model_key):
+        if not model_key:
+            return [{"label": " Visualize recommendations",
+                     "value": "yes", "disabled": True}], []
+        if model_key == "current":
+            return [{"label": " Visualize recommendations",
+                     "value": "yes", "disabled": False}], no_update
+        if model_key.startswith("rec:"):
+            return [{"label": " Visualize recommendations",
+                     "value": "yes", "disabled": True}], ["yes"]
+        # backup_NNN or unknown
+        return [{"label": " Visualize recommendations",
+                 "value": "yes", "disabled": True}], []
+
+    # ---- clear selection when source or model changes --------------------
+    @app.callback(
+        Output("selection-store", "data", allow_duplicate=True),
+        Input("source-picker", "value"),
+        Input("model-picker", "value"),
+        prevent_initial_call=True,
+    )
+    def _clear_selection_on_swap(*_):
+        return []
 
     # ---- vector-scale visibility -----------------------------------------
     @app.callback(
@@ -137,15 +328,35 @@ def register_callbacks(
         Input("source-picker", "value"),
         Input("model-picker", "value"),
         Input("epoch-slider", "value"),
+        Input("visualize-checkbox", "value"),
+        Input("cluster-feedback-table", "data"),
+        Input("edits-store", "data"),
+        Input("no-changes-checkbox", "value"),
     )
-    def _refresh_overlay(source_folder, model_key, epoch_int):
+    def _refresh_overlay(source_folder, model_key, epoch_int,
+                         visualize_val, cluster_rows, edits, no_changes_val):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
         src = _source_from_folder(source_folder)
         if src is None:
             return go.Figure(), None
-        bundle = load_bundle(source_folder, model_key)
+        # The overlay needs the npz (cc_data / cc_labels / epoch_info), which
+        # only the "current" bundle has. For rec:<slug>, fall back to current.
+        eff_key = _effective_model_for_load(model_key)
+        bundle = load_bundle(source_folder, eff_key)
         source_no_band, band = split_source_band(src.source)
+        # If recommendations are being visualised, swap in the modified
+        # cluster_df before rendering. The npz fields stay untouched.
+        applied_df = _resolve_df_for_plot(
+            source_folder, src.source, model_key,
+            visualize_val=visualize_val, cluster_rows=cluster_rows,
+            edits=edits, no_changes_val=no_changes_val,
+        )
+        if not applied_df.equals(bundle.cluster_df):
+            # Construct a shallow shim bundle with the patched df. The
+            # SourceBundle dataclass is mutable; cheap to copy fields.
+            from dataclasses import replace as _replace
+            bundle = _replace(bundle, cluster_df=applied_df)
         return overlay_figure_for_epoch(
             bundle, int(epoch_int), cache_dir,
             source_no_band=source_no_band, band=band,
@@ -240,3 +451,5 @@ def _source_from_folder(folder_str: str) -> SourceRef | None:
         epoch_max=float(m.group("emax")),
         folder=folder,
     )
+
+

@@ -7,6 +7,7 @@ from pathlib import Path
 from dash import dcc, html
 
 from ..data.loader import list_sources
+from .recommendations_panel import build_recommendations_panel
 
 
 def build_layout(results_dir: Path, reviewer: str) -> html.Div:
@@ -43,6 +44,21 @@ def build_layout(results_dir: Path, reviewer: str) -> html.Div:
                         value="Position",
                         inline=True,
                         inputStyle={"marginRight": "0.25em", "marginLeft": "0.5em"},
+                    ),
+                    # "Visualize recommendations": when ON + model=current, the
+                    # summary + overlay are rendered with the user's pending
+                    # edits applied to the underlying CSV. Auto-managed when
+                    # model is a backup or a "Rec: <slug>" entry (disabled,
+                    # implicit for the latter).
+                    dcc.Checklist(
+                        id="visualize-checkbox",
+                        options=[{"label": " Visualize recommendations",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1.5em",
+                               "fontSize": "0.9em",
+                               "color": "#444"},
                     ),
                 ],
                 style={"display": "flex", "alignItems": "center", "marginTop": "0.5em"},
@@ -142,8 +158,14 @@ def build_layout(results_dir: Path, reviewer: str) -> html.Div:
         [
             dcc.Store(id="reviewer-store", data=reviewer),
             dcc.Store(id="beam-params"),
+            # Selection of summary-graph points: a list of {"cid", "epoch"}
+            # dicts. Updated by click / box-select callbacks. Drives both the
+            # gold-diamond highlight in the summary figure and the
+            # selection-driven actions in the Edits tab.
+            dcc.Store(id="selection-store", data=[]),
             header,
             body,
+            build_recommendations_panel(),
         ],
         style={"fontFamily": "system-ui, sans-serif"},
     )

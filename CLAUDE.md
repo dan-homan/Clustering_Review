@@ -40,11 +40,18 @@ Clustering_Review/
         │   ├── summary.py               # Plotly port of make_summary_plots
         │   ├── overlay.py               # FITS + cluster + beam overlay per epoch
         │   └── _extent.py               # initial zoom-box from cluster footprint
+        ├── recommendations/
+        │   ├── schema.py                # dataclasses for the JSON shape
+        │   ├── store.py                 # read/write/list reviewer JSON files
+        │   └── apply.py                 # apply a Recommendation to a cluster_df
         ├── assets/                      # Dash auto-loads .js/.css from here
         │   ├── resizable.js             # draggable splitter between panels
         │   └── resizable.css
-        ├── ui/{layout,callbacks}.py
-        └── recommendations/             # (planned) JSON store
+        └── ui/
+            ├── layout.py                # header + body + recommendations panel
+            ├── callbacks.py             # source/model/view + selection + summary/overlay
+            ├── recommendations_panel.py # the 4-tab bottom panel
+            └── recommendations_callbacks.py
 ```
 
 `<prefix>` = `<source>.<emin>-<emax>` (e.g. `0003-066u.1994.00-2026.00`).
@@ -176,32 +183,116 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
 - **Position polyfit** is only drawn if ≥5 valid `use_in_fit` points AND
   (motion is >3σ OR speed < 0.05 with combined error < 0.05 mas/yr).
 
-## Recommendations (planned — not yet implemented)
+## Recommendations
 
-Reviewer actions map to entries in a per-(source, reviewer) JSON file under
-`<results-parent>/recommendations/<source>/<reviewer>.json`. The app never
-modifies anything under `Results/`. Schema sketch:
+Reviewer feedback lives in per-(source, model, reviewer) JSON files at
+`<recommendations-dir>/<source>/<model>/<reviewer-slug>.json`. The app
+NEVER modifies anything under `Results/`. The on-disk shape (full schema
+in [`recommendations/schema.py`](mojave_review/src/mojave_review/recommendations/schema.py)):
 
 ```jsonc
 {
-  "source": "...", "model": "current" | "backup_NNN",
-  "model_sha": "...", "reviewer": "...", "updated_at": "...",
+  "source": "0003-066u", "model": "current",
+  "model_sha": "<sha256 of the CSV reviewer saw>",
+  "reviewer": "Reviewer Name", "updated_at": "2026-05-28T14:09:32+00:00",
   "source_comment": "...",
-  "cluster_feedback": {"3": {"robust_agree": false, "comment": "..."}},
-  "epoch_feedback": {"2003.10": {"comment": "..."}},
+  // "I sign off on the model's robust flags as-is": even if the table has
+  // stale entries, no derived set_robust edits are emitted while this is true.
+  "no_robustness_changes": false,
+  "cluster_feedback": {
+    "3": {"recommended_robust": false, "comment": "merges with 4"}
+  },
+  "epoch_feedback": {"2003.10": {"comment": "ragged structure"}},
   "edits": [
     {"op": "change_clusterID", "scope": "single"|"all_epochs", ...},
-    {"op": "set_use_in_fit",    "scope": "single"|"epoch", ...}
+    {"op": "set_use_in_fit",    "scope": "single"|"epoch",       ...}
   ]
 }
 ```
 
-`use_in_fit` has exactly two scopes: `single` (one point) and `epoch`
-(whole epoch). No "cluster_in_epoch" scope.
+- `recommended_robust`: `true`=Robust, `false`=Non-robust, `null`=no opinion.
+  When ≠ the model's current robust flag for that cluster, a synthetic
+  `set_robust` edit is *derived* at render/apply time — it is NOT written
+  into the JSON's `edits[]` array (your post-processor should derive it).
+- `use_in_fit` scopes: `single` (one point) + `epoch` (whole epoch). No
+  "cluster-in-epoch" scope.
+- `change_clusterID` scopes: `single` (one row) + `all_epochs` (renumber a
+  cluster everywhere, multiple cids in a single batch = merge).
 
-`change_clusterID` scopes: `single` (one row) and `all_epochs` (renumber a
-cluster everywhere). These mirror the `i` and `a` keys in
-`cluster_code.py`'s interactive review.
+### Panel layout (4 tabs)
+
+`Robustness` (default) — `ID / use-in-fit Edits` — `Source Notes` — `Epoch Notes`.
+
+| Tab | What it shows |
+|---|---|
+| Robustness | "No changes suggested" checkbox at top + editable table of *eligible* clusters (≥ 5 epochs with `use_in_fit=True`). Columns: Eligible Clusters, Current Robust Status, Recommended Changes (—/Robust/Non-robust), Comment. Cluster 0 (the core) has its dropdown locked to "—" (the core is always robust); its Comment cell stays editable. |
+| ID / use-in-fit Edits | Selection-driven action panel (visible only when summary-plot points are selected) + pending-edits list (manual + derived `set_robust` together). When no selection: instruction to click a summary point. Manual edits get a `[remove]` button; derived ones are read-only and tagged "from Clusters tab". |
+| Source Notes | One textarea, `source_comment`. |
+| Epoch Notes | One editable row per epoch, comment cell. |
+
+The panel auto-saves on every field change. Read-only modes:
+
+- model `current`: editable, autosaves.
+- model `backup_NNN`: locked, empty (recommendations only valid against current).
+- model `Rec: <slug>`: locked, displays *that* reviewer's recommendations from
+  `<recs>/<source>/current/<slug>.json` so anyone can view another reviewer's
+  in-progress feedback.
+
+Visual lock = `opacity: 0.7; pointer-events: none` on the whole
+`#recommendations-panel`.
+
+### Selection-driven edits
+
+The summary plots carry `customdata=[clusterID, epoch]` on every cluster
+point. Two callbacks write to `dcc.Store(id="selection-store")`:
+
+- **clickData** → toggle that one (cid, epoch) in the store. *The callback
+  also resets `clickData` to None* so a repeat click on the same point
+  fires (Dash only fires on Input *value change*; identical clickData would
+  silently no-op).
+- **selectedData** (box/lasso) → replace the store contents.
+
+Selection is only meaningful on Position / Flux / Polarization views; the
+event handlers no-op on Kinematics. The store clears automatically on
+source or model change.
+
+Highlight: the `cluster_df["select"]` column is set per row from the store
+before passing to `build_summary_figure`; the existing gold open-circle
+overlay in `_add_cluster_traces` renders the halo. **Open symbols
+(`*-open`) use `marker.color` as the OUTLINE, not `marker.line.color` —
+setting `marker.color="rgba(0,0,0,0)"` makes the entire halo invisible.**
+Use a real color (`"gold"`) and SVG `go.Scatter` (not `Scattergl`) for
+the overlay traces.
+
+Action buttons on the Edits tab transform a selection into edits:
+
+| Button | Generated edits |
+|---|---|
+| Mark use_in_fit=False on selected points | N × `set_use_in_fit / single` |
+| Mark whole epoch use_in_fit=False | K × `set_use_in_fit / epoch` (K = unique epochs) |
+| Renumber selected points to ID X | N × `change_clusterID / single` |
+| Renumber all epochs of selected clusters to ID X | M × `change_clusterID / all_epochs` (M = unique cids; multiple cids ⇒ merge) |
+
+Each click attaches the optional Comment field to every generated edit;
+the comment input is reset after apply, the selection persists.
+
+### Visualize-recommendations + multi-reviewer
+
+A header checkbox "Visualize recommendations" controls whether
+[`recommendations/apply.py`](mojave_review/src/mojave_review/recommendations/apply.py)
+mutates the `cluster_df` before the summary + overlay are built. State
+table:
+
+| Model | Checkbox state | Plots show |
+|---|---|---|
+| `current` | enabled, off (default) | raw current data |
+| `current` | enabled, on | current + user's in-progress UI-state recs applied |
+| `backup_NNN` | disabled, off | raw backup data |
+| `Rec: <slug>` | disabled, on (forced) | current + that reviewer's JSON recs applied |
+
+The model dropdown is populated by `_populate_models`: `current` + any
+`backup_*` + a `Rec: <slug>` entry per other-reviewer JSON file at
+`<recs-dir>/<source>/current/*.json` (excluding the current user's slug).
 
 ## Running the web app
 
@@ -218,8 +309,11 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
 
 ## Phase plan
 
-1. **Phase 1 (current)** — pip-installable local app. Read-only viewer first,
-   then recommendations capture, then keyboard shortcuts. No auth.
+1. **Phase 1** — pip-installable local app. ✓ Read-only viewer, ✓ FITS
+   overlay, ✓ recommendations capture (selection-driven edits +
+   Robustness/Edits/Notes tabs + multi-reviewer view). Keyboard shortcuts
+   for the matplotlib-key parity (`n/b/i/a/u/r`) are the remaining
+   optional polish item.
 2. **Phase 2** — host on the user's university web server. Adds Google OAuth
    + email allowlist. Same codebase; deploy differences are reviewer
    identity (from login) and per-user recommendations dirs.
@@ -259,6 +353,25 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
 - **Dash's `assets_folder` defaults to `./assets`** relative to CWD, not
   the package install dir. `app.py` explicitly sets
   `assets_folder=<package-dir>/assets` so `pip install` ships the JS/CSS.
+- **`*-open` Plotly markers use `marker.color` as the outline color.**
+  Setting `marker.color="rgba(0,0,0,0)"` (transparent) erases the entire
+  outline — the marker becomes invisible. Use a real color string. This
+  bit the selection-halo overlay (see [`plots/summary.py`](mojave_review/src/mojave_review/plots/summary.py)
+  `_add_cluster_traces`). Also: use SVG `go.Scatter` for thin-outline
+  overlays — `Scattergl` is unreliable for open symbol outlines.
+- **`clickData` doesn't change between identical clicks.** Dash callbacks
+  fire on Input value-change, so re-clicking the same point silently
+  no-ops. The click-toggle callback in [`ui/callbacks.py`](mojave_review/src/mojave_review/ui/callbacks.py)
+  outputs `clickData=None` at the end of every invocation so the next
+  click is seen as `None → {...}`. Guard against the resulting re-fire
+  with `if not click_data: return no_update`.
+- **Dash callbacks with `allow_duplicate=True` get hashed output keys.**
+  curl-based smoke tests need the hash suffix (look it up via
+  `app.callback_map`); browser dispatch handles routing automatically.
+- **Recommendations against non-`current` models are not permitted.**
+  Backup CSVs and other-reviewer JSON views are read-only. The
+  recommendation panel applies an opacity/pointer-events lock and the
+  autosave skips when `model_key != "current"`.
 
 ## Useful local commands
 

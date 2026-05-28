@@ -206,12 +206,20 @@ def _add_cluster_traces(
         )
 
     if np.any(s.selected):
+        # SVG scatter so the open-symbol outline renders cleanly.
+        # NB: for "*-open" symbols, `marker.color` IS the outline color
+        # (not the fill — there is no fill). The earlier
+        # `marker.color="rgba(0,0,0,0)"` made the ring invisible.
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=s.time[s.selected], y=ydata[s.selected],
                 mode="markers",
-                marker={"color": "rgba(0,0,0,0)", "symbol": "diamond-open",
-                        "size": 14, "line": {"width": 2, "color": "gold"}},
+                marker={
+                    "color": "gold",
+                    "symbol": "circle-open",
+                    "size": 22,
+                    "line": {"width": 3, "color": "gold"},
+                },
                 showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
             ),
             row=row, col=col,
