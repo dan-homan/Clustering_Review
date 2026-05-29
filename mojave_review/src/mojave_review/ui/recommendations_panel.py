@@ -328,9 +328,8 @@ def _edits_tab() -> dcc.Tab:
         id="no-selection-note",
         children=(
             "Click a point in the Position, Flux, or Polarization plots to "
-            "select it (click again to deselect, or use the Box-Select / "
-            "Lasso tools in the plot's modebar). Then come back here to "
-            "turn that selection into edits."
+            "select it (click the same point again to deselect). Then come "
+            "back here to turn that selection into edits."
         ),
         style={"padding": "0.75em 0.75em 0.5em",
                "color": "#666", "fontStyle": "italic", "fontSize": "0.9em"},

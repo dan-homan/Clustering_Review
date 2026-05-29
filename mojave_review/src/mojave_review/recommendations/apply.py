@@ -55,8 +55,17 @@ ELIGIBILITY_MIN_FIT = 5   # number of use_in_fit=True rows required
 
 
 def epoch_mask(df: pd.DataFrame, epoch: float) -> np.ndarray:
-    """Boolean mask for rows where df['epoch'] ≈ epoch (within EPOCH_ATOL)."""
-    return np.isclose(df["epoch"].astype(float), float(epoch), atol=EPOCH_ATOL)
+    """Boolean mask for rows where df['epoch'] ≈ epoch (within EPOCH_ATOL).
+
+    NB: we deliberately avoid ``np.isclose`` here. ``np.isclose(a, b,
+    atol=X)`` does NOT mean "tolerance = X" — the *effective* tolerance
+    is ``atol + rtol*|b|`` and the default ``rtol=1e-5`` makes the bound
+    ``1e-4 + 1e-5*2016 ≈ 0.02 yr`` at year 2016, which is wider than the
+    4–7 day spacing between MOJAVE epochs (0415+379's
+    2016_11_06/12/18 trio collides). A plain absolute compare is the
+    safe form: identical semantics to ``np.isclose(..., atol=ATOL,
+    rtol=0)`` but without the trap-door default."""
+    return np.abs(df["epoch"].astype(float).to_numpy() - float(epoch)) <= EPOCH_ATOL
 
 
 def _update_core_at_epoch(

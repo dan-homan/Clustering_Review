@@ -170,10 +170,18 @@ def register_callbacks(
         fig.update_layout(uirevision=f"summary:{source_folder}:{model_key}:{view}")
         return fig
 
-    # ---- selection store: click toggles, box/lasso replaces --------------
-    # Both events fire only on Position / Flux / Polarization views. The
-    # summary graph carries customdata=[cid, epoch] on every cluster point,
-    # so identifying selected points is just reading that field.
+    # ---- selection store: click toggles -----------------------------------
+    # Click-only on purpose. Box-select / lasso-select have been stripped
+    # from the summary plot's modebar (see ui/layout.py) because their
+    # all-or-nothing semantics surprised reviewers — there's no way to
+    # partially undo a sweep, and an accidental select-mode drag could
+    # strand them with a selection they couldn't reverse without first
+    # finding the modebar's reset.
+    #
+    # The summary graph carries customdata=[cid, epoch] on every cluster
+    # point, so identifying clicked points is just reading that field.
+    # The callback fires only on Position / Flux / Polarization views;
+    # Kinematics has its own interpretation of clicks.
     #
     # We must reset clickData to None after each handled click — Dash only
     # fires the callback when the Input *value* changes, and re-clicking
@@ -218,36 +226,10 @@ def register_callbacks(
         # Reset clickData so a repeat click on the same point fires again.
         return (out if changed else no_update), None
 
-    @app.callback(
-        Output("selection-store", "data", allow_duplicate=True),
-        Input("summary-graph", "selectedData"),
-        State("view-picker", "value"),
-        prevent_initial_call=True,
-    )
-    def _replace_on_box(selected_data, view):
-        if view == "Kinematics":
-            return no_update
-        # Plotly sends `null` when the user clears via the modebar — wipe.
-        if selected_data is None:
-            return []
-        pts = selected_data.get("points") or []
-        out: list[dict] = []
-        seen: set[tuple[int, float]] = set()
-        for p in pts:
-            cd = p.get("customdata")
-            if not cd or len(cd) < 2:
-                continue
-            try:
-                cid = int(cd[0])
-                epoch = round(float(cd[1]), 4)
-            except (TypeError, ValueError):
-                continue
-            key = (cid, epoch)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({"cid": cid, "epoch": epoch})
-        return out
+    # (Previously had a sibling _replace_on_box callback on
+    # summary-graph.selectedData for the box-select / lasso flows. Since
+    # those modebar buttons are now stripped in ui/layout.py, selectedData
+    # can no longer fire and the callback was dead code.)
 
     # ---- visualize-checkbox state managed by the current model -----------
     # model=current  -> user-controllable, default off

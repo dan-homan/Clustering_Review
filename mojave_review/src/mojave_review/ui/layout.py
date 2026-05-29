@@ -148,6 +148,18 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                     id="summary-graph",
                     style={"height": "720px"},
                     responsive=True,
+                    # Strip the box-select and lasso-select tools from the
+                    # modebar. Selection is click-only on purpose: those
+                    # two modes behave quite differently (e.g. don't toggle
+                    # on a repeat click, can't be partially undone) and
+                    # reviewers reported getting stranded with an
+                    # accidental box-selection they couldn't reverse.
+                    # Clicking individual points (with the click-toggle
+                    # callback in ui/callbacks.py) is the supported flow.
+                    config={
+                        "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+                        "displaylogo": False,
+                    },
                 ),
                 type="default",
             ),
@@ -230,7 +242,9 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
             # the mtime-based invalidation in data/loader.py.
             dcc.Store(id="reload-counter", data=0),
             # Selection of summary-graph points: a list of {"cid", "epoch"}
-            # dicts. Updated by click / box-select callbacks. Drives both the
+            # dicts. Updated by the click-toggle callback only — box-select
+            # and lasso are disabled by stripping select2d/lasso2d from
+            # the summary plot's modebar (see above). Drives both the
             # gold-diamond highlight in the summary figure and the
             # selection-driven actions in the Edits tab.
             dcc.Store(id="selection-store", data=[]),

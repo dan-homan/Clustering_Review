@@ -168,7 +168,10 @@ def _detect_renumber_single_conflicts(
         if cid == target:
             continue                     # no-op renumber
         ep = round(float(s["epoch"]), 4)
-        em = np.isclose(df["epoch"].astype(float), ep, atol=1e-4)
+        # Absolute compare — see recommendations.apply.epoch_mask for why we
+        # don't use np.isclose (its default rtol=1e-5 silently bleeds in a
+        # ~0.02 yr window at year 2016, wider than the inter-epoch spacing).
+        em = np.abs(df["epoch"].astype(float).to_numpy() - ep) <= 1e-4
         # any row at this epoch already labeled `target` that isn't being
         # renumbered itself
         target_rows = em & (df["clusterID"] == target)
@@ -185,15 +188,35 @@ def _detect_renumber_single_conflicts(
     return sorted(bad)
 
 
-def _detect_renumber_all_epochs_conflict(
+def _detect_renumber_all_epochs_conflicts(
     df, selection: list[dict], target: int,
-) -> bool:
-    """True if the target cluster exists in `df` outside the cids being
-    renumbered."""
-    sel_cids = {int(s["cid"]) for s in selection}
-    if target in sel_cids:
-        return False
-    return bool((df["clusterID"] == target).any())
+) -> list[float]:
+    """Return the epochs where renaming any of ``selection``'s cluster IDs
+    to ``target`` would collide with an existing row that already carries
+    ``target``.
+
+    The previous version flagged *any* existence of ``target`` in the
+    dataframe as a conflict, which produced false positives when the
+    reviewer was deliberately merging cluster A (e.g. at epochs 1–3) into
+    cluster B (e.g. at epochs 4–6) — A's and B's epochs are disjoint, so
+    there is no in-epoch collision, and the deconfliction it triggered
+    would have wiped B at epochs 4–6, destroying the very assignment the
+    reviewer wanted to keep. We now report the *epochs* where the
+    collision actually occurs, and the caller emits per-epoch
+    (single-scope) deconfliction edits that only touch those epochs.
+    """
+    from_cids = {int(s["cid"]) for s in selection}
+    if not from_cids or target in from_cids:
+        return []
+    # Epochs where any of the source cluster IDs live
+    src_rows = df["clusterID"].astype(int).isin(from_cids)
+    src_epochs = df.loc[src_rows, "epoch"].astype(float).unique()
+    bad: set[float] = set()
+    for ep in src_epochs:
+        em = np.abs(df["epoch"].astype(float).to_numpy() - float(ep)) <= 1e-4
+        if (em & (df["clusterID"] == target)).any():
+            bad.add(round(float(ep), 4))
+    return sorted(bad)
 
 
 def _build_renumber_user_edits(
@@ -542,6 +565,7 @@ def register(
         Output("pending-conflict-action", "data", allow_duplicate=True),
         Output("conflict-confirm", "message"),
         Output("conflict-confirm", "displayed"),
+        Output("selection-store", "data", allow_duplicate=True),
         Input("apply-uif-single-btn", "n_clicks"),
         Input("apply-uif-epoch-btn", "n_clicks"),
         Input("apply-renumber-single-btn", "n_clicks"),
@@ -559,12 +583,20 @@ def register(
         _a, _b, _c, _d, selection, to_id, comment, current_edits,
         source_folder, model_key, uif_value_str,
     ):
+        # Return shape: (edits, hint, comment, pending, conflict_msg,
+        #                conflict_displayed, selection)
+        # ``selection=[]`` clears the gold halos after a successful edit
+        # so the reviewer can't accidentally re-apply to the same points
+        # on a second button click. The conflict-pending path leaves
+        # selection untouched — the confirm/cancel callbacks own clearing
+        # it.
         trig = ctx.triggered_id
         if not trig:
-            return (no_update,) * 6
+            return (no_update,) * 7
         sel = selection or []
         if not sel:
-            return no_update, "Selection is empty.", no_update, no_update, no_update, no_update
+            return (no_update, "Selection is empty.", no_update,
+                    no_update, no_update, no_update, no_update)
         cmt = (comment or "").strip()
 
         # ---- Non-renumber paths (no conflict possible) ------------------
@@ -590,19 +622,22 @@ def register(
                         "value": uif_value, "comment": cmt,
                     })
                 msg = f"Added {len(new_edits)} whole-epoch use_in_fit={uif_value} edit(s)."
-            return (current_edits or []) + new_edits, msg, "", None, no_update, no_update
+            return ((current_edits or []) + new_edits, msg, "",
+                    None, no_update, no_update, [])
 
         # ---- Renumber paths --------------------------------------------
         if to_id is None:
-            return no_update, "Enter a target clusterID first.", no_update, no_update, no_update, no_update
+            return (no_update, "Enter a target clusterID first.", no_update,
+                    no_update, no_update, no_update, no_update)
         try:
             target = int(to_id)
         except (TypeError, ValueError):
-            return no_update, "Target clusterID must be an integer.", no_update, no_update, no_update, no_update
+            return (no_update, "Target clusterID must be an integer.",
+                    no_update, no_update, no_update, no_update, no_update)
 
         user_edits = _build_renumber_user_edits(sel, trig, target, cmt)
         if not user_edits:
-            return no_update, no_update, no_update, no_update, no_update, no_update
+            return (no_update,) * 7
 
         # Build the effective df (base + already-staged edits) so a second
         # renumber click sees the state the first one left.
@@ -637,38 +672,55 @@ def register(
                         f"Apply both changes?"
                     )
             else:  # apply-renumber-all-btn
-                if _detect_renumber_all_epochs_conflict(eff_df, sel, target):
+                # Per-epoch conflict check: only epochs where both an
+                # incoming from_cid AND the target currently coexist need
+                # deconfliction. If A lives at epochs 1–3 and B lives at
+                # epochs 4–6, no conflict — the rename is a clean merge
+                # and B's existing assignment at 4–6 is preserved.
+                conflict_epochs = _detect_renumber_all_epochs_conflicts(
+                    eff_df, sel, target,
+                )
+                if conflict_epochs:
                     deconflict_edits = _build_deconflict_edits(
-                        target, substitute, all_epochs=True,
+                        target, substitute, single_epochs=conflict_epochs,
                     )
+                    eps_str = ", ".join(f"{e:.4f}" for e in conflict_epochs)
                     message = (
-                        f"Cluster {target} currently exists in the data. To "
-                        f"avoid in-epoch ID collisions when your selection "
-                        f"becomes cluster {target}, the existing cluster "
-                        f"{target} will first be renumbered to {substitute} "
-                        f"(the smallest unused ID) across all epochs.\n\n"
+                        f"Cluster {target} already exists at {len(conflict_epochs)} "
+                        f"epoch(s) ({eps_str}) where your selected cluster(s) "
+                        f"also live. To avoid an in-epoch ID collision at "
+                        f"those specific epochs, cluster {target} will first "
+                        f"be moved to {substitute} there (the smallest unused "
+                        f"ID); cluster {target} at other epochs stays "
+                        f"untouched. Then your selection becomes cluster "
+                        f"{target}.\n\n"
                         f"Apply both changes?"
                     )
 
         if deconflict_edits:
-            # Stash the pending action; the dialog drives the actual write.
+            # Stash the pending action; the dialog drives the actual
+            # write. Selection stays so the confirm/cancel path still has
+            # context.
             pending = {
                 "deconflict_edits": deconflict_edits,
                 "user_edits": user_edits,
             }
-            return no_update, "", no_update, pending, message, True
+            return (no_update, "", no_update, pending, message, True, no_update)
 
-        # No conflict — apply directly.
+        # No conflict — apply directly + clear selection.
         return ((current_edits or []) + user_edits,
                 f"Added {len(user_edits)} renumber edit(s).",
-                "", None, no_update, no_update)
+                "", None, no_update, no_update, [])
 
     # Confirm dialog: OK -> deconflict edit(s) then user's renumber edits.
+    # Clears the selection-store too, same as the no-conflict apply path,
+    # so the gold halos disappear once the action lands.
     @app.callback(
         Output("edits-store", "data", allow_duplicate=True),
         Output("selection-action-hint", "children", allow_duplicate=True),
         Output("selection-comment", "value", allow_duplicate=True),
         Output("pending-conflict-action", "data", allow_duplicate=True),
+        Output("selection-store", "data", allow_duplicate=True),
         Input("conflict-confirm", "submit_n_clicks"),
         State("pending-conflict-action", "data"),
         State("edits-store", "data"),
@@ -676,13 +728,13 @@ def register(
     )
     def _confirm_conflict_action(_n, pending, current_edits):
         if not pending:
-            return no_update, no_update, no_update, None
+            return no_update, no_update, no_update, None, no_update
         deconflict = pending.get("deconflict_edits") or []
         user_edits = pending.get("user_edits") or []
         all_new = deconflict + user_edits
         msg = (f"Added {len(deconflict)} deconfliction + "
                f"{len(user_edits)} renumber edit(s).")
-        return (current_edits or []) + all_new, msg, "", None
+        return (current_edits or []) + all_new, msg, "", None, []
 
     # Confirm dialog: Cancel -> drop the pending action; no edits added.
     @app.callback(
