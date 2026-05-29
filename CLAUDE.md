@@ -318,18 +318,24 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
    Robustness/Edits/Notes tabs + multi-reviewer view). Keyboard shortcuts
    for the matplotlib-key parity (`n/b/i/a/u/r`) are the remaining
    optional polish item.
-2. **Phase 2** — host on the user's university web server. Adds Google OAuth
-   + email allowlist. Same codebase; deploy differences are reviewer
-   identity (from login) and per-user recommendations dirs.
+2. **Phase 2** — host on the user's university web server with **per-user
+   static tokens** (small trusted group, ~6 reviewers). Same codebase;
+   deploy differences are reviewer identity (from a `tokens.yaml`
+   config keyed by the cookie / `?token=…` URL param) and per-user
+   recommendations dirs. Full plan in
+   [`docs/deployment_phase2.md`](docs/deployment_phase2.md). Google
+   OAuth was evaluated and rejected as overkill at this group size.
 
 ### Phase 2 hosting requirements (for the IT conversation)
 
 - Python ≥ 3.10 in user space (`pyenv`/`uv` OK).
 - Long-lived process bound to a local port (`gunicorn` + systemd).
 - Reverse-proxy line under existing nginx/Apache: `https://<host>/mojave-review/` → `http://127.0.0.1:<port>/`.
-- Writable persistent dir (~10 GB) for FITS cache + recommendations.
-- Outbound HTTPS allowed to `www.cv.nrao.edu`.
-- One OAuth callback URL registered if/when Google login is added.
+- Writable persistent dir (~50 GB) for FITS cache + recommendations.
+  Nightly backup of just `recommendations/` desirable.
+- Outbound HTTPS allowed to `www.cv.nrao.edu` (FITS only — **no
+  Google endpoints needed**).
+- No OAuth callback URL needed; no database; no special packages.
 
 ## Don't / gotchas
 

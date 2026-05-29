@@ -10,10 +10,15 @@ of the clustering repo, not a separate repo).
 - **Phase 1** = pip-installable local app, no auth, single reviewer per
   launch. Reviewers run `mojave-review --results-dir ...` on their own
   machine.
-- **Phase 2** = host on the user's university web server with Google
-  OAuth + email allowlist (small trusted group). Same codebase; deploy
-  differences are reviewer identity (from login) and per-user
-  recommendations dirs.
+- **Phase 2** = host on the user's university web server with **per-user
+  static tokens** for authorization (small trusted group, ~6
+  reviewers). Same codebase; deploy differences are reviewer identity
+  (from the token in the cookie) and per-user recommendations dirs.
+  The full plan including IT talking points is in
+  [`deployment_phase2.md`](deployment_phase2.md). Google OAuth was
+  evaluated but rejected as overkill for the group size; IP-based
+  allowlist was rejected because home/office IP churn would create
+  ongoing maintenance.
 - **Plotly Dash** chosen over Streamlit / FastAPI+React. Reasons: purpose-
   built for interactive Plotly UIs; single Python codebase reuses
   `cluster_code.py` data prep; manageable maintenance burden.
@@ -32,7 +37,10 @@ of the clustering repo, not a separate repo).
   (renumber a cluster across the whole source). Mirrors the `i` and `a`
   keys in `cluster_code.py`'s interactive review.
 
-## Phase 2 hosting requirements (for the IT conversation)
+## Phase 2 hosting requirements (summary)
+
+Full plan + IT talking points in
+[`deployment_phase2.md`](deployment_phase2.md). The short list:
 
 - Python ≥ 3.10 in user space (`pyenv` / `uv` OK).
 - Long-lived process bound to a local port (`gunicorn` + systemd or
@@ -40,12 +48,15 @@ of the clustering repo, not a separate repo).
 - Reverse-proxy line under the existing nginx/Apache mapping
   `https://<host>/mojave-review/` → `http://127.0.0.1:<port>/`. WebSocket
   upgrade headers ideal but not required.
-- Writable persistent directory (~10 GB) for FITS cache and
-  recommendations. Nightly backup desirable.
-- Outbound HTTPS allowed to `www.cv.nrao.edu` (for FITS fetches).
-- One OAuth callback URL registered if/when Google login is added.
+- Writable persistent directory (~50 GB) for FITS cache and
+  recommendations. Nightly backup of just the `recommendations/`
+  subdir.
+- Outbound HTTPS allowed to `www.cv.nrao.edu` (for FITS fetches) —
+  **no Google endpoints needed**.
 
-No database. No special system packages.
+No database. No special system packages. No OAuth setup. Authorization
+is per-user static tokens read from a `tokens.yaml` config file with
+hot-reload on disk change.
 
 ## Status as of 2026-05-28
 
@@ -92,4 +103,5 @@ sources.
    Optional polish; phase 1 is usable without it.
 
 When that's done (or skipped), the codebase is ready to move to Phase 2
-(university web server deploy + Google OAuth).
+(university web server deploy + per-user static tokens) — see
+[`deployment_phase2.md`](deployment_phase2.md).
