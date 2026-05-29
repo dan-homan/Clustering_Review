@@ -118,7 +118,46 @@ def _clusters_tab() -> dcc.Tab:
                         style_table={"maxHeight": "320px", "overflowY": "auto"},
                         style_cell={"textAlign": "left", "padding": "4px 8px",
                                     "fontFamily": "system-ui, sans-serif",
-                                    "fontSize": "0.9em"},
+                                    "fontSize": "0.9em",
+                                    # Wrap long comments instead of letting
+                                    # them scroll horizontally inside a
+                                    # narrow input — the original behaviour
+                                    # parked the edit cursor at the right
+                                    # edge with no way to see the start of
+                                    # the text.
+                                    "whiteSpace": "normal", "height": "auto",
+                                    "lineHeight": "1.3em"},
+                        # Give the Comment column the lion's share of the
+                        # width; the other three are fixed-content. Without
+                        # this, Plotly's auto-layout makes Comment narrow,
+                        # which is the root cause of the cramped-edit feel.
+                        style_cell_conditional=[
+                            {"if": {"column_id": "clusterID"},
+                             "width": "12%", "textAlign": "right"},
+                            {"if": {"column_id": "current_robust"},
+                             "width": "18%"},
+                            {"if": {"column_id": "recommended_robust"},
+                             "width": "20%"},
+                            {"if": {"column_id": "comment"},
+                             "width": "50%", "minWidth": "260px"},
+                        ],
+                        # Force left-alignment on the in-place edit input.
+                        # The DataTable's editing widget is an
+                        # ``<input class="dash-cell-value">`` (the class
+                        # is on the input itself, not on a parent) and
+                        # Dash's default stylesheet leaves it inheriting
+                        # ``text-align: right``, which parks the cursor
+                        # at the right edge of long text and makes
+                        # editing painful. Targeting ``input.dash-cell-
+                        # value`` / ``textarea.dash-cell-value`` with
+                        # !important overrides that. Also pin direction
+                        # to ltr defensively.
+                        css=[
+                            {"selector": "input.dash-cell-value,"
+                                         " textarea.dash-cell-value",
+                             "rule": "text-align: left !important; "
+                                     "direction: ltr !important;"},
+                        ],
                         style_header={"fontWeight": 600, "background": "#f0f0f0"},
                         style_data_conditional=[
                             # Recommendation differs from current → highlight.
@@ -375,6 +414,16 @@ def build_recommendations_panel(admin: bool = False) -> html.Div:
             # Owns the in-memory edits list (the dash_table data fields
             # already store the cluster/epoch feedback).
             dcc.Store(id="edits-store", data=[]),
+            # Intermediate trigger for Submit: a clientside callback fires
+            # on the Submit button click, blurs whatever DataTable cell is
+            # currently being edited (so its in-progress text commits to
+            # the table's ``data`` prop), and only THEN bumps this store.
+            # The server-side submit callback then listens to this store
+            # instead of the raw button click, so it always reads the
+            # freshest table state. Without this, typing a comment and
+            # clicking Submit without leaving the cell silently loses the
+            # text.
+            dcc.Store(id="submit-trigger", data=0),
             # Holds the renumber action that's waiting on the conflict
             # dialog's confirmation; cleared whenever the dialog resolves.
             dcc.Store(id="pending-conflict-action", data=None),

@@ -825,12 +825,48 @@ def register(
                     f"Last submitted {when}")
         return ("Submit Recommendation", base_style, "Not yet submitted")
 
+    # Clientside flush-pending-edits gate.
+    #
+    # Dash DataTable only commits an editing cell's text to its ``data``
+    # prop when the cell loses focus. Without this layer, the natural
+    # user flow — type a comment, click Submit immediately — leaves the
+    # typed text stranded in the focused <input> and the server callback
+    # below reads stale State for ``cluster-feedback-table.data``.
+    #
+    # The clientside callback below fires on the raw Submit-button click,
+    # blurs whatever element is currently focused (which triggers
+    # DataTable's onBlur → dispatch to its data prop), awaits a single
+    # microtask so React applies the dispatch, and only then bumps
+    # ``submit-trigger.data``. The server submit callback below listens
+    # to that store instead of the raw click, so its State reads are
+    # guaranteed to include the just-typed text.
+    app.clientside_callback(
+        """
+        async function(n_clicks, current) {
+            if (!n_clicks) return window.dash_clientside.no_update;
+            const el = document.activeElement;
+            if (el && typeof el.blur === 'function'
+                && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+                el.blur();
+            }
+            // Yield once so DataTable's onBlur handler dispatches its
+            // pending edit into the store before our trigger fires.
+            await new Promise(function (r) { setTimeout(r, 0); });
+            return (current || 0) + 1;
+        }
+        """,
+        Output("submit-trigger", "data"),
+        Input("submit-recommendation-btn", "n_clicks"),
+        State("submit-trigger", "data"),
+        prevent_initial_call=True,
+    )
+
     # Click handler: build a fresh Recommendation from current UI state,
     # write it to submitted/, format the notebook text, open the modal.
     @app.callback(
         Output("submission-modal", "style"),
         Output("submission-text", "value"),
-        Input("submit-recommendation-btn", "n_clicks"),
+        Input("submit-trigger", "data"),
         State("source-picker", "value"),
         State("model-picker", "value"),
         State("source-comment", "value"),
@@ -840,7 +876,7 @@ def register(
         State("no-changes-checkbox", "value"),
         prevent_initial_call=True,
     )
-    def _do_submit(_n, source_folder, model_key, source_comment,
+    def _do_submit(_trigger, source_folder, model_key, source_comment,
                    cluster_rows, epoch_rows, edits, no_changes_val):
         # Defensive: don't fire on non-current models (button is hidden but
         # could still be triggered by stale state).

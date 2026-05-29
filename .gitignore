@@ -11,7 +11,7 @@
 /.mojave_review/
 
 # --- Local-only editor / Claude Code settings ---
-.claude/settings.local.json
+.claude/
 
 # --- Python ---
 __pycache__/

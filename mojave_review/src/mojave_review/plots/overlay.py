@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,9 @@ import plotly.graph_objects as go
 from ..data.fits_cache import FitsRef, fetch_fits, open_fits
 from ._extent import compute_source_extent
 from .summary import _cluster_style  # private helper, but shared inside package
+
+
+ImageSource = Literal["fits", "synthesize"]
 
 
 # CSS color name -> RGB triplet, for building rgba() fill colors. Covers
@@ -50,6 +54,24 @@ def _rgba(named_color: str, alpha: float) -> str:
 #   sigma = FWHM / (2 sqrt(2 ln 2)) = FWHM / 2.3548
 #   3-sigma diameter = 6 sigma = 6 * FWHM / 2.3548 = 2.548 * FWHM
 SIGMA3_OVER_FWHM = 2.548
+
+
+# Tight tolerance for matching the floating-point ``epoch`` column to
+# ``epoch_info["epoch_val"]``. The default ``np.isclose`` (rtol=1e-5,
+# atol=1e-8) is too generous around year 2016 (tolerance ≈ 0.02 yr ≈ 7
+# days) and silently merges epochs spaced 4–7 days apart — e.g. 0415+379's
+# 2016_11_06 / 2016_11_12 / 2016_11_18 cluster all matched each other.
+# ``EPOCH_MATCH_ATOL`` is ~52 minutes — well above any CSV ⇄ NPZ float
+# round-trip noise (which is typically 0 in the present datasets), well
+# below the shortest legitimate inter-epoch spacing (~4 days). Use
+# ``epoch_match_mask`` everywhere instead of ``np.isclose`` for this.
+EPOCH_MATCH_ATOL = 1e-4
+
+
+def epoch_match_mask(epoch_array: np.ndarray, epoch_val: float) -> np.ndarray:
+    """Boolean mask selecting rows whose float epoch == ``epoch_val`` to
+    within ``EPOCH_MATCH_ATOL``."""
+    return np.abs(np.asarray(epoch_array, dtype=float) - float(epoch_val)) <= EPOCH_MATCH_ATOL
 
 
 @dataclass
@@ -112,7 +134,7 @@ def _ellipse_xy(cx: float, cy: float, major: float, minor: float,
 
 def build_overlay_figure(
     *,
-    fits_path: Path,
+    epoch_axes: EpochAxes,
     cluster_df: pd.DataFrame,
     cc_data: np.ndarray,
     cc_labels: np.ndarray,
@@ -125,10 +147,25 @@ def build_overlay_figure(
     cbase_factor: float = 3.5,
     n_levels: int = 10,
     show_3sigma: bool = False,
+    image_source_label: str = "",
+    uirevision: str = "overlay",
 ) -> go.Figure:
-    """Build the FITS-overlay figure for one epoch."""
-    # Per-epoch slice of the cluster table.
-    epoch_mask = np.isclose(cluster_df["epoch"].to_numpy(dtype=float), epoch_val)
+    """Build the FITS-overlay figure for one epoch.
+
+    ``epoch_axes`` is the pre-built Stokes I image + mas-coord axes. The
+    caller picks how it was produced (loaded from a CLEAN FITS via
+    ``_load_fits_image`` or synthesized from clean components via
+    ``plots.synthesize_fits.synthesize_stokes_i``) — this function just
+    contours it.
+
+    ``image_source_label`` is appended to the figure title when non-empty
+    so the reviewer can tell at a glance whether they're looking at a
+    real FITS or a synthesized image.
+    """
+    # Per-epoch slice of the cluster table. Use a tight tolerance — the
+    # default np.isclose merges neighbouring epochs spaced a few days apart
+    # (see EPOCH_MATCH_ATOL docstring).
+    epoch_mask = epoch_match_mask(cluster_df["epoch"].to_numpy(), epoch_val)
     sub = cluster_df.loc[epoch_mask].copy()
     fit_mask = sub["clusterID"] >= 0
     fitted = sub.loc[fit_mask]
@@ -136,7 +173,7 @@ def build_overlay_figure(
     core_x = float(fitted["core_x"].iloc[0]) if len(fitted) else 0.0
     core_y = float(fitted["core_y"].iloc[0]) if len(fitted) else 0.0
 
-    ax = _load_fits_image(fits_path, core_x=core_x, core_y=core_y)
+    ax = epoch_axes
     cbase = max(cbase_factor * float(inoise), 1e-9)
 
     # The CLEAN image is already convolved with the restoring beam; do NOT
@@ -156,7 +193,7 @@ def build_overlay_figure(
     )
 
     # Clean components for this epoch, colored by cluster.
-    cc_mask = np.isclose(cc_data["epoch"].astype(float), epoch_val)
+    cc_mask = epoch_match_mask(cc_data["epoch"], epoch_val)
     cc_x = cc_data["x"][cc_mask].astype(float) - core_x
     cc_y = cc_data["y"][cc_mask].astype(float) - core_y
     cc_lbl = cc_labels[cc_mask] if cc_labels is not None else np.full(cc_mask.sum(), -1)
@@ -317,8 +354,13 @@ def build_overlay_figure(
     # Plotly preserves the dragged data range exactly and shrinks the
     # drawable panel area to honor the equal scale (whitespace appears on
     # the sides or top/bottom under non-square zooms — accepted).
-    # uirevision="overlay" preserves the user's manual zoom across epoch
-    # / source changes.
+    # ``uirevision`` (passed in by the caller) preserves the user's manual
+    # zoom across epoch changes within a (source, model) session. Scoping
+    # it to (source, model) — instead of a hard-coded constant — flushes
+    # any stale Plotly axis state when the reviewer swaps sources or
+    # models, which is what we want and which also serves as a defensive
+    # release valve against rare cases where Plotly's SVG layer goes
+    # stale after many hours of epoch-switching.
     fig.update_xaxes(
         title_text="X [mas]",
         range=[x_hi_zoom, x_lo_zoom],     # reversed: +x to the left
@@ -334,11 +376,13 @@ def build_overlay_figure(
         template="plotly_white",
         height=720,
         margin=dict(l=60, r=20, t=40, b=50),
-        title=dict(text=f"{epoch_name} ({epoch_val:.4f})  ·  "
-                        f"cbase = {1000*cbase:.2f} mJy/beam",
+        title=dict(text=(f"{epoch_name} ({epoch_val:.4f})  ·  "
+                         f"cbase = {1000*cbase:.2f} mJy/beam"
+                         + (f"  ·  {image_source_label}"
+                            if image_source_label else "")),
                    font=dict(size=12), x=0.5, xanchor="center"),
         dragmode="zoom",
-        uirevision="overlay",  # preserve zoom across epoch changes
+        uirevision=uirevision,
     )
     return fig
 
@@ -356,14 +400,26 @@ def overlay_figure_for_epoch(
     band: str,
     fits_data_dir: Path | None = None,
     show_3sigma: bool = False,
+    image_source: ImageSource = "synthesize",
+    uirevision: str = "overlay",
 ) -> tuple[go.Figure, dict | None]:
-    """Higher-level wrapper: fetches the FITS for the given epoch index, then
-    delegates to `build_overlay_figure`.
+    """Higher-level wrapper: prepares the Stokes I image (either by
+    synthesizing it from clean components or by fetching the CLEAN FITS),
+    then delegates to ``build_overlay_figure``.
 
     Returns ``(figure, beam_params)``. ``beam_params`` is ``None`` when the
     figure is the placeholder (backup model, out-of-range epoch, fetch error).
     Otherwise it carries everything the clientside zoom callback needs to
     keep the beam visible at the viewport corner.
+
+    ``image_source``:
+      - ``"synthesize"`` (default): build the Stokes I image from the
+        epoch's clean components convolved with the restoring beam. Fast,
+        offline, matches FITS within a fraction of a percent at the
+        contour levels that matter for review.
+      - ``"fits"``: fetch the CLEAN FITS image from the local data dir /
+        on-disk cache / NRAO archive. Include this when residual-noise
+        structure matters.
     """
     if bundle.plotdata is None:
         return _empty_overlay(
@@ -377,19 +433,50 @@ def overlay_figure_for_epoch(
     epoch_name = str(info["epoch_name"])
     epoch_val = float(info["epoch_val"])
 
-    ref = FitsRef(
-        source_no_band=source_no_band,
-        band=str(info["band"]) or band,
-        epoch_name=epoch_name,
-        stokes="i",
-    )
-    try:
-        fits_path = fetch_fits(ref, cache_dir, fits_data_dir=fits_data_dir)
-    except Exception as e:
-        return _empty_overlay(f"Could not fetch FITS:\n{e}"), None
+    # Core position for this epoch — needed by both branches so the image
+    # axes can be expressed relative to the core (0, 0). The mask uses the
+    # tight tolerance to avoid pulling in neighbouring epochs' rows.
+    epoch_mask = epoch_match_mask(bundle.cluster_df["epoch"].to_numpy(), epoch_val)
+    fitted = bundle.cluster_df.loc[epoch_mask & (bundle.cluster_df["clusterID"] >= 0)]
+    core_x = float(fitted["core_x"].iloc[0]) if len(fitted) else 0.0
+    core_y = float(fitted["core_y"].iloc[0]) if len(fitted) else 0.0
+
+    # Synthesis is the default — fast, offline, matches the FITS image at
+    # contour-relevant levels to within a fraction of a percent. The FITS
+    # path is the explicit override (header checkbox), and gets tagged in
+    # the title so the reviewer always knows when they're looking at the
+    # CLEAN restored image (residual noise sea included) vs the synthesized
+    # one (clean components convolved with the restoring beam).
+    if image_source == "fits":
+        ref = FitsRef(
+            source_no_band=source_no_band,
+            band=str(info["band"]) or band,
+            epoch_name=epoch_name,
+            stokes="i",
+        )
+        try:
+            fits_path = fetch_fits(ref, cache_dir, fits_data_dir=fits_data_dir)
+        except Exception as e:
+            return _empty_overlay(f"Could not fetch FITS:\n{e}"), None
+        epoch_axes = _load_fits_image(fits_path, core_x=core_x, core_y=core_y)
+        image_source_label = "FITS image"
+    else:
+        # Lazy import to avoid pulling scipy at module load time.
+        from .synthesize_fits import synthesize_stokes_i
+        epoch_axes = synthesize_stokes_i(
+            cluster_df=bundle.cluster_df,
+            cc_data=pd_.cc_data,
+            epoch_val=epoch_val,
+            core_x=core_x, core_y=core_y,
+            pix_to_mas=float(info["pix_to_mas"]),
+            bmaj=float(info["bmaj"]),
+            bmin=float(info["bmin"]),
+            bpa=float(info["bpa"]),
+        )
+        image_source_label = ""
 
     fig = build_overlay_figure(
-        fits_path=fits_path,
+        epoch_axes=epoch_axes,
         cluster_df=bundle.cluster_df,
         cc_data=pd_.cc_data,
         cc_labels=pd_.cc_labels,
@@ -400,6 +487,8 @@ def overlay_figure_for_epoch(
         bmin=float(info["bmin"]),
         bpa=float(info["bpa"]),
         show_3sigma=show_3sigma,
+        image_source_label=image_source_label,
+        uirevision=uirevision,
     )
 
     # Locate the beam trace by name. x_extent / y_extent are the initial

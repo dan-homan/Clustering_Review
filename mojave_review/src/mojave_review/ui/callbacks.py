@@ -8,7 +8,9 @@ import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, ctx, no_update
 
 from ..data.fits_cache import split_source_band
-from ..data.loader import _SOURCE_DIR_RE, SourceRef, list_models, load_bundle
+from ..data.loader import (
+    _SOURCE_DIR_RE, SourceRef, clear_bundle_cache, list_models, load_bundle,
+)
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation
@@ -68,18 +70,40 @@ def register_callbacks(
             df = apply_recommendation(df, own_rec)
         return df
 
+    # ---- ↻ Reload button -------------------------------------------------
+    # Belt-and-braces fallback alongside the mtime-based invalidation in
+    # data/loader.load_bundle: clicking forces a server-side cache wipe
+    # AND bumps a counter that is an Input on every callback that touches
+    # load_bundle, so all visible figures + dropdowns re-render with fresh
+    # data. Useful when the reviewer just ran mojave-apply (or otherwise
+    # edited Results/) and wants to be *sure* the displayed plots match
+    # what's on disk.
+    @app.callback(
+        Output("reload-counter", "data"),
+        Input("reload-bundles", "n_clicks"),
+        State("reload-counter", "data"),
+        prevent_initial_call=True,
+    )
+    def _bump_reload_counter(_n, current):
+        clear_bundle_cache()
+        return int(current or 0) + 1
+
     # ---- model picker (depends on source) --------------------------------
     # Options include:
     #   - "current"                        — the live model
     #   - "backup_NNN"                     — saved backup runs
     #   - "rec:<slug>"                     — other reviewers' pending recommendations
     #                                         applied on top of "current"
+    # ``reload-counter`` is an Input so a Reload click also re-scans the
+    # backups/ directory (in case a new backup landed on disk) and the
+    # recommendations dir (in case a new reviewer's JSON appeared).
     @app.callback(
         Output("model-picker", "options"),
         Output("model-picker", "value"),
         Input("source-picker", "value"),
+        Input("reload-counter", "data"),
     )
-    def _populate_models(source_folder: str | None):
+    def _populate_models(source_folder: str | None, _reload_counter):
         if not source_folder:
             return [], None
         src = _source_from_folder(source_folder)
@@ -106,10 +130,11 @@ def register_callbacks(
         Input("cluster-feedback-table", "data"),
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
+        Input("reload-counter", "data"),
     )
     def _refresh_summary(source_folder, model_key, view, vector_scale,
                          selection, visualize_val, cluster_rows, edits,
-                         no_changes_val):
+                         no_changes_val, _reload_counter):
         if not source_folder or not model_key:
             return go.Figure()
         src = _source_from_folder(source_folder)
@@ -132,10 +157,18 @@ def register_callbacks(
                 eps = df["epoch"].round(4).to_numpy()
                 mask = [(int(c), float(e)) in sel_keys for c, e in zip(cids, eps)]
                 df.loc[mask, "select"] = True
-        return build_summary_figure(
+        fig = build_summary_figure(
             df, view=view,
             vector_scale_factor=vector_scale or 1.0,
         )
+        # Persist the user's zoom across selection clicks, visualize toggle,
+        # vector scale change, edits etc. — anything that doesn't change the
+        # axes themselves. The key changes on (source, model, view) because
+        # those genuinely swap the underlying data domain or the axis
+        # identities (Position vs Kinematics, etc.), and reusing the old
+        # zoom there would just be confusing.
+        fig.update_layout(uirevision=f"summary:{source_folder}:{model_key}:{view}")
+        return fig
 
     # ---- selection store: click toggles, box/lasso replaces --------------
     # Both events fire only on Position / Flux / Polarization views. The
@@ -267,9 +300,10 @@ def register_callbacks(
         Output("epoch-slider", "value"),
         Input("source-picker", "value"),
         Input("model-picker", "value"),
+        Input("reload-counter", "data"),
         State("epoch-slider", "value"),
     )
-    def _populate_epoch_slider(source_folder, model_key, current_val):
+    def _populate_epoch_slider(source_folder, model_key, _reload_counter, current_val):
         if not source_folder or not model_key:
             return 0, 0, {}, 0
         bundle = load_bundle(source_folder, model_key)
@@ -315,8 +349,9 @@ def register_callbacks(
         Input("source-picker", "value"),
         Input("model-picker", "value"),
         Input("epoch-slider", "value"),
+        Input("reload-counter", "data"),
     )
-    def _epoch_label(source_folder, model_key, epoch_int):
+    def _epoch_label(source_folder, model_key, epoch_int, _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
             return ""
         bundle = load_bundle(source_folder, model_key)
@@ -337,10 +372,14 @@ def register_callbacks(
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
         Input("show-3sigma-checkbox", "value"),
+        Input("use-fits-checkbox", "value"),
+        Input("overlay-reset-counter", "data"),
+        Input("reload-counter", "data"),
     )
     def _refresh_overlay(source_folder, model_key, epoch_int,
                          visualize_val, cluster_rows, edits, no_changes_val,
-                         show_3sigma_val):
+                         show_3sigma_val, use_fits_val, reset_counter,
+                         _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
         src = _source_from_folder(source_folder)
@@ -363,12 +402,35 @@ def register_callbacks(
             # SourceBundle dataclass is mutable; cheap to copy fields.
             from dataclasses import replace as _replace
             bundle = _replace(bundle, cluster_df=applied_df)
+        # Scope uirevision to (source, model) so the user's zoom persists
+        # while they're scrubbing epochs, but a context change always
+        # starts from a clean axis state. This is also our defence against
+        # the rare "missing overlay on some epochs" symptom: a constant
+        # uirevision lets Plotly carry stale axis or trace-visibility
+        # state across hours of figure updates; a per-context key
+        # guarantees that state never crosses a source/model boundary.
         return overlay_figure_for_epoch(
             bundle, int(epoch_int), cache_dir,
             source_no_band=source_no_band, band=band,
             fits_data_dir=fits_data_dir,
             show_3sigma=bool(show_3sigma_val),
+            image_source="fits" if use_fits_val else "synthesize",
+            uirevision=f"overlay:{source_folder}:{model_key}:{reset_counter or 0}",
         )
+
+    # ---- overlay Reset view button ---------------------------------------
+    # Increments a counter that participates in the overlay's uirevision
+    # key, so the figure gets a brand-new key and Plotly does a full
+    # redraw + axis reset. The escape hatch when Plotly's SVG layer ends
+    # up stale after a long marathon of figure updates.
+    @app.callback(
+        Output("overlay-reset-counter", "data"),
+        Input("overlay-reset", "n_clicks"),
+        State("overlay-reset-counter", "data"),
+        prevent_initial_call=True,
+    )
+    def _bump_reset_counter(_n, current):
+        return int(current or 0) + 1
 
     # ---- clientside: reposition beam ellipse on zoom/pan -----------------
     # Runs in the browser. Uses Plotly.restyle directly on the graph div so

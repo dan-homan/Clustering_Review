@@ -214,8 +214,14 @@ def _regen_plots(
 # ---------------------------------------------------------------------------
 
 
+# Matches the separator find_clusters.py already writes before each
+# pipeline-run entry, so the file stays homogenous when scrolled.
+_HISTORY_SEPARATOR = "#" + "-" * 50
+
+
 def _append_history(folder: Path, header: str, edit_lines: list[str]) -> None:
     with (folder / "history.txt").open("a") as f:
+        f.write(_HISTORY_SEPARATOR + "\n")
         f.write(header + "\n")
         for line in edit_lines:
             f.write(line + "\n")

@@ -36,6 +36,24 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                         clearable=False,
                         style={"minWidth": "180px", "display": "inline-block"},
                     ),
+                    # Reload the on-disk CSV / NPZ for the current source.
+                    # ``load_bundle`` already invalidates its cache when
+                    # the file mtimes change, so the explicit button is
+                    # really a belt-and-braces — useful when the reviewer
+                    # just ran ``mojave-apply`` (or otherwise edited
+                    # Results/) and wants to be *sure* the app is showing
+                    # fresh data, without leaving them guessing whether
+                    # the auto-detect caught it.
+                    html.Button(
+                        "↻ Reload",
+                        id="reload-bundles",
+                        n_clicks=0,
+                        title="Re-read CSV + NPZ from disk for all "
+                              "sources / models (auto-detected on file "
+                              "change too)",
+                        style={"marginLeft": "0.5em", "padding": "0.2em 0.6em",
+                               "fontSize": "0.85em"},
+                    ),
                     html.Span("View:", style={"margin": "0 0.5em 0 1.5em"}),
                     dcc.RadioItems(
                         id="view-picker",
@@ -67,6 +85,25 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                     dcc.Checklist(
                         id="show-3sigma-checkbox",
                         options=[{"label": " Show 3σ outlines",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1em",
+                               "fontSize": "0.9em",
+                               "color": "#444"},
+                    ),
+                    # The overlay panel synthesizes the Stokes I image from
+                    # the epoch's clean components convolved with the
+                    # restoring beam by default — no NRAO fetch, no on-disk
+                    # cache, ~1 ms per epoch, and the result matches the
+                    # restored CLEAN FITS to within a fraction of a percent
+                    # at the contour levels that matter for review. Tick
+                    # this checkbox to fall back to the real CLEAN FITS
+                    # image (which carries the residual noise sea synthesis
+                    # cannot reproduce).
+                    dcc.Checklist(
+                        id="use-fits-checkbox",
+                        options=[{"label": " Use FITS images",
                                   "value": "yes"}],
                         value=[],
                         inputStyle={"marginRight": "0.3em"},
@@ -124,7 +161,18 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
             html.Button("◀", id="epoch-prev", n_clicks=0,
                         style={"width": "2.2em", "marginRight": "0.5em"}),
             html.Button("▶", id="epoch-next", n_clicks=0,
-                        style={"width": "2.2em", "marginRight": "1em"}),
+                        style={"width": "2.2em", "marginRight": "0.5em"}),
+            # Escape hatch when Plotly's SVG layer ends up stale (rare but
+            # reported in marathon review sessions): clicking this forces
+            # the overlay figure to redraw with a fresh uirevision key, so
+            # any stale axis-state or hidden-trace state is discarded.
+            # Also useful as a "back to the full source view" shortcut
+            # after the reviewer has zoomed in to inspect one cluster.
+            html.Button("Reset view", id="overlay-reset", n_clicks=0,
+                        title="Force the overlay panel to redraw and "
+                              "reset to the default zoom",
+                        style={"marginRight": "1em", "padding": "0.2em 0.6em",
+                               "fontSize": "0.85em"}),
             html.Div(
                 dcc.Slider(
                     id="epoch-slider", min=0, max=0, step=1, value=0,
@@ -172,6 +220,15 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
         [
             dcc.Store(id="reviewer-store", data=reviewer),
             dcc.Store(id="beam-params"),
+            # Increments whenever the user clicks "Reset view"; folds into
+            # the overlay's uirevision key so a click forces a complete
+            # redraw + axis reset.
+            dcc.Store(id="overlay-reset-counter", data=0),
+            # Increments whenever the user clicks "↻ Reload"; participates
+            # as an Input on every callback that reads load_bundle, so a
+            # click forces a re-render with freshly-read data. Pairs with
+            # the mtime-based invalidation in data/loader.py.
+            dcc.Store(id="reload-counter", data=0),
             # Selection of summary-graph points: a list of {"cid", "epoch"}
             # dicts. Updated by click / box-select callbacks. Drives both the
             # gold-diamond highlight in the summary figure and the
