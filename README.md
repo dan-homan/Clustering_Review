@@ -83,6 +83,7 @@ mojave-review serving on http://127.0.0.1:8050
 | `--recommendations-dir` | `<results-dir>/../recommendations` | Where your review JSON files go. |
 | `--reviewer "Your Name"` | `$USER` | Tag attached to every recommendation file. Used to slug a filename per reviewer. |
 | `--cache-dir` | `~/.mojave_review/cache` | On-disk cache for MOJAVE FITS images fetched from NRAO. |
+| `--fits-data-dir` | `$MOJAVE_DATA` env if set, else unused | Path to an already-on-disk MOJAVE FITS tree (`<source>/<epoch>/<source>.<band>.<epoch>.icn.fits.gz`). When set, the overlay reads these directly instead of fetching from NRAO. Missing files silently fall back to fetch+cache. If you already run the production pipeline, just `export MOJAVE_DATA=/path/to/your/data` once. |
 | `--port` | `8050` | HTTP port. |
 | `--no-browser` | off | Don't auto-open a browser tab. |
 | `--admin` | off | Show the **Generate Apply Command** button + (future) aggregation dialog. Only enable on the machine where you'll be running `mojave-apply`. |

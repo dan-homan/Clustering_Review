@@ -41,6 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory for cached MOJAVE FITS downloads. Defaults to ~/.mojave_review/cache.",
     )
+    p.add_argument(
+        "--fits-data-dir",
+        type=Path,
+        default=None,
+        help="Optional already-on-disk MOJAVE FITS tree "
+             "(layout: <source>/<epoch>/<source>.<band>.<epoch>.icn.fits.gz). "
+             "When set, the overlay panel reads from here first and only "
+             "falls back to fetching from NRAO when a file is missing. "
+             "Defaults to the MOJAVE_DATA environment variable, if defined.",
+    )
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8050)
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open browser.")
@@ -77,6 +87,24 @@ def main(argv: list[str] | None = None) -> int:
 
     reviewer = args.reviewer or os.environ.get("USER") or "anonymous"
 
+    # FITS data dir: explicit flag wins; otherwise MOJAVE_DATA env if set.
+    # Resolve to an absolute path but DON'T mkdir — this is a read-only
+    # source the user supplied. If it doesn't exist, silently fall back
+    # to NRAO fetch (warn at startup if the path is set-but-missing).
+    fits_data_dir: Path | None = None
+    fits_data_source = None
+    if args.fits_data_dir is not None:
+        fits_data_dir = args.fits_data_dir.expanduser().resolve()
+        fits_data_source = "--fits-data-dir flag"
+    else:
+        env_val = os.environ.get("MOJAVE_DATA")
+        if env_val:
+            fits_data_dir = Path(env_val).expanduser().resolve()
+            fits_data_source = "$MOJAVE_DATA env var"
+    fits_data_dir_missing = (
+        fits_data_dir is not None and not fits_data_dir.is_dir()
+    )
+
     from ..app import create_app
 
     app = create_app(
@@ -85,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         cache_dir=cache_dir,
         reviewer=reviewer,
         admin=args.admin,
+        fits_data_dir=fits_data_dir,
     )
 
     url = f"http://{args.host}:{args.port}"
@@ -96,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  recommendations_dir = {recommendations_dir}")
     print(f"  cache_dir           = {cache_dir}")
     print(f"  reviewer            = {reviewer}")
+    if fits_data_dir is not None:
+        suffix = "  (MISSING — will fall back to NRAO fetch)" if fits_data_dir_missing else ""
+        print(f"  fits_data_dir       = {fits_data_dir}  [{fits_data_source}]{suffix}")
     if args.admin:
         print(f"  admin mode          = ON")
 

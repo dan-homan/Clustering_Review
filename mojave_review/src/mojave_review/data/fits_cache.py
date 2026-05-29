@@ -52,6 +52,19 @@ def local_fits_path(cache_dir: Path, source_no_band: str, band: str,
             / f"{source_no_band}.{band}.{epoch_name}.{stokes}cn.fits.gz")
 
 
+def local_data_path(data_dir: Path, source_no_band: str, band: str,
+                    epoch_name: str, stokes: str = "i") -> Path:
+    """Path to an already-on-disk MOJAVE FITS file outside the cache.
+
+    Layout matches both the NRAO URL pattern and
+    ``cluster_code.grab_mojave_image``'s local-file pattern, so anyone
+    who runs the production pipeline already has their data tree in this
+    shape.
+    """
+    return (data_dir / source_no_band / epoch_name
+            / f"{source_no_band}.{band}.{epoch_name}.{stokes}cn.fits.gz")
+
+
 @dataclass(frozen=True)
 class FitsRef:
     """All we need to identify one FITS file at the archive."""
@@ -69,11 +82,26 @@ class FitsRef:
                                 self.epoch_name, self.stokes)
 
 
-def fetch_fits(ref: FitsRef, cache_dir: Path) -> Path:
-    """Return a path to the FITS file, downloading from MOJAVE if not cached.
+def fetch_fits(
+    ref: FitsRef, cache_dir: Path, fits_data_dir: Path | None = None,
+) -> Path:
+    """Return a path to the FITS file.
 
-    Raises FitsFetchError if the file can't be obtained.
+    Resolution order:
+
+    1. If ``fits_data_dir`` is provided and the file exists there, return
+       that path directly. No caching, no network.
+    2. If the file is already in ``cache_dir``, return that.
+    3. Download from MOJAVE into ``cache_dir`` and return.
+
+    Raises FitsFetchError if all three fail.
     """
+    if fits_data_dir is not None:
+        local = local_data_path(
+            fits_data_dir, ref.source_no_band, ref.band, ref.epoch_name, ref.stokes,
+        )
+        if local.is_file() and local.stat().st_size > 0:
+            return local
     target = ref.cache_path(cache_dir)
     if target.is_file() and target.stat().st_size > 0:
         return target

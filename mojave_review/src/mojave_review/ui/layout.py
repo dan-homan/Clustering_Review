@@ -60,6 +60,20 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                                "fontSize": "0.9em",
                                "color": "#444"},
                     ),
+                    # Toggles the dotted 3σ inclusion outlines + light fill
+                    # on each cluster in the overlay panel. Default OFF —
+                    # reviewers can turn them on when they want to inspect
+                    # cluster reach.
+                    dcc.Checklist(
+                        id="show-3sigma-checkbox",
+                        options=[{"label": " Show 3σ outlines",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1em",
+                               "fontSize": "0.9em",
+                               "color": "#444"},
+                    ),
                 ],
                 style={"display": "flex", "alignItems": "center", "marginTop": "0.5em"},
             ),

@@ -27,6 +27,7 @@ def register_callbacks(
     cache_dir: Path,
     reviewer: str,
     admin: bool = False,
+    fits_data_dir: Path | None = None,
 ) -> None:
     # Recommendations tab — load + autosave behavior.
     recommendations_callbacks.register(
@@ -335,9 +336,11 @@ def register_callbacks(
         Input("cluster-feedback-table", "data"),
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
+        Input("show-3sigma-checkbox", "value"),
     )
     def _refresh_overlay(source_folder, model_key, epoch_int,
-                         visualize_val, cluster_rows, edits, no_changes_val):
+                         visualize_val, cluster_rows, edits, no_changes_val,
+                         show_3sigma_val):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
         src = _source_from_folder(source_folder)
@@ -363,6 +366,8 @@ def register_callbacks(
         return overlay_figure_for_epoch(
             bundle, int(epoch_int), cache_dir,
             source_no_band=source_no_band, band=band,
+            fits_data_dir=fits_data_dir,
+            show_3sigma=bool(show_3sigma_val),
         )
 
     # ---- clientside: reposition beam ellipse on zoom/pan -----------------

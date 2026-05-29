@@ -19,6 +19,7 @@ def create_app(
     cache_dir: Path,
     reviewer: str,
     admin: bool = False,
+    fits_data_dir: Path | None = None,
 ) -> Dash:
     app = Dash(
         __name__,
@@ -34,5 +35,6 @@ def create_app(
         cache_dir=cache_dir,
         reviewer=reviewer,
         admin=admin,
+        fits_data_dir=fits_data_dir,
     )
     return app

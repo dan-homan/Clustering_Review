@@ -124,6 +124,7 @@ def build_overlay_figure(
     bpa: float,
     cbase_factor: float = 3.5,
     n_levels: int = 10,
+    show_3sigma: bool = False,
 ) -> go.Figure:
     """Build the FITS-overlay figure for one epoch."""
     # Per-epoch slice of the cluster table.
@@ -207,22 +208,24 @@ def build_overlay_figure(
                 # Draw the 3-sigma inclusion outline FIRST (larger, lighter)
                 # so the FWHM ellipse overlays it cleanly — Plotly composites
                 # later traces on top, so this ordering preserves the darker
-                # FWHM core inside the lighter halo.
-                ex3, ey3 = _ellipse_xy(x, y,
-                                       SIGMA3_OVER_FWHM * float(maj),
-                                       SIGMA3_OVER_FWHM * float(minor),
-                                       pa_use)
-                fig.add_trace(
-                    go.Scatter(
-                        x=ex3, y=ey3, mode="lines",
-                        line=dict(color=color, width=1, dash="dot"),
-                        fill="toself", fillcolor=_rgba(color, 0.04),
-                        showlegend=False,
-                        hovertemplate=(f"cluster {cid} 3σ inclusion<br>"
-                                       f"maj {SIGMA3_OVER_FWHM*maj:.3f} mas<br>"
-                                       f"min {SIGMA3_OVER_FWHM*minor:.3f} mas<extra></extra>"),
+                # FWHM core inside the lighter halo. Controlled by the
+                # header "Show 3σ outlines" checkbox; default off.
+                if show_3sigma:
+                    ex3, ey3 = _ellipse_xy(x, y,
+                                           SIGMA3_OVER_FWHM * float(maj),
+                                           SIGMA3_OVER_FWHM * float(minor),
+                                           pa_use)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=ex3, y=ey3, mode="lines",
+                            line=dict(color=color, width=1, dash="dot"),
+                            fill="toself", fillcolor=_rgba(color, 0.04),
+                            showlegend=False,
+                            hovertemplate=(f"cluster {cid} 3σ inclusion<br>"
+                                           f"maj {SIGMA3_OVER_FWHM*maj:.3f} mas<br>"
+                                           f"min {SIGMA3_OVER_FWHM*minor:.3f} mas<extra></extra>"),
+                        )
                     )
-                )
                 # FWHM ellipse — solid outline + heavier fill, drawn last so
                 # it sits on top of the 3-sigma halo.
                 ex, ey = _ellipse_xy(x, y, float(maj), float(minor), pa_use)
@@ -351,6 +354,8 @@ def overlay_figure_for_epoch(
     cache_dir: Path,
     source_no_band: str,
     band: str,
+    fits_data_dir: Path | None = None,
+    show_3sigma: bool = False,
 ) -> tuple[go.Figure, dict | None]:
     """Higher-level wrapper: fetches the FITS for the given epoch index, then
     delegates to `build_overlay_figure`.
@@ -379,7 +384,7 @@ def overlay_figure_for_epoch(
         stokes="i",
     )
     try:
-        fits_path = fetch_fits(ref, cache_dir)
+        fits_path = fetch_fits(ref, cache_dir, fits_data_dir=fits_data_dir)
     except Exception as e:
         return _empty_overlay(f"Could not fetch FITS:\n{e}"), None
 
@@ -394,6 +399,7 @@ def overlay_figure_for_epoch(
         bmaj=float(info["bmaj"]),
         bmin=float(info["bmin"]),
         bpa=float(info["bpa"]),
+        show_3sigma=show_3sigma,
     )
 
     # Locate the beam trace by name. x_extent / y_extent are the initial
