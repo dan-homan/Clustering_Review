@@ -192,42 +192,65 @@ def build_overlay_figure(
         )
     )
 
-    # Clean components for this epoch, colored by cluster.
+    # Clean components for this epoch.
     cc_mask = epoch_match_mask(cc_data["epoch"], epoch_val)
     cc_x = cc_data["x"][cc_mask].astype(float) - core_x
     cc_y = cc_data["y"][cc_mask].astype(float) - core_y
-    cc_lbl = cc_labels[cc_mask] if cc_labels is not None else np.full(cc_mask.sum(), -1)
-    # Map original labels -> current clusterIDs via fitted['origID'] -> fitted['clusterID']
-    if len(fitted):
-        orig_to_cluster = dict(zip(
-            fitted["origID"].to_numpy(dtype=int),
-            fitted["clusterID"].to_numpy(dtype=int),
-        ))
-    else:
-        orig_to_cluster = {}
-    robust_lookup = {
-        int(row["clusterID"]): bool(row["robust"])
-        for _, row in fitted.iterrows()
-    }
-    for lbl in np.unique(cc_lbl):
-        in_lbl = cc_lbl == lbl
-        if not np.any(in_lbl):
-            continue
-        cid = orig_to_cluster.get(int(lbl), int(lbl))
-        robust = robust_lookup.get(cid, True)
-        color, _, _ = _cluster_style(cid, robust)
-        fig.add_trace(
-            go.Scattergl(
-                x=cc_x[in_lbl], y=cc_y[in_lbl],
-                mode="markers",
-                marker=dict(color=color, size=4, opacity=0.6,
-                            line=dict(width=0)),
-                name=f"cluster {cid}" if cid >= 0 else "unassigned",
-                showlegend=False,
-                hovertemplate=(f"cluster {cid}<br>"
-                               "x %{x:.3f} mas<br>y %{y:.3f} mas<extra></extra>"),
+
+    if cc_labels is None:
+        # Backup whose underlying fit doesn't match current's NPZ — the
+        # cc → cluster mapping isn't trustworthy. Render CCs as a single
+        # neutral-grey trace so the reviewer can still see where the
+        # bright clean components sit without being misled by colour.
+        # The cluster ellipses + labels (from this backup's own CSV)
+        # still tell the cluster story.
+        if int(cc_mask.sum()) > 0:
+            fig.add_trace(
+                go.Scattergl(
+                    x=cc_x, y=cc_y, mode="markers",
+                    marker=dict(color="#888", size=3, opacity=0.5,
+                                line=dict(width=0)),
+                    name="clean components",
+                    showlegend=False,
+                    hovertemplate=("CC<br>x %{x:.3f} mas"
+                                   "<br>y %{y:.3f} mas<extra></extra>"),
+                )
             )
-        )
+    else:
+        # Map original CC labels -> current clusterIDs via
+        # fitted['origID'] -> fitted['clusterID'], then colour by cluster.
+        cc_lbl = cc_labels[cc_mask]
+        if len(fitted):
+            orig_to_cluster = dict(zip(
+                fitted["origID"].to_numpy(dtype=int),
+                fitted["clusterID"].to_numpy(dtype=int),
+            ))
+        else:
+            orig_to_cluster = {}
+        robust_lookup = {
+            int(row["clusterID"]): bool(row["robust"])
+            for _, row in fitted.iterrows()
+        }
+        for lbl in np.unique(cc_lbl):
+            in_lbl = cc_lbl == lbl
+            if not np.any(in_lbl):
+                continue
+            cid = orig_to_cluster.get(int(lbl), int(lbl))
+            robust = robust_lookup.get(cid, True)
+            color, _, _ = _cluster_style(cid, robust)
+            fig.add_trace(
+                go.Scattergl(
+                    x=cc_x[in_lbl], y=cc_y[in_lbl],
+                    mode="markers",
+                    marker=dict(color=color, size=4, opacity=0.6,
+                                line=dict(width=0)),
+                    name=f"cluster {cid}" if cid >= 0 else "unassigned",
+                    showlegend=False,
+                    hovertemplate=(f"cluster {cid}<br>"
+                                   "x %{x:.3f} mas<br>"
+                                   "y %{y:.3f} mas<extra></extra>"),
+                )
+            )
 
     # Cluster centers + FWHM ellipses from the fit table.
     if len(fitted):
@@ -379,7 +402,9 @@ def build_overlay_figure(
         title=dict(text=(f"{epoch_name} ({epoch_val:.4f})  ·  "
                          f"cbase = {1000*cbase:.2f} mJy/beam"
                          + (f"  ·  {image_source_label}"
-                            if image_source_label else "")),
+                            if image_source_label else "")
+                         + ("  ·  CC↔cluster mapping unavailable"
+                            if cc_labels is None else "")),
                    font=dict(size=12), x=0.5, xanchor="center"),
         dragmode="zoom",
         uirevision=uirevision,

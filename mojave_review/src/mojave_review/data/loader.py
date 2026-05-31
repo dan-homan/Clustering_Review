@@ -130,12 +130,21 @@ def list_models(src: SourceRef) -> list[ModelFile]:
 
 @dataclass
 class PlotData:
-    """Contents of merged_win_results.plotdata.npz, as plain numpy arrays."""
+    """Contents of merged_win_results.plotdata.npz, as plain numpy arrays.
 
-    epoch_info: np.ndarray      # structured array, see fields below
-    cc_data: np.ndarray         # structured array of clean components
-    cc_labels: np.ndarray       # int32 array, cluster label per cc row
-    root_data_dir: str          # original root_data_dir used when the model ran
+    ``cc_labels`` is ``None`` when this PlotData was *partially* borrowed
+    from another model whose underlying fit doesn't match: the clean
+    components themselves (positions, fluxes) are invariant across
+    re-fits and can still be borrowed, but the per-CC cluster labels
+    encode a particular clustering pass and would mis-colour points if
+    reused on a different fit. Callers must handle ``cc_labels is None``
+    by skipping or visually neutralising the per-cluster CC scatter.
+    """
+
+    epoch_info: np.ndarray              # structured array, see fields below
+    cc_data: np.ndarray                 # structured array of clean components
+    cc_labels: np.ndarray | None        # int32 array; None ⇒ not authoritative
+    root_data_dir: str                  # original root_data_dir used when the model ran
 
     # epoch_info dtype:
     #   epoch_name (<U10), epoch_val (f8), band (<U1),
@@ -300,19 +309,38 @@ def _load_bundle_cached(folder: str, model_key: str,
     csv_sha = _file_sha256(model.csv_path)
     plotdata = _load_plotdata(model.npz_path) if model.npz_path else None
 
-    # Backup CSVs ship without a sibling npz, but the *current* model's
-    # npz can be reused for any backup whose underlying CC-to-cluster
-    # assignment is identical. Pure ID / robust / use_in_fit edits
-    # preserve that — only a re-fit breaks it.
+    # Backup CSVs ship without a sibling npz. We borrow current's NPZ in
+    # tiers depending on how compatible the backup's fit is:
+    #
+    #   * shares-underlying-fit (only ID-renumber / robust / use_in_fit
+    #     edits between current and backup): borrow the whole NPZ. The
+    #     per-CC cluster labels are still accurate for this CSV.
+    #   * different underlying fit (re-fit pass between current and
+    #     backup): clean components themselves and per-epoch metadata
+    #     (beam, inoise, pix_to_mas) are invariant across re-fits, so
+    #     borrow ``epoch_info`` + ``cc_data`` only. Set ``cc_labels=None``
+    #     to signal "we have no trustworthy CC→cluster mapping for this
+    #     backup"; ``overlay.build_overlay_figure`` handles that by
+    #     rendering CCs in a neutral colour instead of by cluster.
+    #
+    # Either way the overlay panel renders the contour image + the
+    # backup's own cluster centroids / FWHM ellipses (from the CSV).
     if plotdata is None and model.key != "current":
         try:
             current_bundle = load_bundle(folder, "current")
         except (ValueError, FileNotFoundError):
             current_bundle = None
-        if (current_bundle is not None
-                and current_bundle.plotdata is not None
-                and _shares_underlying_fit(cluster_df, current_bundle.cluster_df)):
-            plotdata = current_bundle.plotdata
+        if current_bundle is not None and current_bundle.plotdata is not None:
+            cur_pd = current_bundle.plotdata
+            if _shares_underlying_fit(cluster_df, current_bundle.cluster_df):
+                plotdata = cur_pd
+            else:
+                plotdata = PlotData(
+                    epoch_info=cur_pd.epoch_info,
+                    cc_data=cur_pd.cc_data,
+                    cc_labels=None,
+                    root_data_dir=cur_pd.root_data_dir,
+                )
 
     pdf = src.folder / f"{src.file_prefix}.summary_plots.pdf"
     mp4 = src.folder / f"{src.file_prefix}.epoch_overplots.mp4"
