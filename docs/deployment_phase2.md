@@ -147,6 +147,29 @@ users:
 The token in the URL is the only delivery channel — reviewers never see
 a password, never sign in, never type anything.
 
+## Laptop-staging deployment (Path A)
+
+Before the university-host bring-up below, the app is staged on a Linux
+Mint laptop on the LAN. To keep that step small, the laptop deploy:
+
+- runs gunicorn directly on `0.0.0.0:8050` (no nginx, no TLS),
+- mounts the app at the root path (no `url_base_pathname`),
+- sets `cookie_secure: false` so browsers actually send the auth
+  cookie over plain HTTP.
+
+Reviewers hit `http://<laptop-ip>:8050/?token=...`. Everything else
+(tokens, recommendations, config schema, logging, audit trail) is
+identical to the prod plan below.
+
+Concrete artifacts + bring-up steps for the laptop live in
+[`../deploy/README.md`](../deploy/README.md).
+
+The migration from laptop to university host is a single coherent
+change: add nginx + TLS + `/mojave-review/` URL prefix +
+`cookie_secure: true` + a `--bind 127.0.0.1:8050` flip in the systemd
+unit, all at once. The artifacts under `deploy/` are written so each
+of those flips is a one- or two-line edit.
+
 ## Bring-up sequence
 
 Each step is independently verifiable; nothing external to Google in

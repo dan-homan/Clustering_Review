@@ -1,0 +1,53 @@
+# mojave-review production config — laptop staging (Path A)
+#
+# Copy to ~/mojave-review/config/config.yaml and edit the obvious
+# placeholders. The systemd unit (deploy/mojave-review.service) points
+# at this file via MOJAVE_REVIEW_CONFIG_FILE.
+#
+# Layering reminder (highest priority wins):
+#   CLI flag  >  env var  >  this file  >  built-in default
+# The WSGI entry point (mojave_review.wsgi) reads no CLI flags, so for
+# the production deploy this file + the unit's Environment= block are
+# the only knobs.
+
+# --- Paths -------------------------------------------------------------
+# results_dir must exist (failed import otherwise — systemd will not
+# bring the service up, which is what we want).
+results_dir: /home/homand/mojave-review/data/Results
+recommendations_dir: /home/homand/mojave-review/data/recommendations
+cache_dir: /home/homand/mojave-review/data/fits_cache
+# Optional read-only local mirror of MOJAVE FITS. If absent, the app
+# transparently falls back to live HTTP fetch from www.cv.nrao.edu.
+# fits_data_dir: /home/homand/mojave-review/data/mojave_fits
+
+# --- Authentication ----------------------------------------------------
+# tokens_file enables Phase 2 token-auth mode. With this set, anyone
+# without a valid cookie or ?token=... sees the 403 page.
+tokens_file: /home/homand/mojave-review/config/tokens.yaml
+admin_contact: "homand@denison.edu"
+# HTTP-only LAN deploy on the laptop — real browsers refuse to send
+# Secure cookies over plain HTTP, so this MUST be false here. Flip to
+# true when migrating to the university host (HTTPS termination at
+# nginx).
+cookie_secure: false
+
+# --- Bind --------------------------------------------------------------
+# These two only drive `app.run()` in the dev launcher (`mojave-review`).
+# Under gunicorn the bind is set on the command line in the systemd
+# unit's ExecStart — change it there, not here.
+host: 0.0.0.0
+port: 8050
+
+# --- Logging -----------------------------------------------------------
+# Package logger writes to stderr (captured by systemd journald) AND
+# rotates into this file at 5 MB × 5 backups = 25 MB cap. The gunicorn
+# access / error logs are separate (see the systemd unit).
+log_file: /home/homand/mojave-review/data/logs/mojave-review.log
+log_level: INFO
+
+# --- Single-user fallback ----------------------------------------------
+# Only consulted when tokens_file is missing/empty (i.e. NOT in this
+# deploy). Left here so a corrupt tokens.yaml fails with an obvious
+# identity rather than crashing.
+reviewer: homand
+admin: false

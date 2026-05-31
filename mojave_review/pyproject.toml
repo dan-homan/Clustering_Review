@@ -18,6 +18,11 @@ dependencies = [
     "pyyaml>=6.0",        # tokens.yaml + (phase 2) config.yaml
 ]
 
+[project.optional-dependencies]
+# Production WSGI server. Install with `pip install -e .[server]` on
+# the deploy host so the systemd unit can call `gunicorn`.
+server = ["gunicorn>=21"]
+
 [project.scripts]
 mojave-review        = "mojave_review.cli:main"
 mojave-apply         = "mojave_review.cli.apply:main"

@@ -1,0 +1,73 @@
+# systemd --user unit for the mojave-review web app.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/mojave-review.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mojave-review
+#   loginctl enable-linger $USER     # so the service survives logout
+#
+# Inspect:
+#   systemctl --user status mojave-review
+#   journalctl --user-unit mojave-review -f
+#
+# This unit is laptop-staging-only (Path A: HTTP, no nginx). On the
+# university host, the same unit works — flip --bind to 127.0.0.1:<port>
+# and stand up nginx in front of it. The bind change is the entire diff.
+
+[Unit]
+Description=MOJAVE Cluster Review (gunicorn + Dash)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Path layout (everything anchored to $HOME via %h).
+#
+# %h/anaconda3/bin/gunicorn — Python in the anaconda env. When we
+#   migrate to the university host, swap this for the dedicated venv's
+#   gunicorn (e.g. %h/mojave-review-venv/bin/gunicorn). That is the
+#   ONLY line that needs to change for the Python-env swap.
+# %h/mojave-review/config/config.yaml — the production config (see
+#   deploy/config.yaml.example).
+# %h/mojave-review/data/logs/ — must exist before first start;
+#   `deploy/README.md` covers it in the bring-up steps.
+Environment=MOJAVE_REVIEW_CONFIG_FILE=%h/mojave-review/config/config.yaml
+
+# Bind 0.0.0.0:8050 → reachable from the LAN. Two workers is right for
+# ~6 reviewers; each holds its own bundle/token caches, and shared state
+# (recommendations JSON) is just files on disk.
+#
+# --access-logfile and --error-logfile are gunicorn's own request /
+# crash logs, separate from the package logger that --log-file in the
+# config drives. Both end up under the same data/logs/ directory.
+#
+# --capture-output sends Python stdout/stderr to the error log too, so
+# anything the app prints outside the logging framework still lands
+# somewhere durable.
+#
+# --timeout 60 is a generous cap for the slowest legitimate request
+# (initial FITS fetch + overlay build); raise it if reviewers see 502s
+# under cold-cache conditions.
+ExecStart=%h/anaconda3/bin/gunicorn \
+    --workers 2 \
+    --bind 0.0.0.0:8050 \
+    --timeout 60 \
+    --access-logfile %h/mojave-review/data/logs/gunicorn-access.log \
+    --error-logfile %h/mojave-review/data/logs/gunicorn-error.log \
+    --capture-output \
+    mojave_review.wsgi:application
+
+Restart=on-failure
+RestartSec=5
+
+# Graceful shutdown: gunicorn handles SIGTERM correctly, draining
+# in-flight requests before exit. 30s is well above any request budget
+# under --timeout 60 minus already-elapsed time.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+# --user units bind to default.target, not multi-user.target.
+WantedBy=default.target
