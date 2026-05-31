@@ -111,6 +111,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Free-text shown on the 403 page ('email <this> for a "
              "token'). Defaults to 'the admin'.",
     )
+    # --- Logging ------------------------------------------------------
+    p.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="Write a rotating log to this path (5 MB × 5 backups). "
+             "stderr is always also written. Default: stderr only.",
+    )
+    p.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Package log level. Default INFO.",
+    )
     return p
 
 
@@ -135,10 +150,22 @@ def main(argv: list[str] | None = None) -> int:
         "admin":               args.admin,
         "reviewer":            args.reviewer,
         "cookie_secure":       (False if args.insecure_cookies else None),
+        "log_file":            args.log_file,
+        "log_level":           args.log_level,
     }
 
     from ..config import load_config
     cfg = load_config(overrides, config_file=args.config_file)
+
+    # Wire logging as early as possible so any startup error gets
+    # captured into the rotating file if one was configured.
+    from .._logging import configure_logging, get_logger
+    configure_logging(cfg.log_file, level=cfg.log_level)
+    log = get_logger("mojave_review.cli")
+    log.info("mojave-review starting  host=%s  port=%s  reviewer=%s  admin=%s  "
+             "auth=%s",
+             cfg.host, cfg.port, cfg.reviewer, cfg.admin,
+             "token" if cfg.tokens_file else "single-user")
 
     # Token-mode safety net: --tokens-file pointing at a missing file
     # should fail fast with an actionable message.

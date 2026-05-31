@@ -97,6 +97,12 @@ class Config:
     reviewer: str | None = None                 # None ⇒ resolve to $USER
     admin: bool = False
 
+    # Logging (see mojave_review/_logging.py). ``log_file=None`` means
+    # stderr only — fine for dev; production typically wants a rotating
+    # file under /data/logs/.
+    log_file: Path | None = None
+    log_level: str = "INFO"
+
     # CLI-only conveniences (env / yaml may carry them, but they only
     # matter to the ``mojave-review`` launcher — not to the WSGI entry).
     no_browser: bool = False
@@ -189,6 +195,8 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "port":                ("MOJAVE_REVIEW_PORT",),
     "reviewer":            ("MOJAVE_REVIEW_REVIEWER",),
     "admin":               ("MOJAVE_REVIEW_ADMIN",),
+    "log_file":            ("MOJAVE_REVIEW_LOG_FILE",),
+    "log_level":           ("MOJAVE_REVIEW_LOG_LEVEL",),
 }
 
 

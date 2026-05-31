@@ -42,7 +42,11 @@ from urllib.parse import urlencode
 
 from flask import Flask, Response, g, redirect, request
 
+from .._logging import get_logger
 from .tokens import TokenStore, User, load_store
+
+
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +93,12 @@ class _StoreCache:
             if fp == self._fingerprint and self._cached is not None:
                 return self._cached
             store = load_store(path)
+            # Log only after the first parse — the very first call also
+            # trips this branch but is just "we started up", not a
+            # genuine reload.
+            if self._fingerprint is not None:
+                log.info("tokens file changed on disk, reloaded  path=%s  users=%d",
+                         path, len(store))
             self._cached = store
             self._fingerprint = fp
             return store
@@ -180,6 +190,8 @@ def install_token_middleware(
         if url_token:
             user = _resolve(url_token)
             if user is not None:
+                log.info("session established via url token  user=%s  ip=%s",
+                         user.name, request.remote_addr)
                 # Strip the token from the URL on the redirect so the
                 # reviewer doesn't bookmark or share-by-mistake a URL
                 # that carries their secret. Cookie is set on the
@@ -206,10 +218,13 @@ def install_token_middleware(
                 g.review_user = user
                 g.reviewer = user.name
                 return resp
-            # Bad URL token — fall through to cookie / 403. We don't
-            # want to leak "invalid token" vs "no token" via the
-            # response, but it's worth a server-side log when chunk 7
-            # lands.
+            # Bad URL token — fall through to cookie / 403. The
+            # response deliberately doesn't distinguish "invalid token"
+            # vs "no token" (no enumeration), but we DO log it so
+            # repeated bad attempts from one IP are auditable.
+            log.warning("invalid url token presented  ip=%s  ua=%s",
+                        request.remote_addr,
+                        request.headers.get("User-Agent", "")[:120])
 
         # ---- 2) Cookie ------------------------------------------------
         cookie_token = request.cookies.get(COOKIE_NAME)
@@ -225,6 +240,12 @@ def install_token_middleware(
             return None
 
         # ---- 3) Forbidden --------------------------------------------
+        # Log only when there was a bad cookie — a bare-no-credential
+        # 403 happens on every link a curious visitor clicks and would
+        # drown the log. Bad cookies, on the other hand, mean a previously
+        # valid token was revoked, which is interesting.
+        if cookie_token:
+            log.warning("rejected stale cookie  ip=%s", request.remote_addr)
         return _forbidden(admin_contact)
 
     @server.after_request

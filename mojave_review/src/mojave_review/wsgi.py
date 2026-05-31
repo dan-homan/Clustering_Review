@@ -22,11 +22,21 @@ config can't silently masquerade as a healthy deploy.
 
 from __future__ import annotations
 
+from ._logging import configure_logging, get_logger
 from .app import create_app
 from .config import load_config
 
 
 _config = load_config()
+
+# Configure logging first so any error in create_app gets captured.
+configure_logging(_config.log_file, level=_config.log_level)
+_log = get_logger("mojave_review.wsgi")
+_log.info("WSGI startup  reviewer_fallback=%s  admin=%s  auth=%s  "
+          "log_file=%s",
+          _config.reviewer, _config.admin,
+          "token" if _config.tokens_file else "single-user",
+          _config.log_file or "<stderr only>")
 
 _app = create_app(
     results_dir=_config.results_dir,
