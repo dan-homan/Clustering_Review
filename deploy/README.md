@@ -283,23 +283,136 @@ Both invocations call the same script with the same config.
 | **On sender:** tail sync runs | `journalctl --user-unit mojave-results-sync -e` |
 | **On sender:** next sync time | `systemctl --user list-timers mojave-results-sync.timer` |
 
-## What changes at the university-host migration
+## Migrating to the university host
 
-A single coherent migration step replaces "Path A" with the full IT
-plan:
+A migration runbook for moving the live service off this laptop. The
+laptop stays up the whole time; we cut over at the end.
 
-1. Stand up nginx with the `/mojave-review/` location block reverse-
-   proxying to `127.0.0.1:8050`. Add TLS at nginx.
-2. Add `url_base_pathname="/mojave-review/"` plumbing through
-   `mojave_review.app.create_app` (one constructor arg + the cookie's
-   `path` in the auth middleware).
-3. Flip `cookie_secure: true` in `config.yaml`.
-4. Change the systemd unit's `--bind` from `0.0.0.0:8050` to
-   `127.0.0.1:8050` (nginx is now the only thing talking to gunicorn).
-5. Swap `ExecStart`'s gunicorn path from the anaconda3 location to the
-   dedicated venv built on the new host.
-6. Re-issue bookmark URLs to reviewers (the path changes from `/` to
-   `/mojave-review/`).
+[`../docs/deployment_phase2.md`](../docs/deployment_phase2.md) is still
+the IT-conversation reference. Hand it to IT for provisioning; this
+section is the operational sequence on top of that.
 
-Everything else — tokens, recommendations, config schema, logging,
-audit trail — is reused unchanged.
+### M1. Pre-migration code work
+
+Two code changes need to land on a branch before the migration starts:
+
+- **URL-prefix plumbing.** Add a `url_base_pathname` config field that
+  flows through `Config` → `create_app(...)` → `Dash(...)` (and is
+  honored by the auth middleware's cookie `path=` so the cookie is
+  scoped to `/mojave-review/`, not `/`). On the laptop this stays
+  unset; on the university host it's `"/mojave-review/"`.
+- **nginx config example.** `deploy/nginx.conf.example` with the
+  `/mojave-review/` `location` block, `proxy_pass http://127.0.0.1:8050/`,
+  and a 443 ssl server block. Skipped at chunk 8 (Path A) on purpose
+  — write it now against a real nginx version on the prod host.
+
+### M2. Decide the on-disk path layout
+
+Two viable layouts on the new host:
+
+| Layout | Pros | Cons |
+|---|---|---|
+| Home-dir (`~/mojave-review/...`, same as laptop) | Zero sudo, identical to the doc you already wrote | Mixes ops state with the user's home |
+| IT-doc (`/data/...` + `/etc/mojave-review/...`) | Cleaner separation, matches what IT will see | One-time sudo for `/etc` perms |
+
+Either works. The config schema doesn't care — it's just path strings.
+If you go IT-doc, update `tokens_file`, `results_dir`,
+`recommendations_dir`, `cache_dir`, `log_file` in the production
+`config.yaml`.
+
+### M3. Stand up the new host (laptop still serving)
+
+Follow the bring-up sequence in
+[`../docs/deployment_phase2.md`](../docs/deployment_phase2.md) — Steps
+0–3 — with these adjustments from Path A:
+
+| Setting | Laptop (now) | University host |
+|---|---|---|
+| `cookie_secure` | `false` | `true` |
+| gunicorn `--bind` | `0.0.0.0:8050` | `127.0.0.1:8050` |
+| `url_base_pathname` | unset (root) | `/mojave-review/` |
+| `ExecStart` gunicorn path | `~/anaconda3/bin/gunicorn` | `~/<new-venv>/bin/gunicorn` |
+| Reverse proxy | none | nginx, TLS at the edge |
+
+Verify the new host serves a 403 for unauthenticated requests AND a
+200 for your own token (the same three-curl sequence as Step 5 above),
+all on the new public URL. Do NOT email reviewers yet.
+
+### M4. Migrate the data
+
+`Results/` regenerates itself from the next sender run, so it doesn't
+need explicit migration. Two things do:
+
+```bash
+# Tokens. Copy the file so existing token strings keep working —
+# reviewers still need new bookmark URLs in M6 because the path
+# prefix changes, but at least the secrets stay valid.
+rsync -av ~/mojave-review/config/tokens.yaml \
+    <user>@<new-host>:<new-path>/tokens.yaml
+
+# Recommendations. THE only irreplaceable artifact. Copy with -a so
+# mtimes survive (the app shows "updated_at" timestamps).
+rsync -av ~/mojave-review/data/recommendations/ \
+    <user>@<new-host>:<new-path>/recommendations/
+```
+
+The fits_cache/ is fine to skip — it'll repopulate transparently from
+NRAO on demand.
+
+### M5. Update the sender
+
+On the sender machine, edit `~/.config/mojave-results-sync.conf`:
+
+- `TARGET_USER` → username on the new host
+- `TARGET_HOST` → new host's resolvable name
+- `TARGET_DIR` → matches `results_dir` in the new host's `config.yaml`
+  (per M2)
+
+Then re-establish key-based SSH and do one manual `mojave-review-sync
+--dry-run` to confirm the new target. Real run once it looks right.
+The timer keeps firing on its existing schedule — no `.timer` edits
+needed.
+
+### M6. Cutover
+
+```bash
+# On the laptop: capture the audit log before retirement.
+cp ~/mojave-review/data/logs/mojave-review.log \
+   ~/mojave-review-laptop-audit-$(date +%F).log
+
+# On the laptop: stop serving.
+systemctl --user stop mojave-review
+systemctl --user disable mojave-review
+
+# Email reviewers their new bookmark URLs:
+mojave-review-tokens --tokens-file <new-path>/tokens.yaml \
+    url <user> --base-url https://<new-host>/mojave-review/
+```
+
+Note: the URL `path` changes (`/` → `/mojave-review/`), so old
+bookmarks fail closed (cookie won't be sent on the new path). That's
+correct fail-shut behavior — reviewers get a 403 page and email you.
+
+### M7. Retire the laptop deployment
+
+After ~1 week with no reports of issues:
+
+```bash
+loginctl disable-linger $USER          # optional
+rm ~/.config/systemd/user/mojave-review.service
+systemctl --user daemon-reload
+
+# Keep the captured audit log file and recommendations/ tree.
+# Everything else under ~/mojave-review/ is reproducible.
+```
+
+Leave the recommendations/ tree on disk a while longer as a belt-and-
+braces backup of M4's migration. It's small and ignored by the (now
+stopped) app.
+
+### Summary of "what's reused unchanged"
+
+Tokens (the strings — bookmark URLs change), recommendations JSON,
+config schema (same keys, different values), the logging /
+audit-trail format, the rsync sender script + timer (just the config
+file changes), and the systemd unit (just `ExecStart` + `--bind` flip).
