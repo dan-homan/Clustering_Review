@@ -15,6 +15,7 @@ from pathlib import Path
 
 from dash import Dash, Input, Output, State, no_update
 
+from ..auth.runtime import current_reviewer
 from ..data.loader import _SOURCE_DIR_RE
 from ..recommendations.store import is_submitted, submission_path, rec_path
 
@@ -67,12 +68,13 @@ def register_admin(
         if source_name is None:
             return no_update, no_update, no_update
 
-        if is_submitted(recommendations_dir, source_name, reviewer):
-            target = submission_path(recommendations_dir, source_name, reviewer)
+        cur_reviewer = current_reviewer(reviewer)
+        if is_submitted(recommendations_dir, source_name, cur_reviewer):
+            target = submission_path(recommendations_dir, source_name, cur_reviewer)
             hint = (f"Targeting the SUBMITTED recommendation "
                     f"({target.parent.name}/{target.name}).")
         else:
-            target = rec_path(recommendations_dir, source_name, "current", reviewer)
+            target = rec_path(recommendations_dir, source_name, "current", cur_reviewer)
             hint = (f"No submission found yet — falling back to your "
                     f"in-progress current recommendation "
                     f"({target.parent.name}/{target.name}). "

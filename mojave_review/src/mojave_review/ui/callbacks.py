@@ -7,6 +7,7 @@ from pathlib import Path
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, ctx, no_update
 
+from ..auth.runtime import current_reviewer
 from ..data.fits_cache import split_source_band
 from ..data.loader import (
     _SOURCE_DIR_RE, SourceRef, clear_bundle_cache, list_models, load_bundle,
@@ -41,7 +42,9 @@ def register_callbacks(
     )
 
     # Local helpers that resolve a (source, model) pair into a possibly
-    # rec-applied DataFrame, closing over recommendations_dir + reviewer.
+    # rec-applied DataFrame, closing over recommendations_dir and the
+    # reviewer-name resolver (token mode: g.reviewer; otherwise the
+    # ``reviewer`` fallback captured here).
     def _effective_model_for_load(model_key: str) -> str:
         return "current" if (model_key or "").startswith("rec:") else model_key
 
@@ -61,7 +64,8 @@ def register_callbacks(
                 df = apply_recommendation(df, rec)
         elif model_key == "current" and visualize_val:
             own_rec = build_rec_from_ui_state(
-                source=source_name, model="current", reviewer=reviewer,
+                source=source_name, model="current",
+                reviewer=current_reviewer(reviewer),
                 source_comment=None,
                 no_robustness_changes=bool(no_changes_val),
                 cluster_rows=cluster_rows, epoch_rows=None,
@@ -112,8 +116,11 @@ def register_callbacks(
         models = list_models(src)
         opts = [{"label": mf.label, "value": mf.key} for mf in models]
         # Other reviewers' rec files at <recs>/<source>/current/<slug>.json,
-        # excluding the current user's own slug.
-        own_slug = reviewer_slug(reviewer)
+        # excluding the current user's own slug. The current user's name is
+        # resolved per-request — in token-auth mode that means each user
+        # sees the dropdown filtered against *their* slug, not whichever
+        # one happened to be captured at app start.
+        own_slug = reviewer_slug(current_reviewer(reviewer))
         for slug in list_other_reviewer_slugs(recommendations_dir, src.source, own_slug):
             opts.append({"label": f"Rec: {slug}", "value": f"rec:{slug}"})
         return opts, (opts[0]["value"] if opts else None)

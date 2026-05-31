@@ -8,6 +8,7 @@ from pathlib import Path
 from dash import Dash
 
 from .auth.middleware import install_token_middleware
+from .auth.runtime import current_reviewer
 from .ui.layout import build_layout
 from .ui.callbacks import register_callbacks
 
@@ -44,9 +45,10 @@ def create_app(
     * ``Path`` — Phase 2 token-auth mode. Every request must carry a
       valid token (cookie or ``?token=...``) that resolves through
       ``tokens.yaml``. The middleware sets ``flask.g.reviewer`` per
-      request; the ``reviewer`` argument is currently still the source
-      of truth for the displayed name (chunk 4 will move that to
-      ``g.reviewer``).
+      request, and ``app.layout`` + the callbacks read from it via
+      :func:`mojave_review.auth.runtime.current_reviewer`. The
+      ``reviewer`` argument is the single-user fallback used when
+      there's no request context (or in Phase 1).
     """
     app = Dash(
         __name__,
@@ -54,13 +56,25 @@ def create_app(
         suppress_callback_exceptions=True,
         assets_folder=_PACKAGE_ASSETS,
     )
-    app.layout = build_layout(results_dir=results_dir, reviewer=reviewer, admin=admin)
+    # Dynamic layout: re-rendered on every /_dash-layout fetch (typically
+    # once per page load). Inside a Flask request context the layout
+    # reads ``flask.g.reviewer`` via current_reviewer(); outside one
+    # (e.g. during a unit-test introspection of app.layout) it falls
+    # back to the CLI-supplied ``reviewer`` value captured here.
+    def _layout():
+        return build_layout(
+            results_dir=results_dir,
+            reviewer=current_reviewer(reviewer),
+            admin=admin,
+        )
+    app.layout = _layout
+
     register_callbacks(
         app,
         results_dir=results_dir,
         recommendations_dir=recommendations_dir,
         cache_dir=cache_dir,
-        reviewer=reviewer,
+        reviewer=reviewer,        # closure default — overridden per-request
         admin=admin,
         fits_data_dir=fits_data_dir,
     )

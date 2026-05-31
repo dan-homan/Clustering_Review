@@ -21,6 +21,7 @@ from dash import (
 
 import numpy as np
 
+from ..auth.runtime import current_reviewer
 from ..data.loader import _SOURCE_DIR_RE, load_bundle
 from ..recommendations.apply import apply_recommendation
 from ..recommendations.notebook_format import format_submission_text
@@ -441,7 +442,8 @@ def register(
             bundle = load_bundle(source_folder, "current")
             cluster_rows, epoch_rows = _populate_tables(
                 bundle, Recommendation(source=bundle.source.source,
-                                       model=model_key, reviewer=reviewer),
+                                       model=model_key,
+                                       reviewer=current_reviewer(reviewer)),
             )
             return "", cluster_rows, epoch_rows, [], \
                    "Recommendations are only made against the current model.", []
@@ -471,7 +473,8 @@ def register(
         # Default: model=="current".
         bundle = load_bundle(source_folder, model_key)
         rec = load_recommendation(
-            recommendations_dir, bundle.source.source, model_key, reviewer,
+            recommendations_dir, bundle.source.source, model_key,
+            current_reviewer(reviewer),
         )
         cluster_rows, epoch_rows = _populate_tables(bundle, rec)
         edits_data = [
@@ -871,7 +874,8 @@ def register(
         if source_name is None:
             return ("Submit Recommendation",
                     {**base_style, "display": "none"}, "")
-        when = submitted_at(recommendations_dir, source_name, reviewer)
+        when = submitted_at(recommendations_dir, source_name,
+                            current_reviewer(reviewer))
         if when:
             return ("Resubmit Recommendation", base_style,
                     f"Last submitted {when}")
@@ -938,8 +942,13 @@ def register(
         if source_name is None:
             return no_update, no_update
         bundle = load_bundle(source_folder, "current")
+        # In token-auth mode, ``current_reviewer(reviewer)`` is the
+        # logged-in user's name; in single-user mode it's the CLI value.
+        # Resolve once and reuse so the JSON write and the formatted text
+        # can't disagree.
+        cur_reviewer = current_reviewer(reviewer)
         rec = build_rec_from_ui_state(
-            source=source_name, model="current", reviewer=reviewer,
+            source=source_name, model="current", reviewer=cur_reviewer,
             source_comment=source_comment,
             no_robustness_changes=bool(no_changes_val),
             cluster_rows=cluster_rows, epoch_rows=epoch_rows,
@@ -949,7 +958,7 @@ def register(
         save_submitted(recommendations_dir, rec, model_sha=bundle.csv_sha)
         # Generate the notebook block from the same Recommendation.
         eff_df = apply_recommendation(bundle.cluster_df, rec)
-        text = format_submission_text(rec, bundle.cluster_df, eff_df, reviewer)
+        text = format_submission_text(rec, bundle.cluster_df, eff_df, cur_reviewer)
         overlay_style = {
             "display": "block", "position": "fixed",
             "top": "0", "left": "0", "right": "0", "bottom": "0",
@@ -1038,7 +1047,8 @@ def register(
             return no_update
         bundle = load_bundle(source_folder, model_key)
         rec = build_rec_from_ui_state(
-            source=bundle.source.source, model=model_key, reviewer=reviewer,
+            source=bundle.source.source, model=model_key,
+            reviewer=current_reviewer(reviewer),
             source_comment=source_comment,
             no_robustness_changes=bool(no_changes_val),
             cluster_rows=cluster_rows, epoch_rows=epoch_rows,
