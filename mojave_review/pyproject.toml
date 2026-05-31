@@ -12,13 +12,16 @@ dependencies = [
     "plotly>=5.20",
     "pandas>=2.0",
     "numpy>=1.24",
+    "scipy>=1.11",        # FFT-convolve in plots/synthesize_fits.py
     "astropy>=6.0",
     "requests>=2.31",
+    "pyyaml>=6.0",        # tokens.yaml + (phase 2) config.yaml
 ]
 
 [project.scripts]
-mojave-review = "mojave_review.cli:main"
-mojave-apply  = "mojave_review.cli.apply:main"
+mojave-review        = "mojave_review.cli:main"
+mojave-apply         = "mojave_review.cli.apply:main"
+mojave-review-tokens = "mojave_review.cli.tokens:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
