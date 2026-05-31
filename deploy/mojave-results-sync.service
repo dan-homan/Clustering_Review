@@ -1,0 +1,38 @@
+# systemd --user oneshot service: push Results/ from this (sender)
+# machine to the mojave-review host. Drives the rsync script; the
+# companion .timer fires it on a schedule. Install on the SENDER, not
+# on the laptop.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/mojave-results-sync.service ~/.config/systemd/user/
+#   cp deploy/mojave-results-sync.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mojave-results-sync.timer
+#   loginctl enable-linger $USER     # so the timer fires while logged out
+
+[Unit]
+Description=Push MOJAVE Results/ to mojave-review laptop
+# Don't even try if the network's down.
+After=network-online.target
+Wants=network-online.target
+# Don't run two syncs concurrently — RequiresMountsFor isn't needed
+# since rsync handles partial transfers, but ConditionPathIsDirectory
+# bails the run if the Drive mirror isn't currently mounted.
+
+[Service]
+Type=oneshot
+
+# The script is expected at ~/bin/mojave-review-sync per the README.
+# Change this path if you installed it elsewhere.
+ExecStart=%h/bin/mojave-review-sync
+
+# Keep the sync low-priority — it's a background catchup, not
+# latency-sensitive work.
+Nice=10
+IOSchedulingClass=idle
+
+# Useful when troubleshooting an unattended run: send stdout+stderr to
+# journald in addition to whatever the script prints.
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,28 @@
+# systemd --user timer for mojave-results-sync.
+#
+# Fires the .service nightly. Persistent=true means a missed run
+# (sender machine off at the scheduled time) catches up the next time
+# the user logs in.
+
+[Unit]
+Description=Nightly mojave-review Results sync
+
+[Timer]
+# 03:30 local every day. Pick a time when both the sender and the
+# laptop are usually online; the IT-doc deployment plan assumed the
+# laptop is mostly-on, so this is a sender-availability question.
+OnCalendar=*-*-* 03:30:00
+
+# Run on next boot/login if the scheduled tick was missed.
+Persistent=true
+
+# Stagger up to 10 min — prevents a thundering herd in the unlikely
+# event multiple senders ever exist on the same network.
+RandomizedDelaySec=600
+
+# Surface a missed run as a hard failure rather than letting it stack
+# up forever — if you haven't synced in a week something's wrong.
+Unit=mojave-results-sync.service
+
+[Install]
+WantedBy=timers.target

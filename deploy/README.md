@@ -170,6 +170,102 @@ http://192.168.1.23:8050/?token=<paste-your-token>
 first hit sets the auth cookie; bookmark the resulting `http://...:8050/`
 URL.
 
+---
+
+## On the SENDER machine — Results/ sync
+
+These steps run on the OTHER machine (the one with the Google Drive
+desktop mirror). The sync is strictly one-way: Drive → laptop. The
+laptop's `recommendations/`, `fits_cache/`, and `logs/` are never
+touched.
+
+### S1. Prereqs
+
+- `rsync` installed (`sudo apt install rsync` or equivalent).
+- Key-based SSH from this machine to the laptop, no password prompt:
+  ```bash
+  ssh-keygen -t ed25519           # if you don't have a key yet
+  ssh-copy-id homand@<laptop-ip>  # installs your pubkey on the laptop
+  ssh homand@<laptop-ip> true     # must succeed without a prompt
+  ```
+
+### S2. Install the script + config
+
+```bash
+mkdir -p ~/bin ~/.config
+cp ~/Clustering_Review/deploy/sync-results.sh ~/bin/mojave-review-sync
+chmod +x ~/bin/mojave-review-sync
+
+cp ~/Clustering_Review/deploy/mojave-results-sync.conf.example \
+   ~/.config/mojave-results-sync.conf
+```
+
+(Adjust `~/Clustering_Review/` if you cloned the repo elsewhere on the
+sender. Or just transfer the four `deploy/` files by hand — they have
+no other dependencies.)
+
+Edit `~/.config/mojave-results-sync.conf`:
+
+- `SOURCE_DIR` — local Drive-mirror path on this machine.
+- `TARGET_HOST` — laptop's hostname or LAN IP (same value as `LAN_URL`
+  on the laptop side).
+- The other fields match the example.
+
+### S3. First manual run
+
+Dry-run first to see exactly what will be transferred / deleted:
+
+```bash
+mojave-review-sync --dry-run
+```
+
+When that looks right:
+
+```bash
+mojave-review-sync
+```
+
+Verify on the laptop:
+
+```bash
+ssh homand@<laptop-ip> ls ~/mojave-review/data/Results/
+```
+
+### S4. Schedule the nightly sync
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/Clustering_Review/deploy/mojave-results-sync.service \
+   ~/.config/systemd/user/
+cp ~/Clustering_Review/deploy/mojave-results-sync.timer \
+   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now mojave-results-sync.timer
+loginctl enable-linger $USER     # so the timer fires after logout
+```
+
+Verify the timer is scheduled:
+
+```bash
+systemctl --user list-timers mojave-results-sync.timer
+```
+
+The "NEXT" column should show the upcoming 03:30 fire time. Inspect
+past runs with `journalctl --user-unit mojave-results-sync`.
+
+### S5. Run on demand
+
+The timer is convenient but not required. To force a sync any time —
+e.g. after dropping a freshly-rerun source into the Drive mirror:
+
+```bash
+systemctl --user start mojave-results-sync      # via systemd
+# or
+mojave-review-sync                              # directly
+```
+
+Both invocations call the same script with the same config.
+
 ## Day-to-day ops
 
 | Action | Command |
@@ -182,6 +278,10 @@ URL.
 | Restart after a code change | `pip install -e .[server] && systemctl --user restart mojave-review` |
 | Stop the service | `systemctl --user stop mojave-review` |
 | Disable on boot | `systemctl --user disable mojave-review` |
+| **On sender:** run sync now | `mojave-review-sync` |
+| **On sender:** dry-run sync | `mojave-review-sync --dry-run` |
+| **On sender:** tail sync runs | `journalctl --user-unit mojave-results-sync -e` |
+| **On sender:** next sync time | `systemctl --user list-timers mojave-results-sync.timer` |
 
 ## What changes at the university-host migration
 

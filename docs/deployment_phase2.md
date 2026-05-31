@@ -186,8 +186,14 @@ the loop:
 4. **Step 3 — Generate your own token.** `mojave-review-tokens add
    homand`, visit your bookmarked URL, confirm login works. Click
    around to verify the existing app works end-to-end on the server.
-5. **Step 4 — Sync `Results/`.** Drive service account or manual
-   rsync.
+5. **Step 4 — Sync `Results/`.** Manual rsync from a sender machine
+   holding the Drive desktop mirror, scheduled by a systemd `--user`
+   timer. Concrete artifacts (script, config, service + timer units)
+   are under [`../deploy/`](../deploy/) — see "On the SENDER
+   machine — Results/ sync" in [`../deploy/README.md`](../deploy/README.md).
+   A Drive service account is the alternative if you ever want to
+   skip the sender hop, at the cost of an outbound HTTPS allowance
+   to Google APIs.
 6. **Step 5 — Issue tokens to the rest of the group.** Five `add`
    calls, five emails with bookmarked URLs. Done.
 

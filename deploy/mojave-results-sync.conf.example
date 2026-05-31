@@ -1,0 +1,36 @@
+# mojave-review-sync configuration (sender-side)
+#
+# Copy to ~/.config/mojave-results-sync.conf and edit the four required
+# values. This file is shell-sourced by deploy/sync-results.sh; quote
+# anything that contains spaces.
+
+# --- Required ---------------------------------------------------------
+
+# Local path on THIS (sender) machine where Drive desktop has mirrored
+# the shared Results/ folder. Must already exist.
+SOURCE_DIR="$HOME/Google Drive/My Drive/MOJAVE/Results"
+
+# SSH credentials for the laptop (the host running mojave-review).
+TARGET_USER="homand"
+TARGET_HOST="192.168.1.23"           # LAN IP or resolvable hostname
+
+# Absolute path on the laptop where Results/ should live. Must match
+# `results_dir` in the laptop's ~/mojave-review/config/config.yaml.
+TARGET_DIR="/home/homand/mojave-review/data/Results"
+
+# --- Optional ---------------------------------------------------------
+
+# Safety brake: rsync refuses to remove more than this many entries
+# in one run. Catches "Drive desktop briefly empty" failure modes
+# without blocking legitimate cleanup batches (renumbering a source's
+# backups can churn a few dozen files).
+#
+# Set to 0 to disable. Default if unset: 1000.
+MAX_DELETE=1000
+
+# Free-form extra flags forwarded straight to rsync. Useful for
+# one-off adjustments without editing the script.
+# Examples:
+#   EXTRA_RSYNC_OPTS="--bwlimit=2M"      # cap to 2 MB/s
+#   EXTRA_RSYNC_OPTS="-v"                # verbose per-file output
+EXTRA_RSYNC_OPTS=""
