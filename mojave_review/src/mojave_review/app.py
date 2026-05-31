@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dash import Dash
 
+from .auth.middleware import install_token_middleware
 from .ui.layout import build_layout
 from .ui.callbacks import register_callbacks
 
@@ -29,7 +30,24 @@ def create_app(
     reviewer: str,
     admin: bool = False,
     fits_data_dir: Path | None = None,
+    tokens_path: Path | None = None,
+    cookie_secure: bool = True,
+    admin_contact: str = "the admin",
 ) -> Dash:
+    """Build the Dash app.
+
+    ``tokens_path`` controls the authentication mode:
+
+    * ``None``  — Phase 1 single-user mode. The reviewer name is the
+      value of the ``reviewer`` argument (from ``--reviewer`` on the
+      CLI). Anyone who can reach the port can use the app.
+    * ``Path`` — Phase 2 token-auth mode. Every request must carry a
+      valid token (cookie or ``?token=...``) that resolves through
+      ``tokens.yaml``. The middleware sets ``flask.g.reviewer`` per
+      request; the ``reviewer`` argument is currently still the source
+      of truth for the displayed name (chunk 4 will move that to
+      ``g.reviewer``).
+    """
     app = Dash(
         __name__,
         title="MOJAVE Cluster Review",
@@ -76,5 +94,17 @@ def create_app(
             resp.headers["Expires"] = "0"
         resp.headers["X-Mojave-Review-Version"] = pkg_version
         return resp
+
+    # Phase 2: install token middleware if a tokens file was given.
+    # Order matters — we register this *after* the cache-control hook
+    # so the no-cache headers are also applied to the 403 page (the
+    # browser shouldn't cache "you're locked out" either).
+    if tokens_path is not None:
+        install_token_middleware(
+            app.server,
+            tokens_path=tokens_path,
+            cookie_secure=cookie_secure,
+            admin_contact=admin_contact,
+        )
 
     return app
