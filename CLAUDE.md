@@ -300,7 +300,14 @@ change. Reset only ever touches the current reviewer's own files.
 ### Selection-driven edits
 
 The summary plots carry `customdata=[clusterID, epoch]` on every cluster
-point. Two callbacks write to `dcc.Store(id="selection-store")`:
+point. **`_customdata` must return plain Python lists, NOT a numpy array** —
+plotly.py 6 base64-encodes numpy arrays as typed arrays by default, so each
+point's `customdata` reaches the browser as a `Float64Array` and Dash relays
+it into `clickData` as an *object* (`{"0": cid, "1": epoch}`) instead of a
+list; the click callback's `cd[0]`/`cd[1]` indexing then silently fails and
+clicking stops selecting. The cluster scatter traces are also SVG `go.Scatter`
+(not `Scattergl`) so click hit-testing is reliable and doesn't fight the SVG
+gold-halo overlay. Two callbacks write to `dcc.Store(id="selection-store")`:
 
 - **clickData** → toggle that one (cid, epoch) in the store. *The callback
   also resets `clickData` to None* so a repeat click on the same point

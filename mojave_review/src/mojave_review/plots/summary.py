@@ -161,8 +161,16 @@ def _marker_style(color: str, symbol: str, filled: bool) -> dict:
             "line": {"width": 1.5, "color": color}}
 
 
-def _customdata(s: _Slice) -> np.ndarray:
-    return np.stack([np.full_like(s.time, s.cid, dtype=float), s.time], axis=-1)
+def _customdata(s: _Slice) -> list[list[float]]:
+    # Return PLAIN Python lists, not a numpy array. plotly.py 6 base64-encodes
+    # numpy arrays as typed arrays by default; per-point ``customdata`` then
+    # arrives in the browser as a Float64Array and Dash relays it into
+    # ``clickData`` as an OBJECT ({"0": cid, "1": epoch}) rather than a list.
+    # The click-selection callback (ui/callbacks._toggle_on_click) indexes
+    # customdata as cd[0]/cd[1], which silently fails on that object — so
+    # clicking a point stopped selecting it. Plain lists serialize as JSON
+    # arrays and read back correctly. (cid first, then epoch.)
+    return [[int(s.cid), float(t)] for t in s.time]
 
 
 def _add_cluster_traces(
@@ -180,7 +188,7 @@ def _add_cluster_traces(
     in_legend = s.cid == -1 or 0 <= s.cid < 1000
 
     fig.add_trace(
-        go.Scattergl(
+        go.Scatter(
             x=s.time, y=ydata,
             mode="lines+markers",
             line={"color": color, "width": 1, "dash": "dot"},
@@ -201,7 +209,7 @@ def _add_cluster_traces(
     excl = ~s.use_in_fit
     if np.any(excl):
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=s.time[excl], y=ydata[excl],
                 mode="markers",
                 marker={"color": "black", "symbol": "line-ne",
@@ -233,7 +241,7 @@ def _add_cluster_traces(
 
     if show_fit is not None:
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=s.time, y=show_fit, mode="lines",
                 line={"color": color, "width": 1, "dash": "dot"},
                 showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
