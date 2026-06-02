@@ -153,7 +153,12 @@ You can copy that command directly out of the web app: launch with
 6. Appends one line per edit to `history.txt`, plus a timestamped
    header.
 7. Regenerates the summary PDF + epoch MP4 via the production
-   `save_summary_plots`.
+   `save_summary_plots`. The FITS/CC root passed to it is taken from the
+   **`MOJAVE_DATA`** environment variable when set (the FITS tree on the
+   machine running `mojave-apply`), falling back to the `root_data_dir`
+   baked into the `.plotdata.npz` otherwise. Set `export MOJAVE_DATA=...`
+   if the npz was generated on a different machine, so the regenerated
+   plots can find the images.
 8. Archives the JSON to `<recs>/<source>/applied/<date>__<slug>.json`.
 9. Prints a copy-pasteable notebook summary block.
 

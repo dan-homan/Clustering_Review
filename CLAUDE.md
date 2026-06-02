@@ -86,7 +86,10 @@ Four fields:
 - `cc_labels` — int32 array of per-cc cluster labels (parallel to `cc_data`).
 - `root_data_dir` — string, where FITS files lived on the machine that
   generated the npz. The web app **ignores this** and fetches FITS from MOJAVE
-  instead (see below).
+  instead (see below). `mojave-apply` also overrides it: when regenerating the
+  summary PDF + epoch MP4 it passes `$MOJAVE_DATA` (if set) to
+  `save_summary_plots`, falling back to this baked-in value only when the env
+  var is unset (`cli/apply._resolve_root_data_dir`).
 
 ## MOJAVE FITS retrieval
 

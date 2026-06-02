@@ -29,6 +29,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -195,14 +196,33 @@ def _import_save_summary_plots(production_code_dir: Path):
     return save_summary_plots
 
 
+def _resolve_root_data_dir(plotdata: dict[str, Any]) -> str:
+    """Root of the FITS/CC tree used when regenerating the overplots.
+
+    Prefer the ``MOJAVE_DATA`` environment variable — the location of the
+    FITS tree on the machine running ``mojave-apply`` — and fall back to the
+    ``root_data_dir`` baked into the ``.plotdata.npz`` when the model was
+    first produced (which often points at a path that doesn't exist on this
+    machine). An empty/unset ``MOJAVE_DATA`` falls through to the default.
+    """
+    env_dir = os.environ.get("MOJAVE_DATA")
+    if env_dir:
+        return os.path.expanduser(env_dir)
+    return str(plotdata.get("root_data_dir", ""))
+
+
 def _regen_plots(
     folder: Path, prefix: str, plotdata: dict[str, Any], df: pd.DataFrame,
     save_summary_plots,
 ) -> None:
     file_prefix = str(folder / f"{prefix}.")
+    root_data_dir = _resolve_root_data_dir(plotdata)
+    print(f"  using root_data_dir = {root_data_dir or '(empty)'}"
+          + ("  [from $MOJAVE_DATA]" if os.environ.get("MOJAVE_DATA") else
+             "  [from .plotdata.npz]"))
     save_summary_plots(
         plotdata["epoch_info"], plotdata["cc_data"],
-        str(plotdata.get("root_data_dir", "")),
+        root_data_dir,
         df, plotdata["cc_labels"],
         file_prefix=file_prefix,
         colorImages=False,
