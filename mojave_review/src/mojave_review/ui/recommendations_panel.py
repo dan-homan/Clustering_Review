@@ -371,6 +371,18 @@ def build_recommendations_panel(admin: bool = False) -> html.Div:
                    "border": "none", "borderRadius": "4px",
                    "cursor": "pointer"},
         ),
+        # Opens the reset dialog (reset-to-submitted / delete / cancel).
+        # Visibility is managed alongside the Submit button — current model
+        # only.
+        html.Button(
+            "Reset Recommendation",
+            id="reset-recommendation-btn",
+            n_clicks=0,
+            style={"padding": "0.35em 0.9em", "fontSize": "0.9em",
+                   "background": "white", "color": "#555",
+                   "border": "1px solid #bbb", "borderRadius": "4px",
+                   "cursor": "pointer", "marginLeft": "0.5em"},
+        ),
     ]
     if admin:
         header_buttons.append(
@@ -429,6 +441,102 @@ def build_recommendations_panel(admin: bool = False) -> html.Div:
             # Native confirm dialog used to warn about clusterID collisions
             # before adding renumber edits.
             dcc.ConfirmDialog(id="conflict-confirm", message=""),
+            # Bumped whenever the reset dialog resets/deletes the
+            # recommendation, so the Submit button label re-evaluates
+            # (Resubmit ⇄ Submit) without needing a source/model change.
+            dcc.Store(id="rec-reset-counter", data=0),
+            # Reset dialog: a 3-choice modal (reset to last submitted /
+            # delete draft + submitted / cancel). Native dcc.ConfirmDialog
+            # only offers OK+Cancel, so this is a custom modal like the
+            # submission one.
+            html.Div(
+                id="reset-rec-modal",
+                style={"display": "none"},
+                children=[
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H4("Reset recommendation",
+                                            style={"margin": "0"}),
+                                    html.Button(
+                                        "×", id="close-reset-rec-modal",
+                                        n_clicks=0,
+                                        style={"border": "none",
+                                               "background": "transparent",
+                                               "fontSize": "1.5em",
+                                               "lineHeight": "1",
+                                               "cursor": "pointer",
+                                               "color": "#888"},
+                                    ),
+                                ],
+                                style={"display": "flex",
+                                       "justifyContent": "space-between",
+                                       "alignItems": "center",
+                                       "marginBottom": "0.4em"},
+                            ),
+                            html.P("This affects only your own draft and "
+                                   "submission for this source.",
+                                   style={"color": "#666", "fontSize": "0.9em",
+                                          "margin": "0 0 0.5em"}),
+                            # Filled by callback when no submission exists.
+                            html.Div(id="reset-modal-info",
+                                     style={"color": "#a00",
+                                            "fontSize": "0.85em",
+                                            "marginBottom": "0.5em"}),
+                            html.Div(
+                                [
+                                    html.Button(
+                                        "Reset to last submitted",
+                                        id="reset-to-submitted-btn",
+                                        n_clicks=0,
+                                        style={"padding": "0.45em 1em",
+                                               "background": "#1f77b4",
+                                               "color": "white",
+                                               "border": "none",
+                                               "borderRadius": "4px",
+                                               "cursor": "pointer"},
+                                    ),
+                                    html.Button(
+                                        "Delete draft & submitted",
+                                        id="delete-recs-btn",
+                                        n_clicks=0,
+                                        style={"padding": "0.45em 1em",
+                                               "background": "#c0392b",
+                                               "color": "white",
+                                               "border": "none",
+                                               "borderRadius": "4px",
+                                               "cursor": "pointer"},
+                                    ),
+                                    html.Button(
+                                        "Cancel",
+                                        id="reset-cancel-btn",
+                                        n_clicks=0,
+                                        style={"padding": "0.45em 1em",
+                                               "background": "white",
+                                               "color": "#555",
+                                               "border": "1px solid #bbb",
+                                               "borderRadius": "4px",
+                                               "cursor": "pointer"},
+                                    ),
+                                ],
+                                style={"display": "flex", "gap": "0.5em",
+                                       "justifyContent": "flex-end",
+                                       "flexWrap": "wrap",
+                                       "marginTop": "0.75em"},
+                            ),
+                        ],
+                        style={
+                            "background": "white",
+                            "padding": "1.5em",
+                            "borderRadius": "6px",
+                            "maxWidth": "520px",
+                            "margin": "8% auto",
+                            "boxShadow": "0 4px 20px rgba(0,0,0,0.25)",
+                        },
+                    ),
+                ],
+            ),
             # Admin-only modal: a copy-pasteable mojave-apply command line.
             # Only emitted into the layout when admin=True so non-admin
             # users can't trigger any of the related callbacks (also not

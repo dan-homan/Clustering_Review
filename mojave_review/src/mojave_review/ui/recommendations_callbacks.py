@@ -29,7 +29,8 @@ from ..recommendations.schema import (
     ClusterFeedback, EpochFeedback, Edit, Recommendation,
 )
 from ..recommendations.store import (
-    is_submitted, load_recommendation, load_recommendation_by_slug,
+    delete_recommendation, delete_submission, is_submitted,
+    load_recommendation, load_recommendation_by_slug, reviewer_slug,
     save_recommendation, save_submitted, submitted_at,
 )
 
@@ -50,6 +51,18 @@ def _recommended_to_str(rr: bool | None) -> str:
 
 def _recommended_from_str(s: str | None) -> bool | None:
     return {"robust": True, "non-robust": False}.get((s or "").lower(), None)
+
+
+def _edits_to_store(rec) -> list[dict]:
+    """Serialize a Recommendation's edits to the edits-store list shape."""
+    return [
+        {
+            "op": e.op, "scope": e.scope, "epoch": e.epoch,
+            "clusterID": e.clusterID, "from_id": e.from_id, "to_id": e.to_id,
+            "value": e.value, "comment": e.comment,
+        }
+        for e in rec.edits
+    ]
 
 
 # A cluster is "eligible" for robustness review only if it has enough epochs
@@ -857,29 +870,143 @@ def register(
         Output("submit-recommendation-btn", "children"),
         Output("submit-recommendation-btn", "style"),
         Output("submit-status", "children"),
+        Output("reset-recommendation-btn", "style"),
         Input("source-picker", "value"),
         Input("model-picker", "value"),
         Input("submit-recommendation-btn", "n_clicks"),
+        # Re-evaluate when the reset dialog deletes/resets, so the label
+        # flips back to "Submit" after a delete without a source/model change.
+        Input("rec-reset-counter", "data"),
     )
-    def _submit_button_state(source_folder, model_key, _n):
+    def _submit_button_state(source_folder, model_key, _n, _reset_counter):
         base_style = {
             "padding": "0.35em 0.9em", "fontSize": "0.9em",
             "background": "#1f77b4", "color": "white",
             "border": "none", "borderRadius": "4px", "cursor": "pointer",
         }
+        reset_style = {
+            "padding": "0.35em 0.9em", "fontSize": "0.9em",
+            "background": "white", "color": "#555",
+            "border": "1px solid #bbb", "borderRadius": "4px",
+            "cursor": "pointer", "marginLeft": "0.5em",
+        }
         if not source_folder or model_key != "current":
             return ("Submit Recommendation",
-                    {**base_style, "display": "none"}, "")
+                    {**base_style, "display": "none"}, "",
+                    {**reset_style, "display": "none"})
         source_name = _source_name_from_folder(source_folder)
         if source_name is None:
             return ("Submit Recommendation",
-                    {**base_style, "display": "none"}, "")
+                    {**base_style, "display": "none"}, "",
+                    {**reset_style, "display": "none"})
         when = submitted_at(recommendations_dir, source_name,
                             current_reviewer(reviewer))
         if when:
             return ("Resubmit Recommendation", base_style,
-                    f"Last submitted {when}")
-        return ("Submit Recommendation", base_style, "Not yet submitted")
+                    f"Last submitted {when}", reset_style)
+        return ("Submit Recommendation", base_style, "Not yet submitted",
+                reset_style)
+
+    # ---- Reset Recommendation dialog: open / cancel / apply --------------
+    _modal_overlay_style = {
+        "display": "block", "position": "fixed",
+        "top": "0", "left": "0", "right": "0", "bottom": "0",
+        "background": "rgba(0,0,0,0.4)", "zIndex": 1000, "overflow": "auto",
+    }
+
+    # Open the dialog. Disable "Reset to last submitted" (and show a note)
+    # when no submission exists for this (source, reviewer).
+    @app.callback(
+        Output("reset-rec-modal", "style"),
+        Output("reset-to-submitted-btn", "disabled"),
+        Output("reset-modal-info", "children"),
+        Input("reset-recommendation-btn", "n_clicks"),
+        State("source-picker", "value"),
+        State("model-picker", "value"),
+        prevent_initial_call=True,
+    )
+    def _open_reset_modal(_n, source_folder, model_key):
+        if not source_folder or model_key != "current":
+            return no_update, no_update, no_update
+        source_name = _source_name_from_folder(source_folder)
+        has_sub = bool(source_name) and is_submitted(
+            recommendations_dir, source_name, current_reviewer(reviewer))
+        info = ("" if has_sub else
+                "No submitted recommendation exists yet — only delete is "
+                "available.")
+        return _modal_overlay_style, (not has_sub), info
+
+    # Cancel / close (X or Cancel button) — just hide the modal.
+    @app.callback(
+        Output("reset-rec-modal", "style", allow_duplicate=True),
+        Input("reset-cancel-btn", "n_clicks"),
+        Input("close-reset-rec-modal", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _close_reset_modal(_a, _b):
+        return {"display": "none"}
+
+    # Apply the chosen reset action, repopulate the panel, hide the modal,
+    # and bump the reset counter (so the Submit button label re-evaluates).
+    @app.callback(
+        Output("source-comment", "value", allow_duplicate=True),
+        Output("cluster-feedback-table", "data", allow_duplicate=True),
+        Output("epoch-feedback-table", "data", allow_duplicate=True),
+        Output("edits-store", "data", allow_duplicate=True),
+        Output("no-changes-checkbox", "value", allow_duplicate=True),
+        Output("save-indicator", "children", allow_duplicate=True),
+        Output("reset-rec-modal", "style", allow_duplicate=True),
+        Output("rec-reset-counter", "data"),
+        Input("reset-to-submitted-btn", "n_clicks"),
+        Input("delete-recs-btn", "n_clicks"),
+        State("source-picker", "value"),
+        State("model-picker", "value"),
+        State("rec-reset-counter", "data"),
+        prevent_initial_call=True,
+    )
+    def _apply_reset(_reset_n, _delete_n, source_folder, model_key, counter):
+        hide = {"display": "none"}
+        nu6 = (no_update,) * 6
+        # Defensive: only the current model has an editable recommendation.
+        if not source_folder or model_key != "current":
+            return (*nu6, hide, no_update)
+        source_name = _source_name_from_folder(source_folder)
+        if source_name is None:
+            return (*nu6, hide, no_update)
+        bundle = load_bundle(source_folder, "current")
+        cur = current_reviewer(reviewer)
+        new_counter = int(counter or 0) + 1
+        trig = ctx.triggered_id
+
+        if trig == "reset-to-submitted-btn":
+            rec = load_recommendation_by_slug(
+                recommendations_dir, source_name, "submitted",
+                reviewer_slug(cur),
+            )
+            if rec is None:
+                return (*((no_update,) * 5),
+                        "No submitted recommendation to reset to.",
+                        hide, no_update)
+            # The submission becomes the working draft again.
+            rec.model = "current"
+            save_recommendation(recommendations_dir, rec, model_sha=bundle.csv_sha)
+            cluster_rows, epoch_rows = _populate_tables(bundle, rec)
+            checkbox = ["yes"] if rec.no_robustness_changes else []
+            return (rec.source_comment, cluster_rows, epoch_rows,
+                    _edits_to_store(rec), checkbox,
+                    f"Reset to last submitted ({rec.updated_at})",
+                    hide, new_counter)
+
+        if trig == "delete-recs-btn":
+            delete_recommendation(recommendations_dir, source_name, "current", cur)
+            delete_submission(recommendations_dir, source_name, cur)
+            empty = Recommendation(source=source_name, model="current",
+                                   reviewer=cur)
+            cluster_rows, epoch_rows = _populate_tables(bundle, empty)
+            return ("", cluster_rows, epoch_rows, [], [],
+                    "Draft and submission deleted", hide, new_counter)
+
+        return (*nu6, hide, no_update)
 
     # Clientside flush-pending-edits gate.
     #

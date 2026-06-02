@@ -144,6 +144,38 @@ def save_submitted(
 
 
 # ---------------------------------------------------------------------------
+# Deletion — used by the "Reset recommendation" dialog.
+# ---------------------------------------------------------------------------
+
+
+def delete_recommendation(
+    recommendations_dir: Path, source: str, model: str, reviewer: str,
+) -> bool:
+    """Delete the reviewer's draft (autosaved) recommendation file for
+    (source, model). Returns True if a file was removed, False if none
+    existed."""
+    p = rec_path(recommendations_dir, source, model, reviewer)
+    try:
+        p.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def delete_submission(
+    recommendations_dir: Path, source: str, reviewer: str,
+) -> bool:
+    """Delete the reviewer's submitted recommendation for this source.
+    Returns True if a file was removed, False if none existed."""
+    p = submission_path(recommendations_dir, source, reviewer)
+    try:
+        p.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Multi-reviewer support — used by the model dropdown to show "Rec: <slug>"
 # entries from other reviewers' submitted files in <recs>/<source>/submitted/.
 # ---------------------------------------------------------------------------

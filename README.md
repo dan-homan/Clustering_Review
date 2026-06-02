@@ -112,6 +112,9 @@ absolute paths for `--results-dir` and `--recommendations-dir`.
 - **Submit Recommendation** freezes your current draft into
   `<recs>/<source>/submitted/<your-slug>.json` and pops a modal with
   a copy-pasteable notebook block.
+- **Reset Recommendation** (beside Submit) opens a dialog to either reset
+  your draft back to your last submitted version, or delete your draft and
+  submission for this source. Only touches your own files.
 - Other reviewers' submissions on a shared `recommendations/` folder
   appear in the model dropdown as `Rec: <slug>` for read-only
   side-by-side review.

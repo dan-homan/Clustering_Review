@@ -274,6 +274,26 @@ The panel auto-saves on every field change. Read-only modes:
 Visual lock = `opacity: 0.7; pointer-events: none` on the whole
 `#recommendations-panel`.
 
+### Reset Recommendation dialog
+
+A **Reset Recommendation** button sits beside **Submit** (current model only;
+hidden otherwise, managed by `_submit_button_state`). It opens a 3-choice
+modal (`#reset-rec-modal`, a custom modal since `dcc.ConfirmDialog` only
+offers OK+Cancel):
+
+- **Reset to last submitted** — loads `<recs>/<source>/submitted/<own-slug>.json`,
+  rewrites it as the working draft (`current/`), and repopulates the panel.
+  Disabled (with a note) when no submission exists.
+- **Delete draft & submitted** — `store.delete_recommendation` (the `current/`
+  draft) + `store.delete_submission` (the `submitted/` file). The panel is
+  blanked; autosave does NOT recreate the draft because the empty rec is never
+  written (`Recommendation.is_empty()`), and autosave never writes `submitted/`.
+- **Cancel** — closes the modal.
+
+Both actions bump `rec-reset-counter`, an Input on `_submit_button_state`, so
+the Submit label re-evaluates (Resubmit ⇄ Submit) without a source/model
+change. Reset only ever touches the current reviewer's own files.
+
 ### Selection-driven edits
 
 The summary plots carry `customdata=[clusterID, epoch]` on every cluster
