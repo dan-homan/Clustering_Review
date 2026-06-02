@@ -159,6 +159,26 @@ returns `(figure, beam_params)`. Layered traces in z-order (bottom to top):
    **clientside callback** so it tracks the viewport on every zoom/pan
    without a server round-trip. See "Don't / gotchas".
 
+#### Contour image source (header checkboxes)
+
+The contour background (layer 1) has three modes, in precedence order:
+
+- **Stacked image** (checkbox) — overrides everything. The epoch-averaged
+  image: every epoch's Stokes-I clean components are shifted to that epoch's
+  fitted core, accumulated on one common grid (median `pix_to_mas`), divided
+  by the epoch count, and convolved **once** with the **median beam**
+  (median `bmaj`/`bmin`/`bpa` across epochs). Built by
+  `synthesize_fits.synthesize_stacked_stokes_i` and cached per
+  `(source, model, csv_sha)` via `overlay._stacked_axes_for_bundle` since it
+  is epoch-independent. The drawn beam + `beam_params` use the median beam;
+  `cbase` uses the median `inoise`. The per-epoch cluster overlay (layers
+  2–6) still tracks the epoch slider, so you can scrub epochs against the
+  stable averaged background. (Experimental.)
+- **Use FITS images** (checkbox) — fetch the real CLEAN FITS for the epoch.
+- default — synthesize the single epoch from its clean components + own beam
+  (`synthesize_stokes_i`). Both synth paths share `_render_image` /
+  `_beam_kernel`.
+
 ### Cluster styling (ported from cluster_code.py)
 
 ```python
@@ -171,8 +191,16 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
 
 - Non-robust clusters → all slategray (`#708090`), but keep marker/fill from
   the rotation. (Original matplotlib used cyan; on a white background it
-  washed out, so the web app moved to slategray for legibility.)
-- `clusterID < 0` or `>= 1000` → black `+`, never in legend.
+  washed out, so the web app moved to slategray for legibility.) They DO
+  appear in the legend (alongside robust clusters) so they can be toggled /
+  isolated by legend click. The **Hide non-robust clusters** checkbox beside
+  the "Summary plots" header (wired to `build_summary_figure(hide_non_robust=)`)
+  drops them from both the plots and the legend. The unassigned cluster (-1)
+  is treated as non-robust for this checkbox and is hidden too; synthetic
+  (`>=1000`) clusters are unaffected. (Experimental — may be revoked.)
+- `clusterID == -1` (unassigned) → black `+`, and IS in the legend so it can
+  be toggled. `clusterID >= 1000` (synthetic) → black `+`, never in legend.
+  `_add_cluster_traces` gates legend membership on `cid == -1 or 0 <= cid < 1000`.
 - `use_in_fit == False` → black slash overlay on the marker.
 - `select == True` → gold open-diamond overlay.
 
@@ -239,8 +267,9 @@ The panel auto-saves on every field change. Read-only modes:
 - model `current`: editable, autosaves.
 - model `backup_NNN`: locked, empty (recommendations only valid against current).
 - model `Rec: <slug>`: locked, displays *that* reviewer's recommendations from
-  `<recs>/<source>/current/<slug>.json` so anyone can view another reviewer's
-  in-progress feedback.
+  `<recs>/<source>/submitted/<slug>.json` so anyone can view another reviewer's
+  submitted feedback. (Only submitted recs surface here; in-progress drafts
+  under `<source>/current/` stay private until the reviewer clicks Submit.)
 
 Visual lock = `opacity: 0.7; pointer-events: none` on the whole
 `#recommendations-panel`.
@@ -295,8 +324,9 @@ table:
 | `Rec: <slug>` | disabled, on (forced) | current + that reviewer's JSON recs applied |
 
 The model dropdown is populated by `_populate_models`: `current` + any
-`backup_*` + a `Rec: <slug>` entry per other-reviewer JSON file at
-`<recs-dir>/<source>/current/*.json` (excluding the current user's slug).
+`backup_*` + a `Rec: <slug>` entry per other-reviewer *submitted* JSON file at
+`<recs-dir>/<source>/submitted/*.json` (excluding the current user's slug).
+In-progress drafts under `<source>/current/` are never surfaced.
 
 ## Running the web app
 

@@ -57,8 +57,10 @@ def register_callbacks(
         df = bundle.cluster_df.copy()
         if (model_key or "").startswith("rec:"):
             slug = model_key[4:]
+            # Dropdown surfaces submitted recommendations only (see
+            # store.list_other_reviewer_slugs).
             rec = load_recommendation_by_slug(
-                recommendations_dir, source_name, "current", slug,
+                recommendations_dir, source_name, "submitted", slug,
             )
             if rec is not None:
                 df = apply_recommendation(df, rec)
@@ -96,7 +98,7 @@ def register_callbacks(
     # Options include:
     #   - "current"                        — the live model
     #   - "backup_NNN"                     — saved backup runs
-    #   - "rec:<slug>"                     — other reviewers' pending recommendations
+    #   - "rec:<slug>"                     — other reviewers' submitted recommendations
     #                                         applied on top of "current"
     # ``reload-counter`` is an Input so a Reload click also re-scans the
     # backups/ directory (in case a new backup landed on disk) and the
@@ -115,8 +117,10 @@ def register_callbacks(
             return [], None
         models = list_models(src)
         opts = [{"label": mf.label, "value": mf.key} for mf in models]
-        # Other reviewers' rec files at <recs>/<source>/current/<slug>.json,
-        # excluding the current user's own slug. The current user's name is
+        # Other reviewers' submitted rec files at
+        # <recs>/<source>/submitted/<slug>.json, excluding the current user's
+        # own slug (their own draft is visible via Visualize). The current
+        # user's name is
         # resolved per-request — in token-auth mode that means each user
         # sees the dropdown filtered against *their* slug, not whichever
         # one happened to be captured at app start.
@@ -137,11 +141,12 @@ def register_callbacks(
         Input("cluster-feedback-table", "data"),
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
+        Input("hide-non-robust-checkbox", "value"),
         Input("reload-counter", "data"),
     )
     def _refresh_summary(source_folder, model_key, view, vector_scale,
                          selection, visualize_val, cluster_rows, edits,
-                         no_changes_val, _reload_counter):
+                         no_changes_val, hide_non_robust_val, _reload_counter):
         if not source_folder or not model_key:
             return go.Figure()
         src = _source_from_folder(source_folder)
@@ -167,6 +172,7 @@ def register_callbacks(
         fig = build_summary_figure(
             df, view=view,
             vector_scale_factor=vector_scale or 1.0,
+            hide_non_robust=bool(hide_non_robust_val),
         )
         # Persist the user's zoom across selection clicks, visualize toggle,
         # vector scale change, edits etc. — anything that doesn't change the
@@ -295,7 +301,8 @@ def register_callbacks(
     def _populate_epoch_slider(source_folder, model_key, _reload_counter, current_val):
         if not source_folder or not model_key:
             return 0, 0, {}, 0
-        bundle = load_bundle(source_folder, model_key)
+        # rec:<slug> has no bundle of its own — its epochs are current's.
+        bundle = load_bundle(source_folder, _effective_model_for_load(model_key))
         if bundle.plotdata is None:
             return 0, 0, {}, 0
         n = len(bundle.plotdata.epoch_info)
@@ -343,7 +350,8 @@ def register_callbacks(
     def _epoch_label(source_folder, model_key, epoch_int, _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
             return ""
-        bundle = load_bundle(source_folder, model_key)
+        # rec:<slug> has no bundle of its own — its epochs are current's.
+        bundle = load_bundle(source_folder, _effective_model_for_load(model_key))
         if bundle.plotdata is None or epoch_int >= len(bundle.plotdata.epoch_info):
             return ""
         info = bundle.plotdata.epoch_info[int(epoch_int)]
@@ -362,12 +370,13 @@ def register_callbacks(
         Input("no-changes-checkbox", "value"),
         Input("show-3sigma-checkbox", "value"),
         Input("use-fits-checkbox", "value"),
+        Input("stack-image-checkbox", "value"),
         Input("overlay-reset-counter", "data"),
         Input("reload-counter", "data"),
     )
     def _refresh_overlay(source_folder, model_key, epoch_int,
                          visualize_val, cluster_rows, edits, no_changes_val,
-                         show_3sigma_val, use_fits_val, reset_counter,
+                         show_3sigma_val, use_fits_val, stacked_val, reset_counter,
                          _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
@@ -404,6 +413,7 @@ def register_callbacks(
             fits_data_dir=fits_data_dir,
             show_3sigma=bool(show_3sigma_val),
             image_source="fits" if use_fits_val else "synthesize",
+            stacked=bool(stacked_val),
             uirevision=f"overlay:{source_folder}:{model_key}:{reset_counter or 0}",
         )
 

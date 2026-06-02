@@ -87,8 +87,9 @@ def list_reviewer_files(recommendations_dir: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 # Each reviewer can have at most one submitted recommendation per source at
 # a time (resubmit overwrites). Submissions live at
-# `<recs>/<source>/submitted/<slug>.json` so they don't get picked up by the
-# multi-reviewer model dropdown (which reads from `<source>/current/`).
+# `<recs>/<source>/submitted/<slug>.json`. These are exactly what the
+# multi-reviewer model dropdown surfaces as `Rec: <slug>` entries — in-progress
+# drafts under `<source>/current/` stay private until the reviewer submits.
 
 
 def submission_path(
@@ -144,15 +145,17 @@ def save_submitted(
 
 # ---------------------------------------------------------------------------
 # Multi-reviewer support — used by the model dropdown to show "Rec: <slug>"
-# entries from other reviewers' files in <recs>/<source>/current/.
+# entries from other reviewers' submitted files in <recs>/<source>/submitted/.
 # ---------------------------------------------------------------------------
 
 
 def list_other_reviewer_slugs(
     recommendations_dir: Path, source: str, exclude_slug: str,
 ) -> list[str]:
-    """Reviewer slugs (filename stems) with a recommendation for source/current."""
-    p = recommendations_dir / source / "current"
+    """Reviewer slugs (filename stems) with a *submitted* recommendation for
+    this source. Only submissions are surfaced — in-progress drafts under
+    `<source>/current/` stay private until the reviewer clicks Submit."""
+    p = recommendations_dir / source / "submitted"
     if not p.is_dir():
         return []
     return sorted(

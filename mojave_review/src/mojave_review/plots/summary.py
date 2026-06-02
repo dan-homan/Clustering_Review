@@ -173,15 +173,21 @@ def _add_cluster_traces(
     color, symbol, filled = _cluster_style(s.cid, s.robust)
     marker = _marker_style(color, symbol, filled)
 
+    # Which clusters get a legend entry. Robust and non-robust clusters both
+    # appear (so they can be toggled/isolated by legend click), and the
+    # unassigned cluster (-1, the black "+") is included too. Only synthetic
+    # clusters (>=1000) stay out of the legend.
+    in_legend = s.cid == -1 or 0 <= s.cid < 1000
+
     fig.add_trace(
         go.Scattergl(
             x=s.time, y=ydata,
             mode="lines+markers",
             line={"color": color, "width": 1, "dash": "dot"},
             marker=marker,
-            name=str(s.cid) if s.robust and s.cid >= 0 else None,
+            name=str(s.cid) if in_legend else None,
             legendgroup=f"cid_{s.cid}",
-            showlegend=show_legend and s.robust and 0 <= s.cid < 1000,
+            showlegend=show_legend and in_legend,
             customdata=_customdata(s),
             hovertemplate=(
                 f"cluster %{{customdata[0]:.0f}}<br>"
@@ -294,12 +300,17 @@ def build_summary_figure(
     z: float = 0.0,
     flux_threshold: float = 0.0,
     vector_scale_factor: float = 1.0,
+    hide_non_robust: bool = False,
 ) -> go.Figure:
     """Build a 2-row (top/bottom) summary figure for one of the four views.
 
     `vector_scale_factor` multiplies the auto-computed arrow length in the
     Kinematics view. 1.0 = default; <1 shrinks, >1 enlarges. Ignored by other
     views.
+
+    `hide_non_robust` drops the non-robust (slategray) clusters from both the
+    plots and the legend. The unassigned cluster (-1) is treated as non-robust
+    here and is hidden too; synthetic (>=1000) clusters are NOT affected.
     """
     if view not in VIEWS:
         view = "Position"
@@ -327,6 +338,14 @@ def build_summary_figure(
 
     shift_pa = _shift_pa_flag(cluster_df)
     slices = _build_slices(cluster_df, z=z, shift_pa=shift_pa, flux_threshold=flux_threshold)
+
+    if hide_non_robust:
+        # "Non-robust" = the slategray clusters (robust False, normal cid),
+        # plus the unassigned cluster (-1), which is treated as non-robust
+        # for this purpose. Robust clusters and synthetic (>=1000) are kept.
+        def _is_non_robust(s: _Slice) -> bool:
+            return s.cid == -1 or (not s.robust and 0 <= s.cid < 1000)
+        slices = [s for s in slices if not _is_non_robust(s)]
 
     # Per-cluster motion fits — used by Position (overlay line) and Kinematics
     motion_fits = {s.cid: _motion_fit(s) for s in slices}

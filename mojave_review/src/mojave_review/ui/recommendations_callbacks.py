@@ -452,7 +452,7 @@ def register(
             slug = model_key[4:]
             bundle = load_bundle(source_folder, "current")
             rec = load_recommendation_by_slug(
-                recommendations_dir, bundle.source.source, "current", slug,
+                recommendations_dir, bundle.source.source, "submitted", slug,
             )
             if rec is None:
                 # Stale dropdown entry — file was removed. Show a hint.

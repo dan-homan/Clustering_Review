@@ -96,6 +96,11 @@ absolute paths for `--results-dir` and `--recommendations-dir`.
 - Browse sources, switch between `current` and any `backup_NNN`.
 - View summary plots (Position / Flux / Polarization / Kinematics) and
   the per-epoch FITS overlay side-by-side.
+- Switch the overlay's contour background between the per-epoch image,
+  the real CLEAN **FITS** image, or a **Stacked image** (all epochs
+  averaged and convolved with the median beam) via the header checkboxes.
+  Hide non-robust clusters from the summary plots with the checkbox beside
+  "Summary plots".
 - Click summary-plot points (or box/lasso-select) to mark them for
   edits, then turn the selection into structured recommendations
   (`change_clusterID`, `set_use_in_fit`) from the Edits tab.

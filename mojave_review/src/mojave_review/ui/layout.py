@@ -111,6 +111,21 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                                "fontSize": "0.9em",
                                "color": "#444"},
                     ),
+                    # Replace the single-epoch contour background with the
+                    # epoch-averaged "stacked" image (all epochs' clean
+                    # components / N, convolved with the median beam). The
+                    # per-epoch cluster overlay still tracks the slider.
+                    # Overrides "Use FITS images" when both are ticked.
+                    dcc.Checklist(
+                        id="stack-image-checkbox",
+                        options=[{"label": " Stacked image",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1em",
+                               "fontSize": "0.9em",
+                               "color": "#444"},
+                    ),
                 ],
                 style={"display": "flex", "alignItems": "center", "marginTop": "0.5em"},
             ),
@@ -141,7 +156,24 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
 
     summary_panel = html.Div(
         [
-            html.H4("Summary plots", style={"margin": "0.25em 0"}),
+            html.Div(
+                [
+                    html.H4("Summary plots", style={"margin": "0.25em 0"}),
+                    # Hide the non-robust (slategray) clusters from both the
+                    # plots and the legend. Unassigned (-1) / synthetic
+                    # (>=1000) clusters are unaffected.
+                    dcc.Checklist(
+                        id="hide-non-robust-checkbox",
+                        options=[{"label": " Hide non-robust clusters",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1.5em", "fontSize": "0.85em",
+                               "color": "#444"},
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center"},
+            ),
             vector_scale_row,
             dcc.Loading(
                 dcc.Graph(

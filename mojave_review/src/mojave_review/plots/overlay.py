@@ -15,6 +15,7 @@ contours.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -417,6 +418,28 @@ def build_overlay_figure(
 # ---------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=8)
+def _stacked_axes_for_bundle(folder: str, model_key: str, csv_sha: str):
+    """Cached stacked Stokes-I image for a (source, model) bundle.
+
+    Keyed on the CSV content hash (``csv_sha``) so it invalidates when the
+    CSV changes (e.g. after ``mojave-apply``). The stacked image is
+    independent of the selected epoch, so caching keeps epoch-scrubbing
+    snappy. Returns ``(EpochAxes, (bmaj, bmin, bpa))`` (median beam) or
+    ``None`` when the bundle has no plotdata to stack.
+    """
+    from ..data.loader import load_bundle
+    from .synthesize_fits import synthesize_stacked_stokes_i
+    b = load_bundle(folder, model_key)
+    if b.plotdata is None:
+        return None
+    return synthesize_stacked_stokes_i(
+        cluster_df=b.cluster_df,
+        cc_data=b.plotdata.cc_data,
+        epoch_info=b.plotdata.epoch_info,
+    )
+
+
 def overlay_figure_for_epoch(
     bundle,
     epoch_int: int,
@@ -426,6 +449,7 @@ def overlay_figure_for_epoch(
     fits_data_dir: Path | None = None,
     show_3sigma: bool = False,
     image_source: ImageSource = "synthesize",
+    stacked: bool = False,
     uirevision: str = "overlay",
 ) -> tuple[go.Figure, dict | None]:
     """Higher-level wrapper: prepares the Stokes I image (either by
@@ -445,6 +469,14 @@ def overlay_figure_for_epoch(
       - ``"fits"``: fetch the CLEAN FITS image from the local data dir /
         on-disk cache / NRAO archive. Include this when residual-noise
         structure matters.
+
+    ``stacked``: when True, the contour background is the epoch-averaged
+    stacked image (all epochs' clean components, divided by the epoch count,
+    convolved with the median beam) instead of the single-epoch image, and
+    the drawn beam is the median beam. Overrides ``image_source``. The
+    per-epoch cluster overlay (CC scatter, ellipses, labels) still follows
+    ``epoch_int`` so the reviewer can scrub epochs against the stable
+    averaged background.
     """
     if bundle.plotdata is None:
         return _empty_overlay(
@@ -472,7 +504,28 @@ def overlay_figure_for_epoch(
     # the title so the reviewer always knows when they're looking at the
     # CLEAN restored image (residual noise sea included) vs the synthesized
     # one (clean components convolved with the restoring beam).
-    if image_source == "fits":
+    # Beam + noise default to this epoch's values; the stacked branch swaps
+    # in the median beam and median noise across all epochs.
+    beam_bmaj = float(info["bmaj"])
+    beam_bmin = float(info["bmin"])
+    beam_bpa = float(info["bpa"])
+    inoise_use = float(info["inoise"])
+
+    if stacked:
+        # Stacked image overrides image_source — it is always built from the
+        # clean components (convolved with the median beam), never FITS.
+        result = _stacked_axes_for_bundle(
+            str(bundle.source.folder), bundle.model.key, bundle.csv_sha)
+        if result is None:
+            return _empty_overlay(
+                "Stacked image needs plotdata, which this model lacks."
+            ), None
+        epoch_axes, (beam_bmaj, beam_bmin, beam_bpa) = result
+        # Median noise across epochs sets the contour base for the average.
+        inoise_use = float(np.median(pd_.epoch_info["inoise"]))
+        image_source_label = (f"Stacked image · {len(pd_.epoch_info)} epochs "
+                              "· median beam")
+    elif image_source == "fits":
         ref = FitsRef(
             source_no_band=source_no_band,
             band=str(info["band"]) or band,
@@ -507,10 +560,10 @@ def overlay_figure_for_epoch(
         cc_labels=pd_.cc_labels,
         epoch_val=epoch_val,
         epoch_name=epoch_name,
-        inoise=float(info["inoise"]),
-        bmaj=float(info["bmaj"]),
-        bmin=float(info["bmin"]),
-        bpa=float(info["bpa"]),
+        inoise=inoise_use,
+        bmaj=beam_bmaj,
+        bmin=beam_bmin,
+        bpa=beam_bpa,
         show_3sigma=show_3sigma,
         image_source_label=image_source_label,
         uirevision=uirevision,
@@ -533,9 +586,9 @@ def overlay_figure_for_epoch(
         x_lo_e, x_hi_e = float(x_arr.min()), float(x_arr.max())
         y_lo_e, y_hi_e = float(y_arr.min()), float(y_arr.max())
     beam_params = {
-        "bmaj": float(info["bmaj"]),
-        "bmin": float(info["bmin"]),
-        "bpa": float(info["bpa"]),
+        "bmaj": beam_bmaj,
+        "bmin": beam_bmin,
+        "bpa": beam_bpa,
         "beam_idx": int(beam_idx),
         "x_extent": [x_lo_e, x_hi_e],
         "y_extent": [y_lo_e, y_hi_e],
