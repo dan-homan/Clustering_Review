@@ -419,7 +419,20 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
   this. Returning a modified figure breaks `uirevision`-driven zoom
   persistence across server callbacks — Dash treats it as a fresh
   figure replacement and resets the user's zoom. See the comment block
-  near the clientside callback for the full story.
+  near the clientside callback for the full story. The callback resolves
+  the beam trace **by name** (not by the stored `beam_idx`) so a stale
+  index can't restyle a non-beam trace.
+- **Every overlay trace carries a stable identity-based `uid`** (`contour`,
+  `cc:<lbl>`, `fwhm:<cid>`, `sig3:<cid>`, `txt:<cid>`, `core`, `beam`).
+  `Plotly.react` matches traces across figure updates by `uid` when present,
+  else by array index. The overlay's trace count/order varies per epoch
+  (different cluster sets), so without uids react mis-matches by position —
+  on some epoch changes a trace at an index changes type (CC scatter ↔
+  ellipse) and react fails to morph it cleanly, leaving a stale/blank feature
+  until a full redraw. That was the intermittent "missing overlay, fixed by
+  Reset view" symptom. CC uids key on the original CC **label**, not
+  `clusterID` (which can repeat after a merge → duplicate uids). Reset view
+  stays as the manual escape hatch.
 - **Dash's `assets_folder` defaults to `./assets`** relative to CWD, not
   the package install dir. `app.py` explicitly sets
   `assets_folder=<package-dir>/assets` so `pip install` ships the JS/CSS.
