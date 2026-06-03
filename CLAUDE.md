@@ -443,6 +443,46 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
   recommendation panel applies an opacity/pointer-events lock and the
   autosave skips when `model_key != "current"`.
 
+## Known issues (open)
+
+### Intermittent: epochs vanish from the overlay timeline
+
+**Symptom (reviewer-reported, 2026-06):** in the right-hand epoch overlay,
+*entire epochs intermittently disappear from the timeline* — the ◀ / ▶
+(`epoch-prev` / `epoch-next`) buttons step **past** them as if they were
+never there (not a blank image — the epoch itself is absent from the
+sequence). Intermittent: sometimes the missing epochs reappear on their
+own, sometimes **Reset view** (`overlay-reset`, which bumps
+`overlay-reset-counter` → changes the overlay `uirevision` → full redraw)
+brings them back.
+
+**This is NOT a contour/trace-render problem.** Earlier work mis-read it as
+"the image fails to render" and tried giving overlay traces stable `uid`s —
+that BACKFIRED badly: a `uid` on the contour + plotly 6's base64-encoded
+`z` made `Plotly.react` skip the contour redraw, freezing the image on the
+first epoch for every source. That fix was reverted (`git revert` of the
+uid commit). **Do not re-attempt the uid approach on the contour.**
+
+**Where to look next** (the symptom is about the *set of epochs / the
+slider*, not trace drawing):
+- `ui/callbacks._populate_epoch_slider` — sets the slider `min/max/marks`
+  from `len(bundle.plotdata.epoch_info)`; if `n` is intermittently short,
+  epochs are skipped. It preserves the current slider value across
+  re-fires; a stale/short `max` would strand the user.
+- `ui/callbacks._step_epoch` — ◀/▶ do `value ± 1` clamped to slider
+  `min/max` (read as **State**). If the slider's `max`/`marks` State is
+  stale when the button fires, stepping math is off.
+- Bundle caching: `data/loader.load_bundle` / `_load_bundle_cached`
+  (`lru_cache`) keyed on file fingerprints — could a stale/short
+  `epoch_info` be served intermittently?
+- The slider `marks` are built one-every-~6-epochs; confirm whether
+  "missing from the timeline" means missing **marks** vs missing **slider
+  positions** vs the overlay skipping an index.
+Capture, when it happens: which source, the slider `min/max/value`, and
+`len(epoch_info)` vs the number of epochs actually reachable.
+
+Reset view stays the working manual recovery; leave it in place.
+
 ## Useful local commands
 
 ```bash
