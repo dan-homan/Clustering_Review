@@ -133,6 +133,40 @@ def _ellipse_xy(cx: float, cy: float, major: float, minor: float,
     return x, y
 
 
+def _contour_polylines(
+    image: np.ndarray, x_mas: np.ndarray, y_mas: np.ndarray,
+    cbase: float, n_levels: int,
+) -> tuple[list[float], list[float]]:
+    """Contour line vertices at levels ``cbase * 2**n`` (n = 0..n_levels),
+    returned as one (xs, ys) pair with NaN breaks between separate polylines.
+
+    Using contourpy (matplotlib's contouring engine) lets us ship a few
+    thousand line vertices per epoch instead of the full z grid (~hundreds of
+    KB). The levels match the old ``go.Contour`` on ``log2(z/cbase)`` with
+    unit steps, i.e. z = cbase, 2·cbase, 4·cbase, … (factor-of-2 contours).
+    """
+    import contourpy  # local import: keeps module import light
+    gen = contourpy.contour_generator(
+        x=np.asarray(x_mas, dtype=float),
+        y=np.asarray(y_mas, dtype=float),
+        z=np.asarray(image, dtype=float),
+        line_type=contourpy.LineType.Separate,
+    )
+    xs: list[float] = []
+    ys: list[float] = []
+    nan = float("nan")
+    for n in range(0, n_levels + 1):
+        level = cbase * (2.0 ** n)
+        for line in gen.lines(level):       # list of (M, 2) arrays
+            if line.shape[0] == 0:
+                continue
+            xs.extend(line[:, 0].tolist())
+            xs.append(nan)                  # pen-up between polylines
+            ys.extend(line[:, 1].tolist())
+            ys.append(nan)
+    return xs, ys
+
+
 def build_overlay_figure(
     *,
     epoch_axes: EpochAxes,
@@ -179,17 +213,19 @@ def build_overlay_figure(
 
     # The CLEAN image is already convolved with the restoring beam; do NOT
     # apply additional smoothing here — it would blur real structure.
-    log_z = np.log2(np.maximum(ax.image, cbase) / cbase)
-
+    #
+    # Render the contour as line POLYLINES (one go.Scatter) rather than a
+    # go.Contour over the full z grid. The grid is ~hundreds of KB of floats
+    # per epoch (the dominant callback payload); the polylines are a few
+    # thousand vertices, which makes epoch-switching far cheaper over the
+    # network. Levels are unchanged: cbase × 2ⁿ for n = 0..n_levels.
+    cxs, cys = _contour_polylines(ax.image, ax.x_mas, ax.y_mas, cbase, n_levels)
     fig = go.Figure()
     fig.add_trace(
-        go.Contour(
-            z=log_z, x=ax.x_mas, y=ax.y_mas,
-            contours=dict(coloring="lines", start=0, end=n_levels, size=1,
-                          showlabels=False),
-            line=dict(width=1, color="#444", smoothing=1.0),
-            colorscale=[[0, "#444"], [1, "#444"]],
-            showscale=False, hoverinfo="skip",
+        go.Scatter(
+            x=cxs, y=cys, mode="lines",
+            line=dict(width=1, color="#444"),
+            name="contour", showlegend=False, hoverinfo="skip",
         )
     )
 
@@ -580,11 +616,13 @@ def overlay_figure_for_epoch(
     if extent is not None:
         (x_lo_e, x_hi_e), (y_lo_e, y_hi_e) = extent
     else:
+        # Fallback to the contour polyline extent (NaN-broken between
+        # polylines, so use nan-aware min/max).
         contour = fig.data[0]
         x_arr = np.asarray(contour.x, dtype=float)
         y_arr = np.asarray(contour.y, dtype=float)
-        x_lo_e, x_hi_e = float(x_arr.min()), float(x_arr.max())
-        y_lo_e, y_hi_e = float(y_arr.min()), float(y_arr.max())
+        x_lo_e, x_hi_e = float(np.nanmin(x_arr)), float(np.nanmax(x_arr))
+        y_lo_e, y_hi_e = float(np.nanmin(y_arr)), float(np.nanmax(y_arr))
     beam_params = {
         "bmaj": beam_bmaj,
         "bmin": beam_bmin,

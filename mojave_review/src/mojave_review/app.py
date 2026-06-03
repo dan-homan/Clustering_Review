@@ -56,6 +56,20 @@ def create_app(
         suppress_callback_exceptions=True,
         assets_folder=_PACKAGE_ASSETS,
     )
+
+    # gzip every response, including the /_dash-update-component callback
+    # payloads. The overlay figure is ~hundreds of KB of float/JSON per epoch;
+    # uncompressed that dominates the felt latency when scrubbing epochs over a
+    # network. gzip typically cuts it 3-5x. The laptop deploy is gunicorn with
+    # no reverse proxy, so nothing else compresses; on the university nginx
+    # host this is harmless (nginx won't re-gzip an already-gzipped response).
+    # Soft dependency: skip gracefully if flask-compress isn't installed yet
+    # (e.g. an env that hasn't `pip install -e .`'d since this landed).
+    try:
+        from flask_compress import Compress
+        Compress(app.server)
+    except Exception:
+        pass
     # Dynamic layout: re-rendered on every /_dash-layout fetch (typically
     # once per page load). Inside a Flask request context the layout
     # reads ``flask.g.reviewer`` via current_reviewer(); outside one
