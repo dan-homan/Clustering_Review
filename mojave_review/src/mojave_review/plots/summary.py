@@ -45,7 +45,7 @@ _CL_FILL = ["none", "full", "none", "none", "full", "none", "full", "none", "ful
 
 _FREQ_GHZ = 15.4  # U-band
 
-VIEWS = ("Position", "Flux", "Polarization", "Kinematics", "XY Position")
+VIEWS = ("Position", "XY Position", "Flux", "Polarization", "Kinematics")
 
 
 def _cluster_style(cid: int, robust: bool) -> tuple[str, str, bool]:

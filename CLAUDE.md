@@ -114,10 +114,10 @@ views, and a **single-plot** figure for `XY Position`:
 | View | Top | Bottom |
 |---|---|---|
 | Position | distance vs epoch (+ polyfit overlay), 1σ error bars | PA vs epoch, 1σ error bars |
+| XY Position | *(single plot)* per-cluster centroid track in (x,y) mas vs core, +x reversed, equal scale, 1σ x/y error bars | — |
 | Flux | log₁₀(I flux) vs epoch | log₁₀(Tb) vs epoch (15.4 GHz, z param) |
 | Polarization | log₁₀(P flux) vs epoch | EVPA vs epoch |
 | Kinematics | speed vs distance | X/Y velocity vectors w/ arrowheads, +x reversed |
-| XY Position | *(single plot)* per-cluster centroid track in (x,y) mas vs core, +x reversed, equal scale, 1σ x/y error bars | — |
 
 The 1σ error bars on Position / XY Position come from
 `plots/uncertainty.attach_position_uncertainties` (CC-derived `sig_dx/sig_dy/

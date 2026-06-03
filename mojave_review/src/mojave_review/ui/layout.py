@@ -58,8 +58,8 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                     dcc.RadioItems(
                         id="view-picker",
                         options=[{"label": v, "value": v}
-                                 for v in ("Position", "Flux", "Polarization",
-                                           "Kinematics", "XY Position")],
+                                 for v in ("Position", "XY Position", "Flux",
+                                           "Polarization", "Kinematics")],
                         value="Position",
                         inline=True,
                         inputStyle={"marginRight": "0.25em", "marginLeft": "0.5em"},
