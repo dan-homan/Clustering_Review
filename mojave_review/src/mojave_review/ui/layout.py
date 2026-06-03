@@ -58,7 +58,8 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                     dcc.RadioItems(
                         id="view-picker",
                         options=[{"label": v, "value": v}
-                                 for v in ("Position", "Flux", "Polarization", "Kinematics")],
+                                 for v in ("Position", "Flux", "Polarization",
+                                           "Kinematics", "XY Position")],
                         value="Position",
                         inline=True,
                         inputStyle={"marginRight": "0.25em", "marginLeft": "0.5em"},
@@ -72,23 +73,12 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                         id="visualize-checkbox",
                         options=[{"label": " Visualize recommendations",
                                   "value": "yes"}],
-                        value=[],
+                        # Default ON: reviewers almost always want to see their
+                        # in-progress edits applied. No-op when there are no
+                        # recommendations yet.
+                        value=["yes"],
                         inputStyle={"marginRight": "0.3em"},
                         style={"marginLeft": "1.5em",
-                               "fontSize": "0.9em",
-                               "color": "#444"},
-                    ),
-                    # Toggles the dotted 3σ inclusion outlines + light fill
-                    # on each cluster in the overlay panel. Default OFF —
-                    # reviewers can turn them on when they want to inspect
-                    # cluster reach.
-                    dcc.Checklist(
-                        id="show-3sigma-checkbox",
-                        options=[{"label": " Show 3σ outlines",
-                                  "value": "yes"}],
-                        value=[],
-                        inputStyle={"marginRight": "0.3em"},
-                        style={"marginLeft": "1em",
                                "fontSize": "0.9em",
                                "color": "#444"},
                     ),

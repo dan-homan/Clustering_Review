@@ -157,6 +157,22 @@ def register_callbacks(
             visualize_val=visualize_val, cluster_rows=cluster_rows,
             edits=edits, no_changes_val=no_changes_val,
         )
+        # 1-sigma centroid-position uncertainties from the clean components,
+        # for error bars on the Position / XY Position views (other views
+        # don't use them, so skip the work). Computed on the plotted
+        # (rec-applied) df so CC→cluster membership matches what's shown.
+        # Decoration only — never break the plot.
+        if view in ("Position", "XY Position"):
+            try:
+                eff_bundle = load_bundle(
+                    source_folder, _effective_model_for_load(model_key))
+                if eff_bundle.plotdata is not None:
+                    from ..plots.uncertainty import attach_position_uncertainties
+                    df = attach_position_uncertainties(
+                        df, eff_bundle.plotdata.cc_data,
+                        eff_bundle.plotdata.cc_labels)
+            except Exception:
+                pass
         # Apply the user's current selection to the dataframe so the existing
         # gold open-diamond overlay highlights the chosen points across views.
         df["select"] = False
@@ -368,7 +384,6 @@ def register_callbacks(
         Input("cluster-feedback-table", "data"),
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
-        Input("show-3sigma-checkbox", "value"),
         Input("use-fits-checkbox", "value"),
         Input("stack-image-checkbox", "value"),
         Input("overlay-reset-counter", "data"),
@@ -376,7 +391,7 @@ def register_callbacks(
     )
     def _refresh_overlay(source_folder, model_key, epoch_int,
                          visualize_val, cluster_rows, edits, no_changes_val,
-                         show_3sigma_val, use_fits_val, stacked_val, reset_counter,
+                         use_fits_val, stacked_val, reset_counter,
                          _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
@@ -411,7 +426,6 @@ def register_callbacks(
             bundle, int(epoch_int), cache_dir,
             source_no_band=source_no_band, band=band,
             fits_data_dir=fits_data_dir,
-            show_3sigma=bool(show_3sigma_val),
             image_source="fits" if use_fits_val else "synthesize",
             stacked=bool(stacked_val),
             uirevision=f"overlay:{source_folder}:{model_key}:{reset_counter or 0}",

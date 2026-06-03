@@ -108,14 +108,23 @@ The web app fetches these on demand and caches under
 
 ## Web app: views and conventions
 
-`build_summary_figure(view=...)` produces a 2-row figure for one of:
+`build_summary_figure(view=...)` produces a 2-row figure for the first four
+views, and a **single-plot** figure for `XY Position`:
 
 | View | Top | Bottom |
 |---|---|---|
-| Position | distance vs epoch (+ polyfit overlay) | PA vs epoch |
+| Position | distance vs epoch (+ polyfit overlay), 1σ error bars | PA vs epoch, 1σ error bars |
 | Flux | log₁₀(I flux) vs epoch | log₁₀(Tb) vs epoch (15.4 GHz, z param) |
 | Polarization | log₁₀(P flux) vs epoch | EVPA vs epoch |
 | Kinematics | speed vs distance | X/Y velocity vectors w/ arrowheads, +x reversed |
+| XY Position | *(single plot)* per-cluster centroid track in (x,y) mas vs core, +x reversed, equal scale, 1σ x/y error bars | — |
+
+The 1σ error bars on Position / XY Position come from
+`plots/uncertainty.attach_position_uncertainties` (CC-derived `sig_dx/sig_dy/
+sig_dist/sig_pa` columns); see [`docs/uncertainty_estimates.md`](docs/uncertainty_estimates.md).
+The **Visualize recommendations** checkbox defaults ON. (The old "Show 3σ
+outlines" checkbox was removed; the 3σ-drawing code remains in
+`overlay.build_overlay_figure` behind `show_3sigma=False`, just no UI toggle.)
 
 ### Plotting conventions (always apply to spatial / sky plots)
 
@@ -154,6 +163,8 @@ returns `(figure, beam_params)`. Layered traces in z-order (bottom to top):
    `cc_labels` mapped through `origID → clusterID`).
 3. Per-cluster 3σ inclusion ellipse: `2.548 × FWHM`, dotted outline,
    `rgba(<cluster>, 0.04)` fill — drawn first so the FWHM layers on top.
+   Gated by `show_3sigma` (default False, no UI toggle since the checkbox
+   was removed).
 4. Per-cluster FWHM ellipse: solid outline, `rgba(<cluster>, 0.15)` fill.
 5. Black-text cluster numbers at each cluster center (skipped for the
    core).

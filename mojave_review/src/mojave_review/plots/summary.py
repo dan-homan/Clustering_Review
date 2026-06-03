@@ -45,7 +45,7 @@ _CL_FILL = ["none", "full", "none", "none", "full", "none", "full", "none", "ful
 
 _FREQ_GHZ = 15.4  # U-band
 
-VIEWS = ("Position", "Flux", "Polarization", "Kinematics")
+VIEWS = ("Position", "Flux", "Polarization", "Kinematics", "XY Position")
 
 
 def _cluster_style(cid: int, robust: bool) -> tuple[str, str, bool]:
@@ -80,6 +80,12 @@ class _Slice:
     tb_obs: np.ndarray
     use_in_fit: np.ndarray
     selected: np.ndarray
+    # 1-sigma position uncertainties (NaN where unavailable); see
+    # plots/uncertainty.py + docs/uncertainty_estimates.md.
+    sig_dx: np.ndarray
+    sig_dy: np.ndarray
+    sig_dist: np.ndarray
+    sig_pa: np.ndarray
 
 
 def _dewrap(arr: np.ndarray, period: float, jump: float) -> np.ndarray:
@@ -138,11 +144,17 @@ def _build_slices(df: pd.DataFrame, z: float, shift_pa: bool,
         selected = (sub["select"].to_numpy(dtype=bool)
                     if "select" in sub.columns else np.zeros_like(use_in_fit, dtype=bool))
 
+        def _col(name: str) -> np.ndarray:
+            return (sub[name].to_numpy(dtype=float)
+                    if name in sub.columns else np.full(len(sub), np.nan))
+
         out.append(_Slice(
             cid=int(cid), robust=robust, time=time,
             xpos=xpos, ypos=ypos, dist=dist, pa=pa, size=size,
             flux=flux, pflux=pflux, evpa=evpa, tb_obs=tb_obs,
             use_in_fit=use_in_fit, selected=selected,
+            sig_dx=_col("sig_dx"), sig_dy=_col("sig_dy"),
+            sig_dist=_col("sig_dist"), sig_pa=_col("sig_pa"),
         ))
     return out
 
@@ -173,10 +185,28 @@ def _customdata(s: _Slice) -> list[list[float]]:
     return [[int(s.cid), float(t)] for t in s.time]
 
 
+def _err_dict(arr: np.ndarray | None, color: str) -> dict | None:
+    """Build a Plotly error-bar spec from a 1-sigma array, or None.
+
+    Non-finite entries become JSON null (no bar for that point). Returns None
+    when there's nothing to draw, so the trace carries no error_x/error_y.
+    Values are plain Python lists (not numpy) — same plotly-6 typed-array
+    hygiene as customdata, though error arrays aren't read back server-side.
+    """
+    if arr is None:
+        return None
+    vals = [float(v) if (v is not None and np.isfinite(v)) else None
+            for v in np.asarray(arr, dtype=float)]
+    if all(v is None for v in vals):
+        return None
+    return dict(type="data", array=vals, visible=True,
+                thickness=1, width=0, color=color)
+
+
 def _add_cluster_traces(
     fig: go.Figure, s: _Slice, row: int, col: int, ydata: np.ndarray,
     show_legend: bool, show_fit: np.ndarray | None = None,
-    ylabel_for_hover: str = "y",
+    ylabel_for_hover: str = "y", error_y_arr: np.ndarray | None = None,
 ) -> None:
     color, symbol, filled = _cluster_style(s.cid, s.robust)
     marker = _marker_style(color, symbol, filled)
@@ -193,6 +223,7 @@ def _add_cluster_traces(
             mode="lines+markers",
             line={"color": color, "width": 1, "dash": "dot"},
             marker=marker,
+            error_y=_err_dict(error_y_arr, color),
             name=str(s.cid) if in_legend else None,
             legendgroup=f"cid_{s.cid}",
             showlegend=show_legend and in_legend,
@@ -244,6 +275,60 @@ def _add_cluster_traces(
             go.Scatter(
                 x=s.time, y=show_fit, mode="lines",
                 line={"color": color, "width": 1, "dash": "dot"},
+                showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
+            ),
+            row=row, col=col,
+        )
+
+
+def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
+                   show_legend: bool) -> None:
+    """XY Position view: one cluster's centroid track in (x, y) mas relative
+    to the core, with 1-sigma x/y error bars. Mirrors _add_cluster_traces'
+    legend / selection / use-in-fit conventions but plots xpos vs ypos."""
+    color, symbol, filled = _cluster_style(s.cid, s.robust)
+    marker = _marker_style(color, symbol, filled)
+    in_legend = s.cid == -1 or 0 <= s.cid < 1000
+
+    fig.add_trace(
+        go.Scatter(
+            x=s.xpos, y=s.ypos,
+            mode="lines+markers",
+            line={"color": color, "width": 1, "dash": "dot"},
+            marker=marker,
+            error_x=_err_dict(s.sig_dx, color),
+            error_y=_err_dict(s.sig_dy, color),
+            name=str(s.cid) if in_legend else None,
+            legendgroup=f"cid_{s.cid}",
+            showlegend=show_legend and in_legend,
+            customdata=_customdata(s),
+            hovertemplate=(
+                "cluster %{customdata[0]:.0f}<br>"
+                "epoch %{customdata[1]:.4f}<br>"
+                "x %{x:.3f} mas<br>y %{y:.3f} mas<extra></extra>"
+            ),
+        ),
+        row=row, col=col,
+    )
+
+    excl = ~s.use_in_fit
+    if np.any(excl):
+        fig.add_trace(
+            go.Scatter(
+                x=s.xpos[excl], y=s.ypos[excl], mode="markers",
+                marker={"color": "black", "symbol": "line-ne",
+                        "size": 12, "line": {"width": 2, "color": "black"}},
+                showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
+            ),
+            row=row, col=col,
+        )
+
+    if np.any(s.selected):
+        fig.add_trace(
+            go.Scatter(
+                x=s.xpos[s.selected], y=s.ypos[s.selected], mode="markers",
+                marker={"color": "gold", "symbol": "circle-open",
+                        "size": 22, "line": {"width": 3, "color": "gold"}},
                 showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
             ),
             row=row, col=col,
@@ -323,18 +408,25 @@ def build_summary_figure(
     if view not in VIEWS:
         view = "Position"
 
-    titles = {
-        "Position":     ("Distance from origin [mas]", "Position angle [deg]"),
-        "Flux":         ("log10(I flux density) [Jy]", "log10(Tb obs) [K]"),
-        "Polarization": ("log10(Polarized flux) [Jy]", "EVPA [deg]"),
-        "Kinematics":   ("Apparent speed vs distance", "X/Y velocity vectors"),
-    }[view]
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=False,
-        subplot_titles=titles,
-        vertical_spacing=0.10,
-    )
+    # XY Position is a single plot; the other four views are top/bottom pairs.
+    is_xy = view == "XY Position"
+    if is_xy:
+        fig = make_subplots(
+            rows=1, cols=1,
+            subplot_titles=("XY position relative to core [mas]",),
+        )
+    else:
+        titles = {
+            "Position":     ("Distance from origin [mas]", "Position angle [deg]"),
+            "Flux":         ("log10(I flux density) [Jy]", "log10(Tb obs) [K]"),
+            "Polarization": ("log10(Polarized flux) [Jy]", "EVPA [deg]"),
+            "Kinematics":   ("Apparent speed vs distance", "X/Y velocity vectors"),
+        }[view]
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=False,
+            subplot_titles=titles,
+            vertical_spacing=0.10,
+        )
 
     if cluster_df.empty:
         fig.update_layout(
@@ -366,12 +458,13 @@ def build_summary_figure(
                     fig, s, row=1, col=1, ydata=s.dist,
                     show_legend=True,
                     show_fit=mf.pred_dist if mf is not None else None,
-                    ylabel_for_hover="dist",
+                    ylabel_for_hover="dist", error_y_arr=s.sig_dist,
                 )
             if s.cid > 0:
                 _add_cluster_traces(
                     fig, s, row=2, col=1, ydata=s.pa,
                     show_legend=False, ylabel_for_hover="PA",
+                    error_y_arr=s.sig_pa,
                 )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_xaxes(title_text="Epoch", row=2, col=1)
@@ -432,6 +525,45 @@ def build_summary_figure(
         fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
                          scaleanchor="x2", scaleratio=1.0,
                          constrain="domain")
+
+    elif view == "XY Position":
+        # Per-cluster centroid track in (x, y) mas relative to the core, with
+        # 1-sigma x/y error bars. Skip unassigned (-1, NaN positions) and the
+        # core (cid 0, the origin — marked by the × below).
+        all_x: list[float] = [0.0]
+        all_y: list[float] = [0.0]
+        for s in slices:
+            if s.cid < 1:
+                continue
+            _add_xy_traces(fig, s, row=1, col=1, show_legend=True)
+            all_x.extend(float(v) for v in s.xpos if np.isfinite(v))
+            all_y.extend(float(v) for v in s.ypos if np.isfinite(v))
+        # Black × at the core (0, 0).
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0], y=[0.0], mode="markers",
+                marker={"color": "black", "symbol": "x-thin", "size": 14,
+                        "line": {"width": 2, "color": "black"}},
+                name="core", showlegend=False,
+                hovertemplate="core (0, 0)<extra></extra>",
+            ),
+            row=1, col=1,
+        )
+        ax = np.asarray(all_x, dtype=float)
+        ay = np.asarray(all_y, dtype=float)
+        x_span = float(ax.max() - ax.min()) or 1.0
+        y_span = float(ay.max() - ay.min()) or 1.0
+        x_lo = float(ax.min()) - 0.1 * x_span
+        x_hi = float(ax.max()) + 0.1 * x_span
+        y_lo = float(ay.min()) - 0.1 * y_span
+        y_hi = float(ay.max()) + 0.1 * y_span
+        # +x to the left (astro convention) + equal mas/pixel scale, matching
+        # the overlay panel.
+        fig.update_xaxes(title_text="X [mas]", range=[x_hi, x_lo],
+                         constrain="domain", row=1, col=1)
+        fig.update_yaxes(title_text="Y [mas]", range=[y_lo, y_hi],
+                         scaleanchor="x", scaleratio=1.0,
+                         constrain="domain", row=1, col=1)
 
     fig.update_layout(
         template="plotly_white",
