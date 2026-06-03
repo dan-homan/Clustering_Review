@@ -443,45 +443,41 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
   recommendation panel applies an opacity/pointer-events lock and the
   autosave skips when `model_key != "current"`.
 
-## Known issues (open)
+## Known issues
 
-### Intermittent: epochs vanish from the overlay timeline
+### RESOLVED: epochs "vanish" from the overlay timeline (keyboard arrows)
 
-**Symptom (reviewer-reported, 2026-06):** in the right-hand epoch overlay,
-*entire epochs intermittently disappear from the timeline* — the ◀ / ▶
-(`epoch-prev` / `epoch-next`) buttons step **past** them as if they were
-never there (not a blank image — the epoch itself is absent from the
-sequence). Intermittent: sometimes the missing epochs reappear on their
-own, sometimes **Reset view** (`overlay-reset`, which bumps
-`overlay-reset-counter` → changes the overlay `uirevision` → full redraw)
-brings them back.
+**Symptom (reviewer-reported, 2026-06):** epochs intermittently appeared to
+go missing from the right-hand overlay timeline — stepping seemed to skip
+over them. Sometimes they came back on their own, sometimes **Reset view**
+fixed it. The decisive detail: **arrow keys sometimes advanced TWO epochs
+per press**, dropping back to one per press after clicking a ◀/▶ button or
+Reset view; and the dates under the timeline were sometimes wrong.
 
-**This is NOT a contour/trace-render problem.** Earlier work mis-read it as
-"the image fails to render" and tried giving overlay traces stable `uid`s —
-that BACKFIRED badly: a `uid` on the contour + plotly 6's base64-encoded
-`z` made `Plotly.react` skip the contour redraw, freezing the image on the
-first epoch for every source. That fix was reverted (`git revert` of the
-uid commit). **Do not re-attempt the uid approach on the contour.**
+**Root cause:** `assets/keyboard.js` maps ◀/▶ arrows to clicking
+`#epoch-prev` / `#epoch-next`, but it originally listened on `document` in
+the **bubble** phase. The epoch control is a `dcc.Slider` whose focusable
+handle *also* handles arrow keys natively. So when the slider handle had
+focus, one keypress fired BOTH the slider's native step AND the
+button-click handler → **+2 epochs**. After clicking a button / Reset view,
+focus left the handle, so only `keyboard.js` fired → +1 ("self-heal").
+Compounding it, the slider uses `updatemode="mouseup"`, so the native
+keyboard move didn't reliably push its value to Dash — desyncing the handle
+from the displayed epoch/date ("wrong dates").
 
-**Where to look next** (the symptom is about the *set of epochs / the
-slider*, not trace drawing):
-- `ui/callbacks._populate_epoch_slider` — sets the slider `min/max/marks`
-  from `len(bundle.plotdata.epoch_info)`; if `n` is intermittently short,
-  epochs are skipped. It preserves the current slider value across
-  re-fires; a stale/short `max` would strand the user.
-- `ui/callbacks._step_epoch` — ◀/▶ do `value ± 1` clamped to slider
-  `min/max` (read as **State**). If the slider's `max`/`marks` State is
-  stale when the button fires, stepping math is off.
-- Bundle caching: `data/loader.load_bundle` / `_load_bundle_cached`
-  (`lru_cache`) keyed on file fingerprints — could a stale/short
-  `epoch_info` be served intermittently?
-- The slider `marks` are built one-every-~6-epochs; confirm whether
-  "missing from the timeline" means missing **marks** vs missing **slider
-  positions** vs the overlay skipping an index.
-Capture, when it happens: which source, the slider `min/max/value`, and
-`len(epoch_info)` vs the number of epochs actually reachable.
+**Fix:** `keyboard.js` now listens in the **capture phase** and calls
+`stopImmediatePropagation()` before clicking the button, so the arrow never
+reaches the slider's native handler. Every arrow press routes through the
+single `#epoch-prev`/`#epoch-next` → `_step_epoch` path = exactly one step,
+handle stays in sync with the Dash value. Text-field arrows are still
+ignored (the editable-target guard returns before the stop). Reset view
+remains as a manual backup.
 
-Reset view stays the working manual recovery; leave it in place.
+**Earlier dead end (do not repeat):** this was first mis-read as a
+contour/trace-render problem, and overlay traces were given stable `uid`s.
+That backfired — a `uid` on the contour + plotly 6's base64-encoded `z`
+made `Plotly.react` skip the contour redraw, freezing the image. That
+commit was reverted. **Do not add `uid`s to the contour trace.**
 
 ## Useful local commands
 
