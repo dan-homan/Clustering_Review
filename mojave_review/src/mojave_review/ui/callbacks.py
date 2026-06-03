@@ -449,22 +449,7 @@ def register_callbacks(
             if (!gd || !window.Plotly) return window.dash_clientside.no_update;
 
             var bmaj = beamParams.bmaj, bmin = beamParams.bmin, bpa = beamParams.bpa;
-            // Resolve the beam trace by NAME, not by the stored beam_idx.
-            // Trace counts differ per epoch, so a stale beam_idx (from
-            // beam-params that hasn't caught up to a just-rendered epoch)
-            // could point at a cluster/contour trace — restyling its x/y to
-            // the beam ellipse would make that feature "disappear" until a
-            // Reset view. Scanning by name guarantees we only ever touch the
-            // beam. Falls back to beam_idx if the name lookup fails.
             var idx = beamParams.beam_idx;
-            if (gd.data) {
-                for (var bi = 0; bi < gd.data.length; bi++) {
-                    if (gd.data[bi] && gd.data[bi].name === 'beam') { idx = bi; break; }
-                }
-            }
-            if (idx === undefined || idx === null || !gd.data || !gd.data[idx]) {
-                return window.dash_clientside.no_update;
-            }
 
             // Pick the current viewport. relayoutData may carry an explicit
             // range from a zoom/pan, or {xaxis.autorange: true} on reset.

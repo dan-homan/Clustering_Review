@@ -181,15 +181,6 @@ def build_overlay_figure(
     # apply additional smoothing here — it would blur real structure.
     log_z = np.log2(np.maximum(ax.image, cbase) / cbase)
 
-    # NB: every trace gets a stable, identity-based ``uid`` (role + clusterID).
-    # Plotly.react matches traces across figure updates by uid when present,
-    # else by array index. Trace counts/order vary per epoch (different cluster
-    # sets), so without uids react mis-matches by position — on some epoch
-    # changes a trace at an index changes type (e.g. CC scatter → ellipse) and
-    # react fails to morph it cleanly, leaving a stale/blank feature until a
-    # full redraw. That is the intermittent "missing overlay, fixed by Reset
-    # view" symptom. Stable uids let react add/remove/update each logical
-    # feature correctly. (Reset view stays as the manual escape hatch.)
     fig = go.Figure()
     fig.add_trace(
         go.Contour(
@@ -199,7 +190,6 @@ def build_overlay_figure(
             line=dict(width=1, color="#444", smoothing=1.0),
             colorscale=[[0, "#444"], [1, "#444"]],
             showscale=False, hoverinfo="skip",
-            uid="contour",
         )
     )
 
@@ -225,7 +215,6 @@ def build_overlay_figure(
                     showlegend=False,
                     hovertemplate=("CC<br>x %{x:.3f} mas"
                                    "<br>y %{y:.3f} mas<extra></extra>"),
-                    uid="cc:neutral",
                 )
             )
     else:
@@ -261,9 +250,6 @@ def build_overlay_figure(
                     hovertemplate=(f"cluster {cid}<br>"
                                    "x %{x:.3f} mas<br>"
                                    "y %{y:.3f} mas<extra></extra>"),
-                    # Key by the original CC label (unique per trace; immutable
-                    # across epochs) — clusterID can repeat after a merge.
-                    uid=f"cc:{int(lbl)}",
                 )
             )
 
@@ -299,7 +285,6 @@ def build_overlay_figure(
                             hovertemplate=(f"cluster {cid} 3σ inclusion<br>"
                                            f"maj {SIGMA3_OVER_FWHM*maj:.3f} mas<br>"
                                            f"min {SIGMA3_OVER_FWHM*minor:.3f} mas<extra></extra>"),
-                            uid=f"sig3:{int(cid)}",
                         )
                     )
                 # FWHM ellipse — solid outline + heavier fill, drawn last so
@@ -315,7 +300,6 @@ def build_overlay_figure(
                                        f"maj {maj:.3f} mas<br>"
                                        f"min {minor:.3f} mas<br>"
                                        f"pa {pa:.1f}°<extra></extra>"),
-                        uid=f"fwhm:{int(cid)}",
                     )
                 )
             # Non-core clusters: black number at center. Core (clusterID == 0)
@@ -331,7 +315,6 @@ def build_overlay_figure(
                         showlegend=False,
                         hovertemplate=(f"cluster {cid}<br>"
                                        "center (%{x:.3f}, %{y:.3f}) mas<extra></extra>"),
-                        uid=f"txt:{int(cid)}",
                     )
                 )
                 # (Center marker disabled by request — keep code for easy revert.)
@@ -352,7 +335,6 @@ def build_overlay_figure(
                         line=dict(width=2, color="black")),
             name="core", showlegend=False,
             hovertemplate="core (0, 0)<extra></extra>",
-            uid="core",
         )
     )
 
@@ -387,7 +369,6 @@ def build_overlay_figure(
             name="beam", showlegend=False,
             hovertemplate=(f"beam<br>bmaj {bmaj:.3f} mas<br>"
                            f"bmin {bmin:.3f} mas<br>bpa {bpa:.1f}°<extra></extra>"),
-            uid="beam",
         )
     )
 
