@@ -12,6 +12,7 @@ from ..data.fits_cache import split_source_band
 from ..data.loader import (
     _SOURCE_DIR_RE, SourceRef, clear_bundle_cache, list_models, load_bundle,
 )
+from ..notes import combined_markdown, notes_dir_for
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation
@@ -93,6 +94,24 @@ def register_callbacks(
     def _bump_reload_counter(_n, current):
         clear_bundle_cache()
         return int(current or 0) + 1
+
+    # ---- read-only source notes panel ------------------------------------
+    # Renders notes/<source>.md (Stages 1-2 + ledger) plus the live
+    # open-suggestions (from the submitted recommendation JSONs). Refreshes on
+    # source change, Reload, and after the current user submits.
+    notes_dir = notes_dir_for(recommendations_dir)
+
+    @app.callback(
+        Output("notes-content", "children"),
+        Input("source-picker", "value"),
+        Input("reload-counter", "data"),
+        Input("submit-trigger", "data"),
+    )
+    def _refresh_notes(source_folder, _reload_counter, _submit_trigger):
+        src = _source_from_folder(source_folder) if source_folder else None
+        if src is None:
+            return ""
+        return combined_markdown(notes_dir, recommendations_dir, src.source)
 
     # ---- model picker (depends on source) --------------------------------
     # Options include:

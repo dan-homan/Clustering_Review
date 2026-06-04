@@ -271,6 +271,29 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
             # selection-driven actions in the Edits tab.
             dcc.Store(id="selection-store", data=[]),
             header,
+            # Read-only source lab-notebook: the durable notes/<source>.md
+            # (Stages 1-2 + decisions ledger) plus the live open-suggestions
+            # assembled from the submitted recommendation JSONs. Collapsible so
+            # it doesn't crowd the plots; rendered by ui/callbacks._refresh_notes.
+            html.Details(
+                [
+                    html.Summary(
+                        "📓  Source notes & open suggestions",
+                        style={"cursor": "pointer", "padding": "0.4em 1em",
+                               "fontWeight": 600, "color": "#333",
+                               "userSelect": "none"},
+                    ),
+                    dcc.Markdown(
+                        id="notes-content",
+                        style={"padding": "0.25em 1.25em 1em",
+                               "maxHeight": "42vh", "overflowY": "auto",
+                               "fontSize": "0.9em", "lineHeight": "1.4"},
+                    ),
+                ],
+                id="notes-details",
+                open=False,
+                style={"borderBottom": "1px solid #ddd", "background": "#fbfbfb"},
+            ),
             body,
             build_recommendations_panel(admin=admin),
         ],

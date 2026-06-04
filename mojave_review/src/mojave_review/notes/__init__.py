@@ -10,8 +10,12 @@ from .store import (
     notes_dir_for, note_path, scaffold, read_note, write_note,
     get_section, set_section, append_ledger, SECTIONS,
 )
+from .render import (
+    notes_markdown, open_suggestions_markdown, combined_markdown,
+)
 
 __all__ = [
     "notes_dir_for", "note_path", "scaffold", "read_note", "write_note",
     "get_section", "set_section", "append_ledger", "SECTIONS",
+    "notes_markdown", "open_suggestions_markdown", "combined_markdown",
 ]
