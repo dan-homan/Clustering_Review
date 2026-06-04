@@ -488,11 +488,53 @@ def main(argv: list[str] | None = None) -> int:
                 print("Aborted.")
                 return 1
 
-    # Confirm save_summary_plots is importable BEFORE we touch any files.
-    save_summary_plots = _import_save_summary_plots(production_code_dir)
-
     new_df, edit_history = _apply_to_csv(existing.df, rec)
     n_edits = len(edit_history)
+    # No-op = the recommendation changes nothing on disk (no clusterID / robust
+    # / use_in_fit difference — comments don't alter the CSV).
+    no_op = new_df.equals(existing.df)
+
+    timestamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rec_label = (
+        str(rec_path.relative_to(recommendations_dir))
+        if rec_path.is_relative_to(recommendations_dir) else str(rec_path)
+    )
+
+    # ---- No-op fast path --------------------------------------------------
+    # Conclude a no-change recommendation WITHOUT a redundant backup, CSV
+    # rewrite, or plot regeneration — just record it in history.txt and archive
+    # the JSON out of submitted/. This is what lets "always conclude Step 2 with
+    # mojave-apply" stay cheap (and a no-op conclude doesn't even need the
+    # production code, since no plots are regenerated).
+    if no_op:
+        if not args.no_confirm:
+            print()
+            print(f"{existing.csv_path.name}: recommendation has NO actionable "
+                  f"changes.")
+            print("  Will conclude it (history line + archive) — no backup, no "
+                  "plot regeneration.")
+            resp = input("  Continue? [y/N]: ").strip().lower()
+            if resp not in ("y", "yes"):
+                print("Aborted.")
+                return 1
+        header = (f"# {timestamp} Concluded recommendation {rec_label} "
+                  f"— no changes")
+        _append_history(existing.folder, header, [])
+        print("Appended to history.txt (no changes)")
+        archived = _archive_recommendation(rec_path, recommendations_dir,
+                                           existing.source_name)
+        try:
+            archived_label = archived.relative_to(recommendations_dir.parent)
+        except ValueError:
+            archived_label = archived
+        print(f"Archived recommendation to {archived_label}")
+        print(f"\nNo changes for {existing.source_name}; concluded "
+              f"(no backup / regen).")
+        return 0
+
+    # ---- Changes to apply -------------------------------------------------
+    # Confirm save_summary_plots is importable BEFORE we touch any files.
+    save_summary_plots = _import_save_summary_plots(production_code_dir)
     backup_idx = _next_backup_index(existing.folder / "backups")
 
     if not args.no_confirm:
@@ -510,11 +552,6 @@ def main(argv: list[str] | None = None) -> int:
     _save_new_csv(existing.folder, existing.prefix, new_df)
     print(f"Wrote {existing.prefix}.merged_win_results.csv")
 
-    timestamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    rec_label = (
-        str(rec_path.relative_to(recommendations_dir))
-        if rec_path.is_relative_to(recommendations_dir) else str(rec_path)
-    )
     header = (f"# {timestamp} Applied recommendation {rec_label} "
               f"(backup_{backup_idx})")
     _append_history(existing.folder, header, edit_history)

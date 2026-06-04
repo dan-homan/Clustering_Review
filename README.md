@@ -162,6 +162,15 @@ You can copy that command directly out of the web app: launch with
 8. Archives the JSON to `<recs>/<source>/applied/<date>__<slug>.json`.
 9. Prints a copy-pasteable notebook summary block.
 
+**No-op fast path.** If the recommendation makes no on-disk change (no
+`clusterID` / `robust` / `use_in_fit` difference — comments don't alter the
+CSV), steps 4–5 and 7 are **skipped**: no backup, no CSV rewrite, no plot
+regeneration (and `find_clusters` isn't even imported). It still writes a
+`history.txt` line (`Concluded recommendation … — no changes`) and archives the
+JSON (step 8). This lets you *always* conclude a Step 2 review with
+`mojave-apply` — even a "looks good, no changes" one — cheaply and without
+junk backups.
+
 ### Flags
 
 | Flag | Default | What it does |
