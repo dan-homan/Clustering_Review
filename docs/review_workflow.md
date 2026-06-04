@@ -80,9 +80,12 @@ Deferred:
 - **Stage 1 — brief review.** Quick flags. Seeded from the Google doc. (Future:
   a pure-text entry field in the app for brand-new sources — see TODO.)
 - **Stage 2 — baseline model.** One person builds the model others will see
-  (pipeline run: `--complex` / `--editN` / cross-IDs), and writes the Stage 2
-  prose. The result is the `current` model. Seeded for the ~100 done sources;
-  going forward the builder updates Stage 2 via the app during their apply round.
+  (pipeline run: `--complex` / `--editN` / cross-IDs), writes the Stage 2 prose,
+  then in the app makes their *own* recommendation (robustness + any post-fit
+  cross-IDs), **Submits**, and **`mojave-apply`s** it (a no-change one uses the
+  no-op fast path). That apply finalizes the `current` model and **concludes
+  Stage 2**. Seeded for the ~100 done sources; going forward the builder updates
+  Stage 2 via the app during their apply round.
 - **Stage 3 — aggregation.** Other reviewers submit suggestions via the app
   (→ `submitted/`). An admin reviews them side-by-side, accepts/rejects each
   edit with a one-line reason, previews the aggregated model, and applies →
@@ -105,9 +108,30 @@ Deferred:
   can write `Results/`).** Side-by-side reviewer recs → accept/reject each edit
   with a reason → preview via the existing "Visualize" path → **Apply**.
 
-## The apply action: one event, multiple outputs
+## Two kinds of apply — the ledger is Stage 3 only
 
-A single admin "Apply" produces:
+Both Stage 2 and Stage 3 end in a `mojave-apply`, but they are recorded
+**differently** so the "Decisions & applied history" ledger stays a pure log of
+the multi-reviewer reconciliation (decision: option A):
+
+- **Stage 2 — baseline apply** (the builder applying their *own* single
+  submission to finalize the baseline). Recorded in the `Status:` line
+  ("baseline by <name>, applied <date>"), the **Stage 2** prose section, and
+  `history.txt`. It does **NOT** write a ledger entry. Apply archives the
+  builder's submission out of `submitted/`, so it never resurfaces as a Stage 3
+  open suggestion.
+- **Stage 3 — aggregation apply** (the admin reconciling *multiple* reviewers'
+  submissions, via the aggregation UI). This is the **only** thing that writes
+  the ledger.
+
+How the tooling tells them apart: the source's lifecycle stage (the `Status:`
+line). A plain `mojave-apply` of the builder's own submission, before the source
+is opened for review, is Stage 2. The aggregation UI's Apply, on a source that
+is "awaiting review", is Stage 3.
+
+## The Stage 3 apply: one event, multiple outputs
+
+A single admin (aggregation) "Apply" produces:
 
 1. The applied model — via `mojave-apply` (new CSV backup, regenerated plots,
    and the existing terse **`history.txt`** entry).
@@ -118,7 +142,7 @@ A single admin "Apply" produces:
    each full submission (so reviewer comments can be revisited later).
 
 `history.txt` and the `.md` ledger are both kept (terse machine log + human
-narrative), written from the same apply event.
+narrative), written from the same Stage 3 apply event.
 
 ## In-app surfacing
 
