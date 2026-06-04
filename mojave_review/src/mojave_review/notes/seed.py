@@ -71,6 +71,8 @@ def _clean(raw_lines: list[str]) -> str:
             continue
         if _DASHRULE.match(s):
             continue
+        if re.fullmatch(r"#+", s):     # stray empty heading marker from the export
+            continue
         low = s.lower()
         if "paste this into your notebook" in low:
             continue
