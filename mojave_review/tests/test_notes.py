@@ -133,8 +133,13 @@ def test_parse_real_h2_format():
     assert "─" not in r0.stage2 and "<user entered" not in r0.stage2.lower()
     assert (r0.baseline_initials, r0.baseline_date) == ("DCH", "2026-04-30")
     assert r0.uploaded is True
+    # checkbox state: step 1 & 2 done, step 3 not.
+    assert r0.stage1_done and r0.stage2_done and not r0.stage3_done
     # escaped "\\=" cleaned in source 2
     assert "N clusters = 4" in recs[1].stage2
+    # KEY: source 2 has an EMPTY Step 1 (checked, no notes) — still counts as
+    # completed ("looked good"), so it must be seedable.
+    assert recs[1].stage1 == "" and recs[1].stage1_done is True
 
 
 if __name__ == "__main__":

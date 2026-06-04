@@ -38,7 +38,11 @@ _SOURCE_HEAD = re.compile(
     r"^\s*(?:##\s+)?(\d{4}[+-]\d{3})(?:\s*\{#[^}]*\})?\s*$"
 )
 # Step header: optional "- [x] " checkbox + optional "~~" strikethrough + "Step N".
-_STEP = re.compile(r"^\s*(?:-\s*\[[ xX]\]\s*)?~{0,2}\s*Step\s+([123])\b", re.IGNORECASE)
+# Group 1 captures the checkbox state (' ' / 'x' / None when bare); group 2 the
+# step number. A checked box means that step WAS completed (empty notes just
+# means "nothing to change").
+_STEP = re.compile(
+    r"^\s*(?:-\s*\[([ xX])\]\s*)?~{0,2}\s*Step\s+([123])\b", re.IGNORECASE)
 # "DCH 2026-04-30" in the step-3 block → baseline initials + date.
 _BASELINE = re.compile(r"\b([A-Z]{2,4})\s+(\d{4}-\d{2}-\d{2})\b")
 
@@ -84,6 +88,9 @@ class ParsedSource:
     stage1: str = ""
     stage2: str = ""               # includes the builder's notebook block
     stage3: str = ""
+    stage1_done: bool = False      # step 1 box checked (or step 2 done)
+    stage2_done: bool = False      # step 2 box checked
+    stage3_done: bool = False      # step 3 box checked
     baseline_initials: str = ""    # e.g. "DCH"
     baseline_date: str = ""        # e.g. "2026-04-30"
     uploaded: bool = False
@@ -99,11 +106,16 @@ def parse_google_doc(text: str) -> list[ParsedSource]:
         designation = _SOURCE_HEAD.match(lines[start]).group(1)
 
         stages: dict[int, list[str]] = {1: [], 2: [], 3: []}
+        done: dict[int, bool] = {1: False, 2: False, 3: False}
         cur = 0
         for ln in lines[start + 1:end]:
             m = _STEP.match(ln)
             if m:
-                cur = int(m.group(1))
+                cur = int(m.group(2))
+                box = m.group(1)
+                # box is None for the bare (no-checkbox) shape used in tests —
+                # treat a present-but-uncheckable header as done.
+                done[cur] = (box is None) or (box.strip().lower() == "x")
                 continue
             if cur in stages:
                 stages[cur].append(ln)
@@ -113,6 +125,10 @@ def parse_google_doc(text: str) -> list[ParsedSource]:
             stage1=_clean(stages[1]),
             stage2=_clean(stages[2]),
             stage3=_clean(stages[3]),
+            # A done step 2 implies step 1 was completed.
+            stage1_done=done[1] or done[2],
+            stage2_done=done[2],
+            stage3_done=done[3],
         )
         bm = _BASELINE.search(_unescape("\n".join(stages[3])))
         if bm:
@@ -139,7 +155,7 @@ def _resolve(designation: str, sources) -> object | None:
 class SeedResult:
     written: list[str] = field(default_factory=list)
     skipped_existing: list[str] = field(default_factory=list)
-    skipped_empty: list[str] = field(default_factory=list)
+    skipped_unreviewed: list[str] = field(default_factory=list)
     unmatched: list[str] = field(default_factory=list)
 
 
@@ -147,15 +163,18 @@ def seed_notes(
     text: str, notes_dir: Path, results_dir: Path, *,
     force: bool = False, include_stage2: bool = False,
 ) -> SeedResult:
-    """Write notes/<source>.md for every parsed source that resolves to a real
-    source folder and has Stage 1 content.
+    """Write notes/<source>.md for every source that has been **completed at
+    Step 1** (its checkbox is checked, or Step 2 is done — which implies Step 1)
+    and resolves to a real source folder.
 
-    By default only **Stage 1** is seeded — the brief-review notes that exist
-    for every source. **Stage 2 is left empty**: going forward the builder adds
-    the baseline-model notes via the app during their submit/apply round.
-    Pass ``include_stage2=True`` to also import the doc's existing Step 2 prose
-    (for the sources already reviewed at step 2). Existing files are skipped
-    unless ``force``.
+    Empty Step 1 notes are fine — that just means "looked good, nothing to
+    change", and the file is still seeded (with an empty Stage 1 section).
+    Sources not yet reviewed at Step 1 are skipped.
+
+    By default only **Stage 1** is imported; **Stage 2 is left empty** (the
+    builder adds the baseline-model notes via the app during their submit/apply
+    round). ``include_stage2=True`` also imports the doc's existing Step 2 prose.
+    Existing files are skipped unless ``force``.
     """
     parsed = parse_google_doc(text)
     sources = list_sources(Path(results_dir))
@@ -165,20 +184,20 @@ def seed_notes(
         if ref is None:
             res.unmatched.append(rec.designation)
             continue
-        stage2 = rec.stage2 if include_stage2 else ""
-        if not rec.stage1 and not stage2:
-            res.skipped_empty.append(ref.source)
+        if not rec.stage1_done:          # not yet reviewed at Step 1
+            res.skipped_unreviewed.append(ref.source)
             continue
         p = store.note_path(notes_dir, ref.source)
         if p.exists() and not force:
             res.skipped_existing.append(ref.source)
             continue
-        # Status reflects how far the source has actually come.
-        if include_stage2 and rec.baseline_date:
-            status = f"Stage 2 complete · awaiting review · baseline by " \
-                     f"{rec.baseline_initials} {rec.baseline_date}"
+        stage2 = rec.stage2 if include_stage2 else ""
+        if rec.stage2_done:
+            status = "Stage 2 done"
+            if rec.baseline_date:
+                status += f" · baseline by {rec.baseline_initials} {rec.baseline_date}"
         else:
-            status = "Stage 1 seeded · Stage 2 pending (add via app)"
+            status = "Stage 1 done"
         md = store.scaffold(
             ref.source, ref.epoch_min, ref.epoch_max,
             status=status, stage1=rec.stage1, stage2=stage2,

@@ -65,9 +65,8 @@ def _seed(args) -> int:
     if res.skipped_existing:
         print(f"  skipped {len(res.skipped_existing)} existing "
               f"(use --force to overwrite)")
-    if res.skipped_empty:
-        print(f"  skipped {len(res.skipped_empty)} with no notes "
-              f"(use --include-empty to scaffold them)")
+    if res.skipped_unreviewed:
+        print(f"  skipped {len(res.skipped_unreviewed)} not yet reviewed at Step 1")
     if res.unmatched:
         print(f"  {len(res.unmatched)} designation(s) had no matching source "
               f"folder under --results-dir")
