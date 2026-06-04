@@ -58,3 +58,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Local Google-doc export (input for mojave-review-notes seed; not tracked)
+Source_Clustering_Notes.md

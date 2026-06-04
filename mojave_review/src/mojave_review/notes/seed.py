@@ -1,22 +1,25 @@
-"""One-time seeding of notes/<source>.md from the existing Google-doc export.
+"""One-time seeding of notes/<source>.md from the Google-doc Markdown export.
 
-The doc is one block per source with a regular shape::
+The Google-Docs → Markdown export shapes each source as an H2 heading with
+checkbox step items, e.g.::
 
-    0003-066
-    Step 1 brief review
-    …stage 1 prose…
-    Step 2 more detailed review
-    …stage 2 prose…
-    Step 3 final cross-ID and robustness check
-    DCH 2026-04-30
-    uploaded
-    Next…
-    0003+380
-    …
+    ## 0003-066 {#0003-066}
+
+    - [x] ~~Step 1 brief review~~
+          SOURCE: 0003-066u  (1994.00-2026.00)
+          …
+    - [x] ~~Step 2 more detailed review~~
+          * …recommendation prose…
+          `[paste this into your notebook for 0003-066u]`
+          `Changed to non-robust: 2`
+    - [ ] Step 3 final cross-ID and robustness check
+          * DCH 2026-04-30
+          * uploaded
 
 ``parse_google_doc`` turns that into per-source ``ParsedSource`` records;
 ``seed_notes`` resolves each bare designation to a real source folder and writes
-the scaffolded ``notes/<source>.md`` with Stages 1–2 filled in.
+the scaffolded ``notes/<source>.md`` with Stages 1–2 filled in. It also accepts
+the simpler bare-designation shape (``0003-066`` on its own line) used in tests.
 """
 
 from __future__ import annotations
@@ -29,47 +32,75 @@ from ..data.loader import list_sources
 from . import store
 
 
-# A source block starts at a bare designation line like "0003-066" or "0003+380".
-_DESIGNATION = re.compile(r"^\s*(\d{4}[+-]\d{3})\s*$")
-_STEP = re.compile(r"^\s*Step\s*([123])\b", re.IGNORECASE)
-# "DCH 2026-04-30" — reviewer initials + ISO date in the step-3 block.
+# Source block start: an H2 heading "## 0003-066 {#…}" OR a bare designation
+# line "0003-066" (the latter only used by tests). NOT a TOC link "[0003-066](…)".
+_SOURCE_HEAD = re.compile(
+    r"^\s*(?:##\s+)?(\d{4}[+-]\d{3})(?:\s*\{#[^}]*\})?\s*$"
+)
+# Step header: optional "- [x] " checkbox + optional "~~" strikethrough + "Step N".
+_STEP = re.compile(r"^\s*(?:-\s*\[[ xX]\]\s*)?~{0,2}\s*Step\s+([123])\b", re.IGNORECASE)
+# "DCH 2026-04-30" in the step-3 block → baseline initials + date.
 _BASELINE = re.compile(r"\b([A-Z]{2,4})\s+(\d{4}-\d{2}-\d{2})\b")
-_TRAILING = re.compile(r"^\s*(next\b.*|uploaded\.?)\s*$", re.IGNORECASE)
+
+# Google-doc backslash escaping of punctuation (\=  \-  2007\.  \[  \--complex …).
+_ESCAPE = re.compile(r"\\([-=~.<>*\[\]`(){}+#&_])")
+_DASHRULE = re.compile(r"^[─—\-]{5,}$")
+_BACKTICKED = re.compile(r"^`(.*)`$")
+
+
+def _unescape(s: str) -> str:
+    return _ESCAPE.sub(r"\1", s)
+
+
+def _clean(raw_lines: list[str]) -> str:
+    """Tidy a stage's raw lines into readable markdown: unescape, unwrap
+    single-backtick spans, drop the doc's '──' rules and 'paste into notebook'
+    template cruft, flatten leading bullets to '- ', collapse blank runs."""
+    out: list[str] = []
+    for ln in raw_lines:
+        s = _unescape(ln).strip()
+        m = _BACKTICKED.match(s)
+        if m:
+            s = m.group(1).strip()
+        if not s:
+            out.append("")
+            continue
+        if _DASHRULE.match(s):
+            continue
+        low = s.lower()
+        if "paste this into your notebook" in low:
+            continue
+        if low.startswith("<user entered notes"):
+            continue
+        s = re.sub(r"^\*\s+", "- ", s)        # "* bullet" -> "- bullet"
+        out.append(s)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    return text
 
 
 @dataclass
 class ParsedSource:
     designation: str               # bare, e.g. "0003-066"
     stage1: str = ""
-    stage2: str = ""
+    stage2: str = ""               # includes the builder's notebook block
     stage3: str = ""
     baseline_initials: str = ""    # e.g. "DCH"
     baseline_date: str = ""        # e.g. "2026-04-30"
     uploaded: bool = False
 
 
-def _clean_block(lines: list[str]) -> str:
-    """Drop trailing 'Next…' / 'uploaded' bookkeeping lines and surrounding
-    blank lines from a stage block."""
-    out = [ln for ln in lines if not _TRAILING.match(ln)]
-    return "\n".join(out).strip()
-
-
 def parse_google_doc(text: str) -> list[ParsedSource]:
     """Parse the doc export into per-source records (in document order)."""
     lines = text.splitlines()
-    # Index where each source block begins.
-    starts = [i for i, ln in enumerate(lines) if _DESIGNATION.match(ln)]
+    starts = [i for i, ln in enumerate(lines) if _SOURCE_HEAD.match(ln)]
     out: list[ParsedSource] = []
     for k, start in enumerate(starts):
         end = starts[k + 1] if k + 1 < len(starts) else len(lines)
-        designation = _DESIGNATION.match(lines[start]).group(1)
-        block = lines[start + 1:end]
+        designation = _SOURCE_HEAD.match(lines[start]).group(1)
 
-        # Partition the block by "Step N" headers.
         stages: dict[int, list[str]] = {1: [], 2: [], 3: []}
         cur = 0
-        for ln in block:
+        for ln in lines[start + 1:end]:
             m = _STEP.match(ln)
             if m:
                 cur = int(m.group(1))
@@ -79,15 +110,16 @@ def parse_google_doc(text: str) -> list[ParsedSource]:
 
         rec = ParsedSource(
             designation=designation,
-            stage1=_clean_block(stages[1]),
-            stage2=_clean_block(stages[2]),
-            stage3=_clean_block(stages[3]),
+            stage1=_clean(stages[1]),
+            stage2=_clean(stages[2]),
+            stage3=_clean(stages[3]),
         )
-        bm = _BASELINE.search("\n".join(stages[3]))
+        bm = _BASELINE.search(_unescape("\n".join(stages[3])))
         if bm:
             rec.baseline_initials, rec.baseline_date = bm.group(1), bm.group(2)
         rec.uploaded = any(
-            re.match(r"^\s*uploaded", ln, re.IGNORECASE) for ln in stages[3]
+            re.search(r"\buploaded\b", _unescape(ln), re.IGNORECASE)
+            for ln in stages[3]
         )
         out.append(rec)
     return out
@@ -107,14 +139,24 @@ def _resolve(designation: str, sources) -> object | None:
 class SeedResult:
     written: list[str] = field(default_factory=list)
     skipped_existing: list[str] = field(default_factory=list)
+    skipped_empty: list[str] = field(default_factory=list)
     unmatched: list[str] = field(default_factory=list)
 
 
 def seed_notes(
-    text: str, notes_dir: Path, results_dir: Path, *, force: bool = False,
+    text: str, notes_dir: Path, results_dir: Path, *,
+    force: bool = False, include_stage2: bool = False,
 ) -> SeedResult:
-    """Write notes/<source>.md for every parsed source that resolves to a
-    real source folder. Existing files are skipped unless ``force``."""
+    """Write notes/<source>.md for every parsed source that resolves to a real
+    source folder and has Stage 1 content.
+
+    By default only **Stage 1** is seeded — the brief-review notes that exist
+    for every source. **Stage 2 is left empty**: going forward the builder adds
+    the baseline-model notes via the app during their submit/apply round.
+    Pass ``include_stage2=True`` to also import the doc's existing Step 2 prose
+    (for the sources already reviewed at step 2). Existing files are skipped
+    unless ``force``.
+    """
     parsed = parse_google_doc(text)
     sources = list_sources(Path(results_dir))
     res = SeedResult()
@@ -123,16 +165,23 @@ def seed_notes(
         if ref is None:
             res.unmatched.append(rec.designation)
             continue
+        stage2 = rec.stage2 if include_stage2 else ""
+        if not rec.stage1 and not stage2:
+            res.skipped_empty.append(ref.source)
+            continue
         p = store.note_path(notes_dir, ref.source)
         if p.exists() and not force:
             res.skipped_existing.append(ref.source)
             continue
-        status = "Stage 2 complete · awaiting review"
-        if rec.baseline_initials and rec.baseline_date:
-            status += f" · baseline by {rec.baseline_initials} {rec.baseline_date}"
+        # Status reflects how far the source has actually come.
+        if include_stage2 and rec.baseline_date:
+            status = f"Stage 2 complete · awaiting review · baseline by " \
+                     f"{rec.baseline_initials} {rec.baseline_date}"
+        else:
+            status = "Stage 1 seeded · Stage 2 pending (add via app)"
         md = store.scaffold(
             ref.source, ref.epoch_min, ref.epoch_max,
-            status=status, stage1=rec.stage1, stage2=rec.stage2,
+            status=status, stage1=rec.stage1, stage2=stage2,
         )
         store.write_note(notes_dir, ref.source, md)
         res.written.append(ref.source)

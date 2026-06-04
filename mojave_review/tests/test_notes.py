@@ -83,10 +83,65 @@ def test_parse_stage_content_and_baseline():
     assert "non-robust" in recs[1].stage2
 
 
+# ---------------------------------------------------------------------------
+# seed: parse the REAL Google-Docs Markdown export shape
+# ---------------------------------------------------------------------------
+
+_DOC_REAL = """[0003-066](#0003-066)
+
+## Review Procedure {#review}
+
+## 0003-066 {#0003-066}
+
+- [x] ~~Step 1 brief review~~
+      SOURCE: 0003-066u  (1994.00-2026.00)
+      Recommended new maxGap: 2.03
+- [x] ~~Step 2 more detailed review~~
+      * Recommend cross-ID’ing 7 as 4.   Everything except cluster 2 robust.
+`─────`
+`[paste this into your notebook for 0003-066u]`
+`<user entered notes for source here>`
+`Changed to non-robust: 2`
+`Robust (eligible):     0, 1, 3, 4`
+`─────`
+- [ ] Step 3 final cross-ID and robustness check
+      * DCH 2026-04-30
+        * uploaded
+
+## 0003+380 {#0003+380}
+
+- [x] ~~Step 1 brief review~~
+- [x] ~~Step 2 more detailed review~~
+      * N clusters \\= 4. Cluster 1 non-robust.
+- [ ] Step 3
+      * DCH 2026-05-01
+"""
+
+
+def test_parse_real_h2_format():
+    recs = parse_google_doc(_DOC_REAL)
+    # TOC link + "## Review Procedure" must NOT be parsed as sources
+    assert [r.designation for r in recs] == ["0003-066", "0003+380"]
+    r0 = recs[0]
+    assert "maxGap: 2.03" in r0.stage1
+    # bullet normalized, backslash-escape removed
+    assert "- Recommend cross-ID" in r0.stage2
+    # builder's notebook block kept; template cruft (──, paste-line, <user…>) dropped
+    assert "Changed to non-robust: 2" in r0.stage2
+    assert "Robust (eligible):     0, 1, 3, 4" in r0.stage2
+    assert "paste this into your notebook" not in r0.stage2.lower()
+    assert "─" not in r0.stage2 and "<user entered" not in r0.stage2.lower()
+    assert (r0.baseline_initials, r0.baseline_date) == ("DCH", "2026-04-30")
+    assert r0.uploaded is True
+    # escaped "\\=" cleaned in source 2
+    assert "N clusters = 4" in recs[1].stage2
+
+
 if __name__ == "__main__":
     test_scaffold_roundtrip_sections()
     test_set_section_preserves_others()
     test_append_ledger_is_append_only()
     test_parse_two_sources()
     test_parse_stage_content_and_baseline()
-    print("PASS: notes store + seed parser")
+    test_parse_real_h2_format()
+    print("PASS: notes store + seed parser (bare + real H2 formats)")
