@@ -142,6 +142,21 @@ def test_parse_real_h2_format():
     assert recs[1].stage1 == "" and recs[1].stage1_done is True
 
 
+def test_hard_breaks_for_consecutive_lines():
+    from mojave_review.notes.render import _hard_breaks
+    md = "Cross-ID recommendations:\nCrossID 70 (a).\nCrossID 114 (b).\n\nNext para."
+    lines = _hard_breaks(md).split("\n")
+    assert lines[0].endswith("  ")          # consecutive non-blank → hard break
+    assert lines[1].endswith("  ")
+    assert lines[2] == "CrossID 114 (b)."    # line before a blank: no break
+    assert lines[3] == "" and lines[4] == "Next para."
+
+
+def test_hard_breaks_leaves_paragraph_breaks():
+    from mojave_review.notes.render import _hard_breaks
+    assert _hard_breaks("a\n\nb") == "a\n\nb"
+
+
 if __name__ == "__main__":
     test_scaffold_roundtrip_sections()
     test_set_section_preserves_others()
@@ -149,4 +164,6 @@ if __name__ == "__main__":
     test_parse_two_sources()
     test_parse_stage_content_and_baseline()
     test_parse_real_h2_format()
-    print("PASS: notes store + seed parser (bare + real H2 formats)")
+    test_hard_breaks_for_consecutive_lines()
+    test_hard_breaks_leaves_paragraph_breaks()
+    print("PASS: notes store + seed parser + render hard-breaks")

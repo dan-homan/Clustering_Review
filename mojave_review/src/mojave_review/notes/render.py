@@ -91,11 +91,35 @@ def open_suggestions_markdown(recommendations_dir: Path, source: str) -> str:
     return "\n\n".join(parts)
 
 
+def _hard_breaks(md: str) -> str:
+    """dcc.Markdown (CommonMark) collapses a single newline into a space, so
+    freeform notes — each item on its own line — render as a wall of text.
+    Force a Markdown hard break (two trailing spaces) on any line that is
+    directly followed by another non-blank line, so every source line keeps its
+    own display line. Blank-line paragraph breaks and fenced code blocks are
+    left untouched, and headings/list markers still work."""
+    lines = md.split("\n")
+    n = len(lines)
+    out: list[str] = []
+    in_fence = False
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(ln)
+            continue
+        nxt = lines[i + 1] if i + 1 < n else ""
+        if not in_fence and ln.strip() and nxt.strip() and not ln.endswith("  "):
+            out.append(ln.rstrip() + "  ")
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+
 def combined_markdown(notes_dir: Path, recommendations_dir: Path, source: str) -> str:
     """The notes file + the live open-suggestions, for the in-app panel."""
     if not source:
         return ""
-    return (
+    return _hard_breaks(
         notes_markdown(notes_dir, source)
         + "\n\n---\n\n"
         + open_suggestions_markdown(recommendations_dir, source)
