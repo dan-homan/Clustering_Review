@@ -157,26 +157,31 @@ def _resolve(designation: str, sources) -> object | None:
 class SeedResult:
     written: list[str] = field(default_factory=list)
     skipped_existing: list[str] = field(default_factory=list)
-    skipped_unreviewed: list[str] = field(default_factory=list)
     unmatched: list[str] = field(default_factory=list)
 
 
+def _status_for(rec: "ParsedSource") -> str:
+    """Status line reflecting how far the source has actually come."""
+    if not rec.stage1_done:
+        return "Stage 1 still needs review"
+    if rec.stage2_done:
+        s = "Stage 2 done"
+        if rec.baseline_date:
+            s += f" · baseline by {rec.baseline_initials} {rec.baseline_date}"
+        return s
+    return "Stage 1 done"
+
+
 def seed_notes(
-    text: str, notes_dir: Path, results_dir: Path, *,
-    force: bool = False, include_stage2: bool = False,
+    text: str, notes_dir: Path, results_dir: Path, *, force: bool = False,
 ) -> SeedResult:
-    """Write notes/<source>.md for every source that has been **completed at
-    Step 1** (its checkbox is checked, or Step 2 is done — which implies Step 1)
-    and resolves to a real source folder.
+    """Write notes/<source>.md for **every** source that resolves to a real
+    source folder, importing its Stage 1 and Stage 2 notes from the doc.
 
-    Empty Step 1 notes are fine — that just means "looked good, nothing to
-    change", and the file is still seeded (with an empty Stage 1 section).
-    Sources not yet reviewed at Step 1 are skipped.
-
-    By default only **Stage 1** is imported; **Stage 2 is left empty** (the
-    builder adds the baseline-model notes via the app during their submit/apply
-    round). ``include_stage2=True`` also imports the doc's existing Step 2 prose.
-    Existing files are skipped unless ``force``.
+    The status line reflects progress: "Stage 1 still needs review" (box
+    unchecked), "Stage 1 done" (reviewed, no baseline yet), or "Stage 2 done ·
+    baseline by …". Empty Step 1 notes are fine — that just means "looked good,
+    nothing to change". Existing files are skipped unless ``force``.
     """
     parsed = parse_google_doc(text)
     sources = list_sources(Path(results_dir))
@@ -186,23 +191,13 @@ def seed_notes(
         if ref is None:
             res.unmatched.append(rec.designation)
             continue
-        if not rec.stage1_done:          # not yet reviewed at Step 1
-            res.skipped_unreviewed.append(ref.source)
-            continue
         p = store.note_path(notes_dir, ref.source)
         if p.exists() and not force:
             res.skipped_existing.append(ref.source)
             continue
-        stage2 = rec.stage2 if include_stage2 else ""
-        if rec.stage2_done:
-            status = "Stage 2 done"
-            if rec.baseline_date:
-                status += f" · baseline by {rec.baseline_initials} {rec.baseline_date}"
-        else:
-            status = "Stage 1 done"
         md = store.scaffold(
             ref.source, ref.epoch_min, ref.epoch_max,
-            status=status, stage1=rec.stage1, stage2=stage2,
+            status=_status_for(rec), stage1=rec.stage1, stage2=rec.stage2,
         )
         store.write_note(notes_dir, ref.source, md)
         res.written.append(ref.source)

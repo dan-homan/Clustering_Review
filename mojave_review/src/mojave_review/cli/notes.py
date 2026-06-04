@@ -35,9 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="used to derive the default notes dir")
     s.add_argument("--force", action="store_true",
                    help="overwrite existing notes files")
-    s.add_argument("--include-stage2", action="store_true",
-                   help="also import the doc's existing Step 2 notes "
-                        "(default: Stage 1 only; Stage 2 is added via the app)")
     return p
 
 
@@ -57,16 +54,13 @@ def _seed(args) -> int:
         recs = args.recommendations_dir or (args.results_dir.parent / "recommendations")
         notes_dir = store.notes_dir_for(recs)
     text = args.doc.read_text()
-    res = seed_notes(text, notes_dir, args.results_dir,
-                     force=args.force, include_stage2=args.include_stage2)
+    res = seed_notes(text, notes_dir, args.results_dir, force=args.force)
 
     print(f"notes dir: {notes_dir}")
     print(f"  wrote   {len(res.written)} file(s)")
     if res.skipped_existing:
         print(f"  skipped {len(res.skipped_existing)} existing "
               f"(use --force to overwrite)")
-    if res.skipped_unreviewed:
-        print(f"  skipped {len(res.skipped_unreviewed)} not yet reviewed at Step 1")
     if res.unmatched:
         print(f"  {len(res.unmatched)} designation(s) had no matching source "
               f"folder under --results-dir")
