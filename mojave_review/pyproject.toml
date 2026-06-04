@@ -29,6 +29,7 @@ server = ["gunicorn>=21"]
 mojave-review        = "mojave_review.cli:main"
 mojave-apply         = "mojave_review.cli.apply:main"
 mojave-review-tokens = "mojave_review.cli.tokens:main"
+mojave-review-notes  = "mojave_review.cli.notes:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
