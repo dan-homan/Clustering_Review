@@ -159,7 +159,9 @@ You can copy that command directly out of the web app: launch with
    baked into the `.plotdata.npz` otherwise. Set `export MOJAVE_DATA=...`
    if the npz was generated on a different machine, so the regenerated
    plots can find the images.
-8. Archives the JSON to `<recs>/<source>/applied/<date>__<slug>.json`.
+8. Archives the JSON to `<recs>/<source>/applied/<date>__<slug>.json`, and
+   **removes the now-applied `current/<slug>.json` draft** (so the reviewer no
+   longer sees an applied recommendation as a pending draft).
 9. Prints a copy-pasteable notebook summary block.
 
 **No-op fast path.** If the recommendation makes no on-disk change (no
@@ -170,6 +172,17 @@ regeneration (and `find_clusters` isn't even imported). It still writes a
 JSON (step 8). This lets you *always* conclude a Step 2 review with
 `mojave-apply` — even a "looks good, no changes" one — cheaply and without
 junk backups.
+
+**Cleaning up stale drafts (backlog).** Recommendations applied before the
+draft-removal in step 8 left their `current/` draft behind. `mojave-review-prune-drafts`
+removes `current/<slug>.json` drafts whose content **equals** an already-applied
+recommendation for the same source (a draft edited after the apply differs and
+is kept). Dry-run by default:
+
+```bash
+mojave-review-prune-drafts --recommendations-dir <recs>          # preview
+mojave-review-prune-drafts --recommendations-dir <recs> --apply  # delete
+```
 
 ### Flags
 

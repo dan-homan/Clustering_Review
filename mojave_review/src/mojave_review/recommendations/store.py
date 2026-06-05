@@ -175,6 +175,59 @@ def delete_submission(
         return False
 
 
+def _content_key(raw: dict) -> dict:
+    """Normalized recommendation content for equality, ignoring volatile
+    metadata (timestamps / model_sha). Round-trips through ``Recommendation``
+    so two files compare equal regardless of field ordering / defaults."""
+    d = Recommendation.from_dict(raw).to_dict()
+    d["updated_at"] = None
+    d["model_sha"] = None
+    return d
+
+
+def prune_applied_current_drafts(
+    recommendations_dir: Path, *, execute: bool = False,
+) -> list[tuple[str, str]]:
+    """Remove ``current/<slug>.json`` drafts that duplicate an already-applied
+    recommendation for the same source.
+
+    Old ``mojave-apply`` archived ``submitted/`` but left the matching
+    ``current/`` draft behind, so a now-applied recommendation kept showing as a
+    pending draft. This finds drafts whose content **equals** an applied rec
+    (ignoring timestamps / model_sha — safe: a draft edited after the apply
+    won't match and is kept) and deletes them when ``execute`` is True.
+
+    Returns the ``(source, slug)`` list pruned (or that *would* be pruned in a
+    dry run).
+    """
+    recommendations_dir = Path(recommendations_dir)
+    pruned: list[tuple[str, str]] = []
+    if not recommendations_dir.is_dir():
+        return pruned
+    for src_dir in sorted(p for p in recommendations_dir.iterdir() if p.is_dir()):
+        cur_dir, app_dir = src_dir / "current", src_dir / "applied"
+        if not cur_dir.is_dir() or not app_dir.is_dir():
+            continue
+        applied_keys: list[dict] = []
+        for ap in app_dir.rglob("*.json"):
+            try:
+                applied_keys.append(_content_key(json.loads(ap.read_text())))
+            except Exception:
+                continue
+        if not applied_keys:
+            continue
+        for draft in sorted(cur_dir.glob("*.json")):
+            try:
+                dk = _content_key(json.loads(draft.read_text()))
+            except Exception:
+                continue
+            if any(dk == ak for ak in applied_keys):
+                pruned.append((src_dir.name, draft.stem))
+                if execute:
+                    draft.unlink()
+    return pruned
+
+
 # ---------------------------------------------------------------------------
 # Multi-reviewer support — used by the model dropdown to show "Rec: <slug>"
 # entries from other reviewers' submitted files in <recs>/<source>/submitted/.

@@ -46,6 +46,7 @@ from ..recommendations.apply import (
     epoch_mask as _epoch_mask,
 )
 from ..recommendations.schema import Recommendation
+from ..recommendations.store import delete_recommendation, reviewer_slug
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +529,10 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             archived_label = archived
         print(f"Archived recommendation to {archived_label}")
+        if delete_recommendation(recommendations_dir, existing.source_name,
+                                 "current", rec.reviewer):
+            print(f"Removed now-applied current/ draft "
+                  f"({reviewer_slug(rec.reviewer)})")
         print(f"\nNo changes for {existing.source_name}; concluded "
               f"(no backup / regen).")
         return 0
@@ -569,6 +574,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError:
         archived_label = archived
     print(f"Archived recommendation to {archived_label}")
+    if delete_recommendation(recommendations_dir, existing.source_name,
+                             "current", rec.reviewer):
+        print(f"Removed now-applied current/ draft "
+              f"({reviewer_slug(rec.reviewer)})")
 
     summary = _format_notebook_summary(rec, existing.df, new_df, backup_idx)
     print()
