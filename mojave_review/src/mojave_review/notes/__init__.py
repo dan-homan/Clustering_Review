@@ -8,7 +8,7 @@ recommendation JSONs.
 
 from .store import (
     notes_dir_for, note_path, scaffold, read_note, write_note,
-    get_section, set_section, append_ledger, SECTIONS,
+    get_section, set_section, append_ledger, get_status, set_status, SECTIONS,
 )
 from .render import (
     notes_markdown, open_suggestions_markdown, combined_markdown,
@@ -16,6 +16,7 @@ from .render import (
 
 __all__ = [
     "notes_dir_for", "note_path", "scaffold", "read_note", "write_note",
-    "get_section", "set_section", "append_ledger", "SECTIONS",
+    "get_section", "set_section", "append_ledger", "get_status", "set_status",
+    "SECTIONS",
     "notes_markdown", "open_suggestions_markdown", "combined_markdown",
 ]

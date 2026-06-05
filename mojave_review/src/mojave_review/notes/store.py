@@ -96,6 +96,25 @@ def append_ledger(md: str, entry: str) -> str:
     return set_section(md, "ledger", body)
 
 
+_STATUS_RE = re.compile(r"^Status:.*$", re.MULTILINE)
+
+
+def get_status(md: str) -> str:
+    """Text of the ``Status:`` line (without the prefix), or ''."""
+    m = _STATUS_RE.search(md)
+    return m.group(0)[len("Status:"):].strip() if m else ""
+
+
+def set_status(md: str, status: str) -> str:
+    """Replace the ``Status:`` line (or insert one after the title)."""
+    line = f"Status: {status}"
+    if _STATUS_RE.search(md):
+        return _STATUS_RE.sub(lambda _m: line, md, count=1)
+    lines = md.split("\n")
+    lines.insert(1 if lines else 0, line)
+    return "\n".join(lines)
+
+
 def read_note(notes_dir: Path, source: str) -> str | None:
     p = note_path(notes_dir, source)
     if not p.is_file():

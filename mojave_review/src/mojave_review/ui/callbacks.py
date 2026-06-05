@@ -15,6 +15,7 @@ from ..data.loader import (
 from ..notes import (
     combined_markdown, notes_dir_for,
     read_note, write_note, get_section, set_section, scaffold,
+    get_status, set_status,
 )
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
@@ -153,6 +154,11 @@ def register_callbacks(
                                   status="Stage 2 done", stage2=content)
                 else:
                     md = set_section(md, "stage2", content)
+                    # Promote the status to "Stage 2 done" once Stage 2 has
+                    # content — but don't clobber a richer already-Stage-2
+                    # status (e.g. a seeded "Stage 2 done · baseline by …").
+                    if content.strip() and not get_status(md).lower().startswith("stage 2"):
+                        md = set_status(md, "Stage 2 done")
                 write_note(notes_dir, src.source, md)
             except Exception as e:  # never lose the file on a bad write
                 return f"Save failed: {e}", no_update

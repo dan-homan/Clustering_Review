@@ -157,6 +157,17 @@ def test_hard_breaks_leaves_paragraph_breaks():
     assert _hard_breaks("a\n\nb") == "a\n\nb"
 
 
+def test_status_get_set_and_promotion():
+    md = store.scaffold("x", 1.0, 2.0, status="Stage 1 done")
+    assert store.get_status(md) == "Stage 1 done"
+    md2 = store.set_status(md, "Stage 2 done")
+    assert store.get_status(md2) == "Stage 2 done"
+    assert store.get_section(md2, "stage1") == store.get_section(md, "stage1")
+    # promotion logic: only promote from a non-Stage-2 status
+    rich = store.set_status(md, "Stage 2 done · baseline by DCH 2026-04-30")
+    assert store.get_status(rich).lower().startswith("stage 2")  # would be preserved
+
+
 if __name__ == "__main__":
     test_scaffold_roundtrip_sections()
     test_set_section_preserves_others()
