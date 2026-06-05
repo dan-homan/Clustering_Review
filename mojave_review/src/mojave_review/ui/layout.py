@@ -317,8 +317,21 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                                         html.Button(
                                             "Save Stage 2 notes",
                                             id="save-stage2-btn", n_clicks=0,
+                                            title="Save and mark Stage 2 in progress",
                                             style={"padding": "0.3em 0.9em",
                                                    "fontSize": "0.85em"},
+                                        ),
+                                        html.Button(
+                                            "Save & set Stage 2 done",
+                                            id="save-stage2-done-btn", n_clicks=0,
+                                            title="Save and mark Stage 2 done",
+                                            style={"padding": "0.3em 0.9em",
+                                                   "fontSize": "0.85em",
+                                                   "marginLeft": "0.5em",
+                                                   "background": "#1f77b4",
+                                                   "color": "white",
+                                                   "border": "none",
+                                                   "borderRadius": "4px"},
                                         ),
                                         html.Span(
                                             id="stage2-save-status",

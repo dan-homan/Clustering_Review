@@ -132,38 +132,41 @@ def register_callbacks(
             md = read_note(notes_dir, src.source)
             return get_section(md, "stage2") if md else ""
 
+        # Two explicit save buttons: "Save Stage 2 notes" marks the source
+        # Stage 2 *in progress*; "Save & set Stage 2 done" marks it *done*.
+        # (Per decision A the Stage 2 apply also sets a richer "done" status,
+        # but the builder can mark done here directly too.)
         @app.callback(
             Output("stage2-save-status", "children"),
             Output("notes-saved-counter", "data"),
             Input("save-stage2-btn", "n_clicks"),
+            Input("save-stage2-done-btn", "n_clicks"),
             State("stage2-editor", "value"),
             State("source-picker", "value"),
             State("notes-saved-counter", "data"),
             prevent_initial_call=True,
         )
-        def _save_stage2(_n, content, source_folder, counter):
+        def _save_stage2(_n_prog, _n_done, content, source_folder, counter):
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return "No source selected.", no_update
+            status = ("Stage 2 done" if ctx.triggered_id == "save-stage2-done-btn"
+                      else "Stage 2 in progress")
             content = content or ""
             try:
                 md = read_note(notes_dir, src.source)
                 if md is None:
                     # No notes file yet (e.g. Step 1 was unreviewed) — scaffold one.
                     md = scaffold(src.source, src.epoch_min, src.epoch_max,
-                                  status="Stage 2 done", stage2=content)
+                                  status=status, stage2=content)
                 else:
                     md = set_section(md, "stage2", content)
-                    # Promote the status to "Stage 2 done" once Stage 2 has
-                    # content — but don't clobber a richer already-Stage-2
-                    # status (e.g. a seeded "Stage 2 done · baseline by …").
-                    if content.strip() and not get_status(md).lower().startswith("stage 2"):
-                        md = set_status(md, "Stage 2 done")
+                    md = set_status(md, status)
                 write_note(notes_dir, src.source, md)
             except Exception as e:  # never lose the file on a bad write
                 return f"Save failed: {e}", no_update
             from datetime import datetime
-            return (f"Saved {datetime.now().strftime('%H:%M:%S')}",
+            return (f"Saved {datetime.now().strftime('%H:%M:%S')} ({status})",
                     int(counter or 0) + 1)
 
     # ---- model picker (depends on source) --------------------------------
