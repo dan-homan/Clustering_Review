@@ -12,7 +12,10 @@ from ..data.fits_cache import split_source_band
 from ..data.loader import (
     _SOURCE_DIR_RE, SourceRef, clear_bundle_cache, list_models, load_bundle,
 )
-from ..notes import combined_markdown, notes_dir_for
+from ..notes import (
+    combined_markdown, notes_dir_for,
+    read_note, write_note, get_section, set_section, scaffold,
+)
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation
@@ -106,12 +109,56 @@ def register_callbacks(
         Input("source-picker", "value"),
         Input("reload-counter", "data"),
         Input("submit-trigger", "data"),
+        Input("notes-saved-counter", "data"),
     )
-    def _refresh_notes(source_folder, _reload_counter, _submit_trigger):
+    def _refresh_notes(source_folder, _reload_counter, _submit_trigger, _notes_saved):
         src = _source_from_folder(source_folder) if source_folder else None
         if src is None:
             return ""
         return combined_markdown(notes_dir, recommendations_dir, src.source)
+
+    # ---- admin/builder: edit the Stage 2 section of notes/<source>.md -----
+    if admin:
+        @app.callback(
+            Output("stage2-editor", "value"),
+            Input("source-picker", "value"),
+            Input("reload-counter", "data"),
+        )
+        def _load_stage2_editor(source_folder, _reload_counter):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return ""
+            md = read_note(notes_dir, src.source)
+            return get_section(md, "stage2") if md else ""
+
+        @app.callback(
+            Output("stage2-save-status", "children"),
+            Output("notes-saved-counter", "data"),
+            Input("save-stage2-btn", "n_clicks"),
+            State("stage2-editor", "value"),
+            State("source-picker", "value"),
+            State("notes-saved-counter", "data"),
+            prevent_initial_call=True,
+        )
+        def _save_stage2(_n, content, source_folder, counter):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return "No source selected.", no_update
+            content = content or ""
+            try:
+                md = read_note(notes_dir, src.source)
+                if md is None:
+                    # No notes file yet (e.g. Step 1 was unreviewed) — scaffold one.
+                    md = scaffold(src.source, src.epoch_min, src.epoch_max,
+                                  status="Stage 2 done", stage2=content)
+                else:
+                    md = set_section(md, "stage2", content)
+                write_note(notes_dir, src.source, md)
+            except Exception as e:  # never lose the file on a bad write
+                return f"Save failed: {e}", no_update
+            from datetime import datetime
+            return (f"Saved {datetime.now().strftime('%H:%M:%S')}",
+                    int(counter or 0) + 1)
 
     # ---- model picker (depends on source) --------------------------------
     # Options include:

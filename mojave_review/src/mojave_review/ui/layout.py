@@ -270,6 +270,9 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
             # gold-diamond highlight in the summary figure and the
             # selection-driven actions in the Edits tab.
             dcc.Store(id="selection-store", data=[]),
+            # Bumped when the builder saves Stage 2 notes (admin mode); an Input
+            # on _refresh_notes so the rendered panel updates immediately.
+            dcc.Store(id="notes-saved-counter", data=0),
             header,
             # Read-only source lab-notebook: the durable notes/<source>.md
             # (Stages 1-2 + decisions ledger) plus the live open-suggestions
@@ -289,6 +292,46 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                                "maxHeight": "42vh", "overflowY": "auto",
                                "fontSize": "0.9em", "lineHeight": "1.4"},
                     ),
+                    # Admin/builder-only: edit the Stage 2 (baseline) notes
+                    # section of notes/<source>.md. Reviewers never see this.
+                    *([] if not admin else [
+                        html.Div(
+                            [
+                                html.Hr(style={"margin": "0 1.25em 0.5em"}),
+                                html.Div(
+                                    "✏️ Edit Stage 2 (baseline) notes — markdown, "
+                                    "saved to notes/<source>.md",
+                                    style={"padding": "0 1.25em 0.25em",
+                                           "fontSize": "0.8em", "color": "#666"},
+                                ),
+                                dcc.Textarea(
+                                    id="stage2-editor",
+                                    style={"width": "calc(100% - 2.5em)",
+                                           "margin": "0 1.25em",
+                                           "minHeight": "120px",
+                                           "fontFamily": "ui-monospace, monospace",
+                                           "fontSize": "0.85em"},
+                                ),
+                                html.Div(
+                                    [
+                                        html.Button(
+                                            "Save Stage 2 notes",
+                                            id="save-stage2-btn", n_clicks=0,
+                                            style={"padding": "0.3em 0.9em",
+                                                   "fontSize": "0.85em"},
+                                        ),
+                                        html.Span(
+                                            id="stage2-save-status",
+                                            style={"marginLeft": "0.75em",
+                                                   "fontSize": "0.8em",
+                                                   "color": "#0a8"},
+                                        ),
+                                    ],
+                                    style={"padding": "0.4em 1.25em 0.5em"},
+                                ),
+                            ],
+                        ),
+                    ]),
                 ],
                 id="notes-details",
                 open=False,
