@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, ctx, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, no_update
 
 from ..auth.runtime import current_reviewer
 from ..data.fits_cache import split_source_band
@@ -20,11 +20,17 @@ from ..notes import (
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation
+from ..recommendations.aggregate import (
+    build_aggregation_view, compose_aggregated,
+)
+from ..recommendations.schema import Recommendation
 from ..recommendations.store import (
     list_other_reviewer_slugs, load_recommendation_by_slug, reviewer_slug,
 )
 from . import recommendations_callbacks
+from .aggregation import build_aggregation_children
 from .recommendations_callbacks import build_rec_from_ui_state
+from ..notes.render import _submitted_recs
 
 
 def register_callbacks(
@@ -55,7 +61,7 @@ def register_callbacks(
 
     def _resolve_df_for_plot(
         source_folder: str, source_name: str, model_key: str,
-        *, visualize_val, cluster_rows, edits, no_changes_val,
+        *, visualize_val, cluster_rows, edits, no_changes_val, agg_rec=None,
     ):
         eff_key = _effective_model_for_load(model_key)
         bundle = load_bundle(source_folder, eff_key)
@@ -69,16 +75,22 @@ def register_callbacks(
             )
             if rec is not None:
                 df = apply_recommendation(df, rec)
-        elif model_key == "current" and visualize_val:
-            own_rec = build_rec_from_ui_state(
-                source=source_name, model="current",
-                reviewer=current_reviewer(reviewer),
-                source_comment=None,
-                no_robustness_changes=bool(no_changes_val),
-                cluster_rows=cluster_rows, epoch_rows=None,
-                edits=edits,
-            )
-            df = apply_recommendation(df, own_rec)
+        elif model_key == "current":
+            # Admin Stage-3 "Preview aggregated" takes precedence over the
+            # reviewer's own in-progress visualize: when on, the composed
+            # aggregated recommendation is what the plots show.
+            if agg_rec:
+                df = apply_recommendation(df, Recommendation.from_dict(agg_rec))
+            elif visualize_val:
+                own_rec = build_rec_from_ui_state(
+                    source=source_name, model="current",
+                    reviewer=current_reviewer(reviewer),
+                    source_comment=None,
+                    no_robustness_changes=bool(no_changes_val),
+                    cluster_rows=cluster_rows, epoch_rows=None,
+                    edits=edits,
+                )
+                df = apply_recommendation(df, own_rec)
         return df
 
     # ---- ↻ Reload button -------------------------------------------------
@@ -169,6 +181,82 @@ def register_callbacks(
             return (f"Saved {datetime.now().strftime('%H:%M:%S')} ({status})",
                     int(counter or 0) + 1)
 
+        # ---- Stage 3 aggregation: build the admin panel for the source ----
+        # Rebuilds whenever the source changes, the page reloads, or a new
+        # submission lands (submit-trigger). Stashes the per-key edit dicts in
+        # agg-view-store so _compose_agg can reconstruct accepted edits.
+        @app.callback(
+            Output("agg-panel-body", "children"),
+            Output("agg-view-store", "data"),
+            Input("source-picker", "value"),
+            Input("reload-counter", "data"),
+            Input("submit-trigger", "data"),
+        )
+        def _build_agg_panel(source_folder, _reload_counter, _submit_trigger):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return build_aggregation_children(
+                    build_aggregation_view("", [], None)), None
+            recs = _submitted_recs(recommendations_dir, src.source)
+            try:
+                current_df = load_bundle(source_folder, "current").cluster_df
+            except Exception:
+                current_df = None
+            view = build_aggregation_view(src.source, recs, current_df)
+            return build_aggregation_children(view), view.store_payload()
+
+        # ---- Stage 3 aggregation: compose decisions -> preview rec --------
+        # Collects every per-decision input, composes the aggregated
+        # Recommendation, and publishes it to agg-preview-rec (which the
+        # summary + overlay callbacks consume) only while "Preview aggregated"
+        # is ticked. The composed rec + reasons are what build-step #4's Apply
+        # will consume.
+        @app.callback(
+            Output("agg-preview-rec", "data"),
+            Output("agg-summary", "children"),
+            Input({"type": "agg-rob-final", "cid": ALL}, "value"),
+            Input({"type": "agg-rob-reason", "cid": ALL}, "value"),
+            Input({"type": "agg-edit-accept", "key": ALL}, "value"),
+            Input({"type": "agg-edit-reason", "key": ALL}, "value"),
+            Input("agg-preview-toggle", "value"),
+            State({"type": "agg-rob-final", "cid": ALL}, "id"),
+            State({"type": "agg-rob-reason", "cid": ALL}, "id"),
+            State({"type": "agg-edit-accept", "key": ALL}, "id"),
+            State({"type": "agg-edit-reason", "key": ALL}, "id"),
+            State("agg-view-store", "data"),
+            State("source-picker", "value"),
+        )
+        def _compose_agg(final_vals, rob_reason_vals, accept_vals, edit_reason_vals,
+                         preview_val, final_ids, rob_reason_ids, accept_ids,
+                         edit_reason_ids, store_payload, source_folder):
+            finals: dict[int, bool] = {}
+            for i, v in zip(final_ids or [], final_vals or []):
+                b = (True if v == "robust" else False if v == "non-robust" else None)
+                if b is not None:
+                    finals[int(i["cid"])] = b
+            rob_reasons = {int(i["cid"]): (v or "")
+                           for i, v in zip(rob_reason_ids or [], rob_reason_vals or [])}
+            accepted = [i["key"] for i, v in zip(accept_ids or [], accept_vals or [])
+                        if v and "y" in v]
+            edit_reasons = {i["key"]: (v or "")
+                            for i, v in zip(edit_reason_ids or [], edit_reason_vals or [])}
+
+            src = _source_from_folder(source_folder) if source_folder else None
+            source_name = (store_payload or {}).get("source") or (src.source if src else "")
+            rec = compose_aggregated(
+                source_name, current_reviewer(reviewer),
+                robustness_finals=finals, robustness_reasons=rob_reasons,
+                accepted_edit_keys=accepted, edit_reasons=edit_reasons,
+                store_payload=store_payload or {},
+            )
+            on = bool(preview_val) and "on" in preview_val
+            summary = (f"{len(finals)} robustness decision"
+                       f"{'' if len(finals) == 1 else 's'} · "
+                       f"{len(accepted)} edit{'' if len(accepted) == 1 else 's'} accepted"
+                       f" · preview {'ON' if on else 'off'}")
+            preview = rec.to_dict() if (on and not rec.is_empty()) else None
+            return preview, summary
+
     # ---- model picker (depends on source) --------------------------------
     # Options include:
     #   - "current"                        — the live model
@@ -218,10 +306,12 @@ def register_callbacks(
         Input("no-changes-checkbox", "value"),
         Input("hide-non-robust-checkbox", "value"),
         Input("reload-counter", "data"),
+        Input("agg-preview-rec", "data"),
     )
     def _refresh_summary(source_folder, model_key, view, vector_scale,
                          selection, visualize_val, cluster_rows, edits,
-                         no_changes_val, hide_non_robust_val, _reload_counter):
+                         no_changes_val, hide_non_robust_val, _reload_counter,
+                         agg_rec):
         if not source_folder or not model_key:
             return go.Figure()
         src = _source_from_folder(source_folder)
@@ -230,7 +320,7 @@ def register_callbacks(
         df = _resolve_df_for_plot(
             source_folder, src.source, model_key,
             visualize_val=visualize_val, cluster_rows=cluster_rows,
-            edits=edits, no_changes_val=no_changes_val,
+            edits=edits, no_changes_val=no_changes_val, agg_rec=agg_rec,
         )
         # 1-sigma centroid-position uncertainties from the clean components,
         # for error bars on the Position / XY Position views (other views
@@ -463,11 +553,12 @@ def register_callbacks(
         Input("stack-image-checkbox", "value"),
         Input("overlay-reset-counter", "data"),
         Input("reload-counter", "data"),
+        Input("agg-preview-rec", "data"),
     )
     def _refresh_overlay(source_folder, model_key, epoch_int,
                          visualize_val, cluster_rows, edits, no_changes_val,
                          use_fits_val, stacked_val, reset_counter,
-                         _reload_counter):
+                         _reload_counter, agg_rec):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
         src = _source_from_folder(source_folder)
@@ -483,7 +574,7 @@ def register_callbacks(
         applied_df = _resolve_df_for_plot(
             source_folder, src.source, model_key,
             visualize_val=visualize_val, cluster_rows=cluster_rows,
-            edits=edits, no_changes_val=no_changes_val,
+            edits=edits, no_changes_val=no_changes_val, agg_rec=agg_rec,
         )
         if not applied_df.equals(bundle.cluster_df):
             # Construct a shallow shim bundle with the patched df. The

@@ -369,6 +369,38 @@ The model dropdown is populated by `_populate_models`: `current` + any
 `<recs-dir>/<source>/submitted/*.json` (excluding the current user's slug).
 In-progress drafts under `<source>/current/` are never surfaced.
 
+### Stage-3 aggregation panel (admin only)
+
+A collapsible **"🧩 Aggregate reviews (Stage 3 — admin)"** panel (rendered only
+when `--admin`) lets the builder reconcile every reviewer's *submitted*
+recommendation for the current source into one model. Pure logic lives in
+[`recommendations/aggregate.py`](mojave_review/src/mojave_review/recommendations/aggregate.py)
+(unit-tested, no Dash); the panel body is built by
+[`ui/aggregation.py`](mojave_review/src/mojave_review/ui/aggregation.py).
+
+- **Robustness decisions** — one row per cluster any reviewer voted on, with a
+  column per reviewer (side-by-side) and a single **Final** dropdown
+  (—/Robust/Non-robust). Default = `default_final_robust`: the **majority of
+  the reviewer votes plus the current model as one equal vote**; a tie defaults
+  to the current flag. Optional per-row Reason.
+- **Cross-ID / use-in-fit edits** — one row per *unique* edit (identical edits
+  from multiple reviewers collapse to one row, proposers listed; comments are
+  excluded from the dedupe key). An **Accept** checkbox (default off) + optional
+  Reason. Edits are ordered change_clusterID-before-use_in_fit for a
+  deterministic apply order.
+- **Reviewer comments** — read-only context (source/cluster/epoch comments).
+- **Preview** — `_compose_agg` turns the decisions into one `Recommendation`
+  (`compose_aggregated`) and, while **"Preview aggregated"** is ticked,
+  publishes it to `dcc.Store(id="agg-preview-rec")`. That store is an Input on
+  the summary + overlay callbacks; in `_resolve_df_for_plot` an `agg_rec` takes
+  precedence over the reviewer's own Visualize on the `current` model. The
+  store is always present (non-admin leaves it `None`).
+
+The **"Apply aggregated…"** button is disabled — wiring it to `mojave-apply` +
+the notes ledger + a considered-submissions archive is **build-step #4**. The
+composed rec + reasons (held in the panel inputs / `agg-view-store`) are exactly
+what that step will consume.
+
 ## Running the web app
 
 ```bash

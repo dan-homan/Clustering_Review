@@ -273,6 +273,14 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
             # Bumped when the builder saves Stage 2 notes (admin mode); an Input
             # on _refresh_notes so the rendered panel updates immediately.
             dcc.Store(id="notes-saved-counter", data=0),
+            # Stage-3 aggregation (admin). agg-preview-rec holds the composed
+            # aggregated Recommendation (dict) when "Preview aggregated" is on,
+            # else None — it is an Input on the summary + overlay callbacks so
+            # the plots show the aggregated model. agg-view-store holds the
+            # per-key edit dicts so the compose step can reconstruct accepted
+            # edits. Both are always present (non-admin leaves them None).
+            dcc.Store(id="agg-preview-rec", data=None),
+            dcc.Store(id="agg-view-store", data=None),
             header,
             # Read-only source lab-notebook: the durable notes/<source>.md
             # (Stages 1-2 + decisions ledger) plus the live open-suggestions
@@ -350,6 +358,55 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                 open=False,
                 style={"borderBottom": "1px solid #ddd", "background": "#fbfbfb"},
             ),
+            # Admin-only Stage-3 aggregation: review every reviewer's submitted
+            # recommendation side-by-side, decide each change, preview the
+            # result. The actual apply (mojave-apply + ledger) is build-step #4.
+            *([] if not admin else [
+                html.Details(
+                    [
+                        html.Summary(
+                            "🧩  Aggregate reviews (Stage 3 — admin)",
+                            style={"cursor": "pointer", "padding": "0.4em 1em",
+                                   "fontWeight": 600, "color": "#333",
+                                   "userSelect": "none"},
+                        ),
+                        html.Div(
+                            [
+                                dcc.Checklist(
+                                    id="agg-preview-toggle",
+                                    options=[{"label": " Preview aggregated on plots",
+                                              "value": "on"}],
+                                    value=[],
+                                    style={"display": "inline-block",
+                                           "fontSize": "0.85em"},
+                                ),
+                                html.Button(
+                                    "Apply aggregated…",
+                                    id="agg-apply-btn", n_clicks=0, disabled=True,
+                                    title="Coming in build-step #4",
+                                    style={"marginLeft": "1em", "padding": "0.3em 0.9em",
+                                           "fontSize": "0.85em", "opacity": 0.55},
+                                ),
+                                html.Span(
+                                    id="agg-summary",
+                                    style={"marginLeft": "1em", "fontSize": "0.8em",
+                                           "color": "#555"},
+                                ),
+                            ],
+                            style={"padding": "0.2em 1.25em 0.4em",
+                                   "display": "flex", "alignItems": "center"},
+                        ),
+                        html.Div(
+                            id="agg-panel-body",
+                            style={"padding": "0.1em 1.25em 1em",
+                                   "maxHeight": "46vh", "overflowY": "auto"},
+                        ),
+                    ],
+                    id="agg-details",
+                    open=False,
+                    style={"borderBottom": "1px solid #ddd", "background": "#f7f9fb"},
+                ),
+            ]),
             body,
             build_recommendations_panel(admin=admin),
         ],
