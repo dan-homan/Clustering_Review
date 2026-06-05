@@ -160,6 +160,62 @@ def test_view_empty_no_submissions():
     assert view.robustness_rows == [] and view.edit_rows == []
 
 
+# ---------------------------------------------------------------------------
+# Stage-3 ledger entry (suggested-vs-applied record)
+# ---------------------------------------------------------------------------
+
+def test_stage3_ledger_entry_records_accepted_and_rejected():
+    from mojave_review.recommendations.aggregate import stage3_ledger_entry
+    view = build_aggregation_view("x", _recs(), _current_df())
+    reid_key = view.edit_rows[0].key
+    uif_key = view.edit_rows[1].key
+    md = stage3_ledger_entry(
+        view,
+        finals={2: False, 3: True},          # cl2 changed; cl3 kept (dissent)
+        rob_reasons={2: "consensus"},
+        accepted_keys=[reid_key],            # re-ID accepted; use_in_fit rejected
+        edit_reasons={reid_key: "both agreed", uif_key: "looks fine"},
+        applied_by="homand", date="2026-06-05", backup_ref="backup_007",
+    )
+    assert md.startswith("### 2026-06-05 — Stage 3 reconciliation "
+                         "(applied by homand) — backup_007")
+    assert "Considered: alice" in md and "bob" in md
+    # cl2 changed to Non-robust, supported, with reason
+    assert "cl 2 → Non-robust ✓ (changed from Robust)" in md
+    assert "consensus" in md
+    # cl3 kept Robust, alice's dissent recorded as ✗
+    assert "cl 3 → Robust — (kept)" in md
+    assert "alice suggested Non-robust ✗" in md
+    # edits: re-ID accepted ✓, use_in_fit not applied ✗
+    assert "✓ accepted" in md and "both agreed" in md
+    assert "✗ not applied" in md
+
+
+def test_archive_considered_submissions(tmp_path=None):
+    import tempfile
+    from pathlib import Path
+    from mojave_review.recommendations.store import (
+        save_submitted, archive_considered_submissions, submission_path,
+    )
+    d = Path(tempfile.mkdtemp())
+    rd = d / "recommendations"
+    for who in ("alice", "bob"):
+        save_submitted(rd, Recommendation(source="0003+380u", model="current",
+                                          reviewer=who, source_comment="x"))
+    moved = archive_considered_submissions(
+        rd, "0003+380u", ["alice", "bob"], date="2026-06-05", execute=True)
+    assert len(moved) == 2
+    # gone from submitted/, present under considered/<date>/
+    assert not submission_path(rd, "0003+380u", "alice").is_file()
+    assert (rd / "0003+380u" / "considered" / "2026-06-05" / "alice.json").is_file()
+    # dry-run leaves files in place
+    save_submitted(rd, Recommendation(source="0003+380u", model="current",
+                                      reviewer="carol"))
+    dry = archive_considered_submissions(
+        rd, "0003+380u", ["carol"], date="2026-06-06", execute=False)
+    assert len(dry) == 1 and submission_path(rd, "0003+380u", "carol").is_file()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

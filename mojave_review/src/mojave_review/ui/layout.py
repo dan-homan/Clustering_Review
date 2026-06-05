@@ -382,19 +382,28 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                                 ),
                                 html.Button(
                                     "Apply aggregated…",
-                                    id="agg-apply-btn", n_clicks=0, disabled=True,
-                                    title="Coming in build-step #4",
+                                    id="agg-apply-btn", n_clicks=0,
+                                    title="Apply these decisions to Results/ "
+                                          "(runs mojave-apply, writes the ledger)",
                                     style={"marginLeft": "1em", "padding": "0.3em 0.9em",
-                                           "fontSize": "0.85em", "opacity": 0.55},
+                                           "fontSize": "0.85em", "background": "#b9770e",
+                                           "color": "white", "border": "none",
+                                           "borderRadius": "4px", "cursor": "pointer"},
                                 ),
                                 html.Span(
                                     id="agg-summary",
                                     style={"marginLeft": "1em", "fontSize": "0.8em",
                                            "color": "#555"},
                                 ),
+                                html.Span(
+                                    id="agg-apply-status",
+                                    style={"marginLeft": "1em", "fontSize": "0.8em",
+                                           "fontWeight": 600, "color": "#1a7"},
+                                ),
                             ],
                             style={"padding": "0.2em 1.25em 0.4em",
-                                   "display": "flex", "alignItems": "center"},
+                                   "display": "flex", "alignItems": "center",
+                                   "flexWrap": "wrap"},
                         ),
                         html.Div(
                             id="agg-panel-body",
@@ -405,6 +414,76 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.
                     id="agg-details",
                     open=False,
                     style={"borderBottom": "1px solid #ddd", "background": "#f7f9fb"},
+                ),
+                # Confirm dialog for the (destructive) aggregated apply.
+                html.Div(
+                    id="agg-apply-modal",
+                    style={"display": "none"},
+                    children=[
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.H4("Apply aggregated decisions",
+                                                style={"margin": 0}),
+                                        html.Button(
+                                            "×", id="agg-apply-close", n_clicks=0,
+                                            style={"border": "none",
+                                                   "background": "transparent",
+                                                   "fontSize": "1.5em", "lineHeight": 1,
+                                                   "cursor": "pointer", "color": "#888"},
+                                        ),
+                                    ],
+                                    style={"display": "flex",
+                                           "justifyContent": "space-between",
+                                           "alignItems": "center",
+                                           "marginBottom": "0.4em"},
+                                ),
+                                html.P(
+                                    "This runs mojave-apply on the current model: "
+                                    "it backs up and regenerates Results/ (CSV + "
+                                    "PDF + MP4), archives the considered submissions, "
+                                    "and writes the Stage-3 ledger. This modifies "
+                                    "research data on disk.",
+                                    style={"color": "#666", "fontSize": "0.88em",
+                                           "margin": "0 0 0.5em"},
+                                ),
+                                html.Div(id="agg-apply-modal-text",
+                                         style={"fontSize": "0.9em",
+                                                "marginBottom": "0.6em"}),
+                                html.Div(
+                                    [
+                                        html.Button(
+                                            "Apply now", id="agg-apply-confirm",
+                                            n_clicks=0,
+                                            style={"padding": "0.45em 1em",
+                                                   "background": "#b9770e",
+                                                   "color": "white", "border": "none",
+                                                   "borderRadius": "4px",
+                                                   "cursor": "pointer"},
+                                        ),
+                                        html.Button(
+                                            "Cancel", id="agg-apply-cancel",
+                                            n_clicks=0,
+                                            style={"padding": "0.45em 1em",
+                                                   "background": "white",
+                                                   "color": "#555",
+                                                   "border": "1px solid #bbb",
+                                                   "borderRadius": "4px",
+                                                   "cursor": "pointer"},
+                                        ),
+                                    ],
+                                    style={"display": "flex", "gap": "0.5em",
+                                           "justifyContent": "flex-end",
+                                           "marginTop": "0.5em"},
+                                ),
+                            ],
+                            style={"background": "white", "padding": "1.5em",
+                                   "borderRadius": "6px", "maxWidth": "560px",
+                                   "margin": "8% auto",
+                                   "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"},
+                        ),
+                    ],
                 ),
             ]),
             body,

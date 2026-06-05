@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import date as _date
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -15,22 +21,41 @@ from ..data.loader import (
 from ..notes import (
     combined_markdown, notes_dir_for,
     read_note, write_note, get_section, set_section, scaffold,
-    get_status, set_status,
+    get_status, set_status, append_ledger,
 )
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation
 from ..recommendations.aggregate import (
-    build_aggregation_view, compose_aggregated,
+    build_aggregation_view, compose_aggregated, stage3_ledger_entry,
 )
 from ..recommendations.schema import Recommendation
 from ..recommendations.store import (
-    list_other_reviewer_slugs, load_recommendation_by_slug, reviewer_slug,
+    archive_considered_submissions, list_other_reviewer_slugs,
+    load_recommendation_by_slug, reviewer_slug,
 )
 from . import recommendations_callbacks
 from .aggregation import build_aggregation_children
 from .recommendations_callbacks import build_rec_from_ui_state
 from ..notes.render import _submitted_recs
+
+
+def _collect_decisions(final_ids, final_vals, rob_reason_ids, rob_reason_vals,
+                       accept_ids, accept_vals, edit_reason_ids, edit_reason_vals):
+    """Parse the aggregation panel's pattern-matched inputs into plain dicts.
+    Shared by the live-preview compose and the apply orchestration."""
+    finals: dict[int, bool] = {}
+    for i, v in zip(final_ids or [], final_vals or []):
+        b = True if v == "robust" else False if v == "non-robust" else None
+        if b is not None:
+            finals[int(i["cid"])] = b
+    rob_reasons = {int(i["cid"]): (v or "")
+                   for i, v in zip(rob_reason_ids or [], rob_reason_vals or [])}
+    accepted = [i["key"] for i, v in zip(accept_ids or [], accept_vals or [])
+                if v and "y" in v]
+    edit_reasons = {i["key"]: (v or "")
+                    for i, v in zip(edit_reason_ids or [], edit_reason_vals or [])}
+    return finals, rob_reasons, accepted, edit_reasons
 
 
 def register_callbacks(
@@ -229,18 +254,9 @@ def register_callbacks(
         def _compose_agg(final_vals, rob_reason_vals, accept_vals, edit_reason_vals,
                          preview_val, final_ids, rob_reason_ids, accept_ids,
                          edit_reason_ids, store_payload, source_folder):
-            finals: dict[int, bool] = {}
-            for i, v in zip(final_ids or [], final_vals or []):
-                b = (True if v == "robust" else False if v == "non-robust" else None)
-                if b is not None:
-                    finals[int(i["cid"])] = b
-            rob_reasons = {int(i["cid"]): (v or "")
-                           for i, v in zip(rob_reason_ids or [], rob_reason_vals or [])}
-            accepted = [i["key"] for i, v in zip(accept_ids or [], accept_vals or [])
-                        if v and "y" in v]
-            edit_reasons = {i["key"]: (v or "")
-                            for i, v in zip(edit_reason_ids or [], edit_reason_vals or [])}
-
+            finals, rob_reasons, accepted, edit_reasons = _collect_decisions(
+                final_ids, final_vals, rob_reason_ids, rob_reason_vals,
+                accept_ids, accept_vals, edit_reason_ids, edit_reason_vals)
             src = _source_from_folder(source_folder) if source_folder else None
             source_name = (store_payload or {}).get("source") or (src.source if src else "")
             rec = compose_aggregated(
@@ -256,6 +272,145 @@ def register_callbacks(
                        f" · preview {'ON' if on else 'off'}")
             preview = rec.to_dict() if (on and not rec.is_empty()) else None
             return preview, summary
+
+        # ---- Stage 3 apply: confirm modal open / cancel -------------------
+        _AGG_MODAL_OVERLAY = {
+            "display": "block", "position": "fixed",
+            "top": 0, "left": 0, "right": 0, "bottom": 0,
+            "background": "rgba(0,0,0,0.4)", "zIndex": 1000, "overflow": "auto",
+        }
+
+        @app.callback(
+            Output("agg-apply-modal", "style"),
+            Output("agg-apply-modal-text", "children"),
+            Input("agg-apply-btn", "n_clicks"),
+            State("agg-summary", "children"),
+            State("source-picker", "value"),
+            prevent_initial_call=True,
+        )
+        def _open_apply_modal(_n, summary, source_folder):
+            src = _source_from_folder(source_folder) if source_folder else None
+            name = src.source if src else "(no source selected)"
+            return _AGG_MODAL_OVERLAY, f"{name} — {summary or 'no decisions yet'}"
+
+        @app.callback(
+            Output("agg-apply-modal", "style", allow_duplicate=True),
+            Input("agg-apply-cancel", "n_clicks"),
+            Input("agg-apply-close", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def _close_apply_modal(*_):
+            return {"display": "none"}
+
+        # ---- Stage 3 apply: the one-click orchestration -------------------
+        # Composes the aggregated rec, runs mojave-apply as a subprocess
+        # (synchronous), and on success archives the considered submissions,
+        # writes the notes ledger + bumps Status, and refreshes everything via
+        # reload-counter. Destructive — only reachable behind the confirm modal.
+        @app.callback(
+            Output("agg-apply-modal", "style", allow_duplicate=True),
+            Output("agg-apply-status", "children"),
+            Output("reload-counter", "data", allow_duplicate=True),
+            Output("agg-preview-rec", "data", allow_duplicate=True),
+            Output("agg-preview-toggle", "value", allow_duplicate=True),
+            Input("agg-apply-confirm", "n_clicks"),
+            State({"type": "agg-rob-final", "cid": ALL}, "value"),
+            State({"type": "agg-rob-final", "cid": ALL}, "id"),
+            State({"type": "agg-rob-reason", "cid": ALL}, "value"),
+            State({"type": "agg-rob-reason", "cid": ALL}, "id"),
+            State({"type": "agg-edit-accept", "key": ALL}, "value"),
+            State({"type": "agg-edit-accept", "key": ALL}, "id"),
+            State({"type": "agg-edit-reason", "key": ALL}, "value"),
+            State({"type": "agg-edit-reason", "key": ALL}, "id"),
+            State("source-picker", "value"),
+            State("reload-counter", "data"),
+            prevent_initial_call=True,
+        )
+        def _apply_aggregated(_n, final_vals, final_ids, rob_reason_vals,
+                              rob_reason_ids, accept_vals, accept_ids,
+                              edit_reason_vals, edit_reason_ids,
+                              source_folder, reload_counter):
+            hide = {"display": "none"}
+            err = (hide, no_update, no_update, no_update, no_update)
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return (hide, "No source selected.", no_update, no_update, no_update)
+            finals, rob_reasons, accepted, edit_reasons = _collect_decisions(
+                final_ids, final_vals, rob_reason_ids, rob_reason_vals,
+                accept_ids, accept_vals, edit_reason_ids, edit_reason_vals)
+            recs = _submitted_recs(recommendations_dir, src.source)
+            if not recs:
+                return (hide, "No submissions to apply.", *err[2:])
+            try:
+                current_df = load_bundle(source_folder, "current").cluster_df
+            except Exception as e:
+                return (hide, f"Could not load current model: {e}", *err[2:])
+            view = build_aggregation_view(src.source, recs, current_df)
+            rec = compose_aggregated(
+                src.source, "aggregated",
+                robustness_finals=finals, robustness_reasons=rob_reasons,
+                accepted_edit_keys=accepted, edit_reasons=edit_reasons,
+                store_payload=view.store_payload())
+            if rec.is_empty():
+                return (hide, "No decisions to apply (set a Final or accept an "
+                        "edit first).", *err[2:])
+
+            today = _date.today().isoformat()
+            stage3_dir = recommendations_dir / src.source / "stage3"
+            stage3_dir.mkdir(parents=True, exist_ok=True)
+            # mojave-apply archives this to applied/<date>__<stem>.json, so the
+            # stem is just "aggregated" (the date prefix is added there).
+            staging = stage3_dir / "aggregated.json"
+            staging.write_text(json.dumps(rec.to_dict(), indent=2))
+
+            prod_dir = os.environ.get("MOJAVE_CODE") or str(Path(results_dir).parent)
+            cmd = [sys.executable, "-m", "mojave_review.cli.apply",
+                   "--results-dir", str(results_dir),
+                   "--source", Path(source_folder).name,
+                   "--recommendation", str(staging),
+                   "--recommendations-dir", str(recommendations_dir),
+                   "--production-code-dir", prod_dir, "--no-confirm"]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      env=os.environ.copy(), timeout=1800)
+            except Exception as e:
+                return (hide, f"Apply failed to launch: {e}", *err[2:])
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "").strip()[-400:]
+                return (hide, f"mojave-apply failed (rc={proc.returncode}): {tail}",
+                        *err[2:])
+
+            out = proc.stdout or ""
+            m = re.search(r"backup_(\d+)", out)
+            backup_ref = (f"backup_{m.group(1)}" if m else
+                          "no changes (concluded)" if "no changes" in out.lower()
+                          else "applied")
+
+            slugs = [reviewer_slug(r.reviewer) for r in recs]
+            try:
+                archive_considered_submissions(
+                    recommendations_dir, src.source, slugs, date=today)
+            except Exception:
+                pass
+            ledger_note = ""
+            try:
+                entry = stage3_ledger_entry(
+                    view, finals=finals, rob_reasons=rob_reasons,
+                    accepted_keys=accepted, edit_reasons=edit_reasons,
+                    applied_by=current_reviewer(reviewer), date=today,
+                    backup_ref=backup_ref)
+                md = read_note(notes_dir, src.source)
+                if md is None:
+                    md = scaffold(src.source, src.epoch_min, src.epoch_max)
+                md = append_ledger(md, entry)
+                md = set_status(md, f"Stage 3 done · applied {today}")
+                write_note(notes_dir, src.source, md)
+            except Exception as e:
+                ledger_note = f" (ledger write failed: {e})"
+            clear_bundle_cache()
+            msg = (f"Applied ✓ {backup_ref} — archived {len(slugs)} considered "
+                   f"submission(s), ledger written{ledger_note}.")
+            return (hide, msg, int(reload_counter or 0) + 1, None, [])
 
     # ---- model picker (depends on source) --------------------------------
     # Options include:

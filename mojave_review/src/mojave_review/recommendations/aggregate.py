@@ -286,3 +286,71 @@ def compose_aggregated(
         source_comment="", no_robustness_changes=False,
         cluster_feedback=cluster_feedback, epoch_feedback={}, edits=edits,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage-3 ledger entry (markdown for notes/<source>.md)
+# ---------------------------------------------------------------------------
+
+
+def _flag(b: bool) -> str:
+    return "Robust" if b else "Non-robust"
+
+
+def stage3_ledger_entry(
+    view: AggregationView,
+    *,
+    finals: dict[int, bool],          # cid -> True/False ("—" omitted = keep current)
+    rob_reasons: dict[int, str],
+    accepted_keys: list[str],
+    edit_reasons: dict[str, str],
+    applied_by: str,
+    date: str,
+    backup_ref: str,
+) -> str:
+    """Render the append-only "Decisions & applied history" entry recording
+    both what was **accepted ✓** and what was **rejected ✗**, with reasons and
+    proposers — the human-readable suggested-vs-applied record."""
+    accepted = set(accepted_keys)
+    considered = ", ".join(f"{rv} ({when})" for rv, when in view.submissions) or "—"
+    lines = [
+        f"### {date} — Stage 3 reconciliation (applied by {applied_by}) — {backup_ref}",
+        f"Considered: {considered}",
+    ]
+
+    if view.robustness_rows:
+        lines.append("")
+        lines.append("Robustness:")
+        for r in view.robustness_rows:
+            final = finals.get(r.cid)
+            if final is None:
+                final = r.current_robust            # "—" → keep current
+            changed = bool(final) != bool(r.current_robust)
+            tag = (f"✓ (changed from {_flag(r.current_robust)})" if changed
+                   else "— (kept)")
+            extras: list[str] = []
+            supporters = [rv for rv, v in r.votes.items() if bool(v) == bool(final)]
+            dissenters = [(rv, v) for rv, v in r.votes.items()
+                          if bool(v) != bool(final)]
+            if supporters:
+                extras.append(f"supported by {', '.join(supporters)}")
+            for rv, v in dissenters:
+                extras.append(f"{rv} suggested {_flag(v)} ✗")
+            reason = (rob_reasons.get(r.cid) or "").strip()
+            if reason:
+                extras.append(f"reason: {reason}")
+            tail = (" — " + "; ".join(extras)) if extras else ""
+            lines.append(f"- cl {r.cid} → {_flag(final)} {tag}{tail}")
+
+    if view.edit_rows:
+        lines.append("")
+        lines.append("Cross-ID / use-in-fit:")
+        for e in view.edit_rows:
+            acc = e.key in accepted
+            mark = "✓ accepted" if acc else "✗ not applied"
+            reason = (edit_reasons.get(e.key) or "").strip()
+            tail = f" — reason: {reason}" if reason else ""
+            lines.append(f"- {e.description} {mark} "
+                         f"({', '.join(e.proposers)}){tail}")
+
+    return "\n".join(lines)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -160,6 +161,36 @@ def delete_recommendation(
         return True
     except FileNotFoundError:
         return False
+
+
+def archive_considered_submissions(
+    recommendations_dir: Path, source: str, slugs: list[str],
+    *, date: str, execute: bool = True,
+) -> list[Path]:
+    """After a Stage-3 reconciliation is applied, move the reviewer
+    submissions that were folded in out of ``<source>/submitted/`` into
+    ``<source>/considered/<date>/`` — preserving the full submissions while
+    clearing them from "open suggestions" and the ``Rec:`` dropdown. A later
+    re-submission writes a fresh ``submitted/<slug>.json`` and reappears as
+    open. Returns the destination paths (that were / would be) written."""
+    src_dir = Path(recommendations_dir) / source
+    sub = src_dir / "submitted"
+    dst_dir = src_dir / "considered" / date
+    moved: list[Path] = []
+    for slug in slugs:
+        p = sub / f"{slug}.json"
+        if not p.is_file():
+            continue
+        target = dst_dir / f"{slug}.json"
+        n = 2
+        while target.exists():
+            target = dst_dir / f"{slug}_{n}.json"
+            n += 1
+        if execute:
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(p), str(target))
+        moved.append(target)
+    return moved
 
 
 def delete_submission(

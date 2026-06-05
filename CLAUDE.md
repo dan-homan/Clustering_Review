@@ -396,10 +396,20 @@ recommendation for the current source into one model. Pure logic lives in
   precedence over the reviewer's own Visualize on the `current` model. The
   store is always present (non-admin leaves it `None`).
 
-The **"Apply aggregated…"** button is disabled — wiring it to `mojave-apply` +
-the notes ledger + a considered-submissions archive is **build-step #4**. The
-composed rec + reasons (held in the panel inputs / `agg-view-store`) are exactly
-what that step will consume.
+- **Apply** — the **"Apply aggregated…"** button opens a confirm modal, then
+  (one-click subprocess) writes the composed rec to
+  `recommendations/<source>/stage3/aggregated.json`, runs `mojave-apply`
+  (`python -m mojave_review.cli.apply … --no-confirm`, production-code dir from
+  `$MOJAVE_CODE` or `<results-dir>/..`) which backs up + regenerates `Results/`
+  and archives the JSON to `applied/`. **On success** it then moves the folded
+  reviewer submissions `submitted/*.json` → `considered/<date>/` (so they leave
+  "open suggestions" / the `Rec:` dropdown — a later re-submission reappears),
+  appends a **suggested-vs-applied ledger entry** (`stage3_ledger_entry`,
+  recording ✓accepted / ✗rejected with reasons + proposers) to the notes
+  "Decisions & applied history", bumps Status → `Stage 3 done · applied <date>`,
+  and bumps `reload-counter` to refresh the panel/notes/plots. The result line
+  lives in its own `agg-apply-status` span (not `agg-summary`, which
+  `_compose_agg` owns and would clobber). All in `ui/callbacks._apply_aggregated`.
 
 ## Running the web app
 
