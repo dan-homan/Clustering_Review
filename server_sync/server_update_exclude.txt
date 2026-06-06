@@ -16,8 +16,12 @@ Thumbs.db
 # The app loads the CSV + .plotdata.npz and fetches FITS from MOJAVE on
 # demand; the per-source PDF/MP4 are read-only reference renders. Uncomment
 # to skip pushing them to the server and save bandwidth/disk:
-*.summary_plots.pdf
-*.epoch_overplots.mp4
+*summary_plots.pdf
+*epoch_overplots.mp4
+*.iqu_cc.*
 
 # --- (optional) alternate models / per-window fits ---
 cluster_fits/
+
+results_review_summary.txt
+gap_fix_summary.txt
