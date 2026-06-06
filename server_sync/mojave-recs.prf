@@ -4,16 +4,21 @@
 #
 # See sync_server.sh in the Clustering_Review repo for the wrapper that
 # drives this alongside the one-way rsync mirror of notes/ and Results/.
+#
+# IMPORTANT: Unison profile syntax does NOT allow a trailing inline comment on
+# a preference line ("times = true  # ..." is a parse error — the comment is
+# read as part of the value). Keep every comment on its own line beginning
+# with '#'.
 
 # --- the two roots ---
 # Local root is RELATIVE: resolved against the directory Unison is launched
 # from. sync_server.sh cd's into your production data dir first, so this
 # becomes <that dir>/recommendations. Always invoke via sync_server.sh (or run
-# unison from that same production dir) so the relative root — and Unison's
-# per-side state archive — stay consistent run to run.
+# unison from that same production dir) so the relative root -- and Unison's
+# per-side state archive -- stay consistent run to run.
 root = recommendations
+# Double slash below = absolute remote path.
 root = ssh://homand@74.140.113.72//home/homand/mojave-review/data/recommendations
-#                                ^^ double slash = absolute remote path
 
 # --- ssh transport: custom key + port (matches the rsync setup) ---
 sshargs = -i /Users/homand/.ssh/id_ed25519 -p 2121 -o StrictHostKeyChecking=no
@@ -21,23 +26,27 @@ sshargs = -i /Users/homand/.ssh/id_ed25519 -p 2121 -o StrictHostKeyChecking=no
 # servercmd = /usr/bin/unison
 
 # --- reconciliation behaviour ---
-times = true            # preserve mtimes (required for `prefer = newer`)
-auto = true             # auto-apply NON-conflicting changes (adds/updates/moves)
-batch = false           # but STOP and ask on a genuine conflict (interactive)
-# prefer = newer        # uncomment for unattended runs: newer file wins.
-                        # Leave commented while you're still building trust, so
-                        # real conflicts pause instead of silently resolving.
-                        # (sync_server.sh's `auto` mode sets this on the CLI.)
+# times: preserve mtimes (required for `prefer = newer`).
+times = true
+# auto: auto-apply NON-conflicting changes (adds / updates / moves).
+auto = true
+# batch = false: STOP and ask on a genuine conflict (interactive).
+batch = false
+# prefer = newer -> uncomment for unattended runs: the newer file wins. Leave
+# it commented while building trust so real conflicts pause instead of silently
+# resolving. (sync_server.sh's `auto` mode passes -prefer newer on the CLI.)
+# prefer = newer
 
 # --- safety net: keep backups of anything replaced or deleted ---
 backup = Name *
 backuplocation = central
 backupdir = /Users/homand/.unison/backups/mojave-recs
 maxbackups = 5
-confirmbigdel = true    # extra prompt before any large deletion
+# confirmbigdel: extra prompt before any large deletion.
+confirmbigdel = true
 
 # --- never sync junk / atomic-write temp files ---
 ignore = Name .DS_Store
-ignore = Name *.part        # rsync / store.py atomic-write temp files
+ignore = Name *.part
 ignore = Name .*.swp
 ignore = Path .git

@@ -70,6 +70,28 @@ Unison keeps a **state archive on each side**, so it:
    Keep the two copies in step if you edit either (this one is the
    version-controlled record).
 
+   > **Profile syntax note:** Unison does *not* allow a trailing inline comment
+   > on a preference line — `times = true  # ...` is a parse error (the comment
+   > is read as part of the value). Every comment must be on its own line
+   > starting with `#`.
+
+3. **(Recommended) Load your SSH key into the agent** so the three legs don't
+   each prompt for your key passphrase. Once per login session:
+
+   ```bash
+   ssh-add --apple-use-keychain ~/.ssh/id_ed25519   # macOS: also stores in Keychain
+   ```
+
+   To make it automatic on future logins, add to `~/.ssh/config`:
+
+   ```
+   Host 74.140.113.72
+       AddKeysToAgent yes
+       UseKeychain yes
+       IdentityFile ~/.ssh/id_ed25519
+       Port 2121
+   ```
+
 ## Usage
 
 **Run from your production data directory** — the one that holds `notes/`,
