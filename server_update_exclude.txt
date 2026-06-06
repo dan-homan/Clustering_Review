@@ -1,0 +1,25 @@
+# rsync --exclude-from patterns for the Results/ -> server mirror.
+# One pattern per line. Paths are relative to Results/. Lines starting with
+# '#' are comments. See `man rsync` (FILTER RULES) for the full syntax.
+
+# --- OS / editor junk ---
+.DS_Store
+._*
+*.swp
+Thumbs.db
+
+# --- atomic-write / temp leftovers ---
+*.part
+*.tmp
+
+# --- (optional) heavy reference renders the web app does NOT need ---
+# The app loads the CSV + .plotdata.npz and fetches FITS from MOJAVE on
+# demand; the per-source PDF/MP4 are read-only reference renders. Uncomment
+# to skip pushing them to the server and save bandwidth/disk:
+# *.summary_plots.pdf
+# *.epoch_overplots.mp4
+
+# --- (optional) alternate models / per-window fits ---
+# Uncomment if the server only needs the current model, not the backups:
+# backups/
+# cluster_fits/
