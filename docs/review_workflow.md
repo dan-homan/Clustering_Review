@@ -2,8 +2,9 @@
 
 How sources move from a first look to a finalized model, and how the
 human-readable record is kept alongside the machine-applicable recommendations.
-This is the reference for the aggregation / note-keeping feature; it is the
-*intended* design — pieces are built incrementally (see "Build order").
+This is the reference for the aggregation / note-keeping feature. **All four
+build-order steps are now implemented** (see "Build order" at the bottom); the
+on-disk paths and formats below describe the shipped behavior.
 
 ## Two layers
 
@@ -28,9 +29,13 @@ notes/
 recommendations/<source>/
   current/<slug>.json                 ← private autosaved draft
   submitted/<slug>.json               ← live suggestion (mutable; resubmit overwrites)
-  applied/<YYYY-MM-DD>/               ← decision-time archive (one dir per apply)
-      aggregated.json                 ← the composed recommendation that was applied
-      considered/<slug>.json          ← frozen copy of each full submission considered
+  stage3/aggregated.json              ← transient: the composed rec staged for apply
+                                        (mojave-apply moves it to applied/)
+  applied/<YYYY-MM-DD>__<stem>.json   ← archive of every applied rec (flat; existing
+                                        mojave-apply scheme). Stage-3 applies land
+                                        here as <date>__aggregated.json
+  considered/<YYYY-MM-DD>/<slug>.json ← the reviewer submissions folded into a Stage-3
+                                        reconciliation, moved out of submitted/ on apply
 Results/<source>_<emin>-<emax>/
   history.txt                         ← terse machine log (existing)
 ```
@@ -47,7 +52,7 @@ disturbing hand-written prose:
 
 ```markdown
 # <source>  (<emin>–<emax>)
-Status: <stage|finalized|revisiting> · baseline by <name> <date> · last applied <date>
+Status: Stage 3 done · applied <date>
 
 ## Stage 1 — Brief review
 <!-- stage1:begin -->
@@ -61,19 +66,28 @@ Status: <stage|finalized|revisiting> · baseline by <name> <date> · last applie
 
 ## Decisions & applied history
 <!-- ledger:begin -->
-### <date> — Aggregated & applied by <admin>  (→ backup_NNN)
-Considered (frozen): see recommendations/<source>/applied/<date>/considered/
-  • <slug>: <one-line summary>
-Applied:
-  ✓ <edit> — <reason>
-Deferred:
-  ✗ <edit> (<slug>) — <reason>
+### <date> — Stage 3 reconciliation (applied by <admin>) — backup_NNN
+Considered: alice (<when>), bob (<when>)
+
+Robustness:
+- cl 2 → Non-robust ✓ (changed from Robust) — supported by alice, bob; reason: …
+- cl 3 → Robust — (kept) — alice suggested Non-robust ✗; reason: …
+
+Cross-ID / use-in-fit:
+- Re-ID 4 → 2 (all epochs) ✓ accepted (alice, bob) — reason: …
+- use_in_fit=False — whole epoch 2003.10 ✗ not applied (alice)
 <!-- ledger:end -->
 ```
 
+- **Status** is a free-text line set by the app: `Stage 1 done`,
+  `Stage 2 in progress`, `Stage 2 done` (the two Stage-2 save buttons), and
+  `Stage 3 done · applied <date>` (the aggregation Apply). Seeded baselines may
+  carry a richer `Stage 2 done · baseline by <name> <date>`.
 - **Stage 1 / Stage 2** are human prose (seeded from the Google doc; the builder
   updates Stage 2 going forward).
-- The **ledger** is append-only and written by the apply action — never by hand.
+- The **ledger** is append-only, rendered by `aggregate.stage3_ledger_entry`
+  (records accepted ✓ and rejected ✗ with reasons + proposers) and written by
+  the aggregation Apply — never by hand.
 
 ## Lifecycle / stages
 
@@ -91,8 +105,8 @@ Deferred:
   edit with a one-line reason, previews the aggregated model, and applies →
   final model + ledger entry.
 - **Revisit.** Reopening a finalized source is just another cycle: new
-  submissions land in `submitted/`; the next aggregation appends a fresh dated
-  ledger block. `Status:` flips to `revisiting`, then back to `finalized`.
+  submissions land in `submitted/`; the next aggregation Apply appends a fresh
+  dated ledger block and re-stamps `Status:` to `Stage 3 done · applied <date>`.
 
 ## Workflows
 
@@ -105,8 +119,13 @@ Deferred:
 - **Builder (Stage 2).** After building a baseline, edits the Stage 2 field in
   the app; saving writes that section of the `.md`.
 - **Admin (aggregation, run from a LOCAL copy of the app where `mojave-apply`
-  can write `Results/`).** Side-by-side reviewer recs → accept/reject each edit
-  with a reason → preview via the existing "Visualize" path → **Apply**.
+  can write `Results/`).** In the admin-only "🧩 Aggregate reviews (Stage 3)"
+  panel: per-cluster **Final** robustness picker (default = majority of reviewer
+  votes + current, ties → current) + accept/reject each edit, each with an
+  optional reason → tick **"Preview aggregated"** to see the composed model on
+  the plots → **Apply aggregated…** (confirm modal → one-click `mojave-apply`).
+  Needs `find_clusters.py` reachable (`$MOJAVE_CODE` or `<results-dir>/..`) and
+  `$MOJAVE_DATA` for plot regen.
 
 ## Two kinds of apply — the ledger is Stage 3 only
 
@@ -124,25 +143,32 @@ the multi-reviewer reconciliation (decision: option A):
   submissions, via the aggregation UI). This is the **only** thing that writes
   the ledger.
 
-How the tooling tells them apart: the source's lifecycle stage (the `Status:`
-line). A plain `mojave-apply` of the builder's own submission, before the source
-is opened for review, is Stage 2. The aggregation UI's Apply, on a source that
-is "awaiting review", is Stage 3.
+How the tooling tells them apart: the **action**, not a status string. A plain
+`mojave-apply` of the builder's own submission (CLI, or any non-aggregation
+apply) is Stage 2 and writes no ledger entry. The aggregation panel's "Apply
+aggregated…" is Stage 3 and is the only path that calls
+`stage3_ledger_entry` + `append_ledger`.
 
 ## The Stage 3 apply: one event, multiple outputs
 
-A single admin (aggregation) "Apply" produces:
+A single admin (aggregation) "Apply" (`ui/callbacks._apply_aggregated`) produces:
 
-1. The applied model — via `mojave-apply` (new CSV backup, regenerated plots,
-   and the existing terse **`history.txt`** entry).
+1. The applied model — via `mojave-apply` run as a synchronous subprocess (new
+   CSV backup, regenerated plots, the terse **`history.txt`** entry, and the
+   composed rec archived to `applied/<date>__aggregated.json`).
 2. The narrative **ledger entry** appended to `notes/<source>.md` (the decision
-   snapshot: applied ✓ / deferred ✗ with reasons).
-3. The **decision-time archive** under `recommendations/<source>/applied/<date>/`:
-   the composed `aggregated.json` plus a frozen `considered/<slug>.json` copy of
-   each full submission (so reviewer comments can be revisited later).
+   snapshot: applied ✓ / deferred ✗ with reasons), and `Status:` bumped to
+   `Stage 3 done · applied <date>`.
+3. The **considered-submissions archive**: the reviewer submissions folded in
+   are moved `submitted/<slug>.json` → `considered/<date>/<slug>.json` — they
+   leave "open suggestions" and the `Rec:` dropdown, but the full submissions
+   (comments and all) are preserved for later. A later re-submission writes a
+   fresh `submitted/<slug>.json` and reappears as open.
 
 `history.txt` and the `.md` ledger are both kept (terse machine log + human
-narrative), written from the same Stage 3 apply event.
+narrative), written from the same Stage 3 apply event. If the `mojave-apply`
+subprocess fails, nothing else is changed (it is fail-safe before any
+destructive write); the failure output is surfaced in the panel.
 
 ## In-app surfacing
 
@@ -151,15 +177,18 @@ the **live open-suggestions** rendered from `submitted/*.json`, so reviewers see
 the context and each other's current input while they work. The live
 open-suggestions are never written to the file.
 
-## Build order (incremental; each independently useful)
+## Build order (all implemented)
 
-1. **Notes substrate** — `notes/` + the `.md` template + a read-only in-app
-   notes panel + the Google-doc seed importer. *(foundational, no risk to the
-   apply path)*
-2. **Builder Stage 2 editor** — app field → `.md` Stage 2 section.
-3. **Aggregation UI** (admin/local) — side-by-side accept/reject + preview.
-4. **Apply integration** — aggregation "Apply" → `mojave-apply` + ledger write +
-   considered-submissions archive.
+1. ✅ **Notes substrate** — `notes/` + the `.md` template + a read-only in-app
+   notes panel + the Google-doc seed importer (`notes/`, `cli/notes.py`).
+2. ✅ **Builder Stage 2 editor** — admin app field → `.md` Stage 2 section, with
+   two save buttons setting `Stage 2 in progress` / `Stage 2 done`.
+3. ✅ **Aggregation UI** (admin/local) — side-by-side accept/reject + a live
+   "Preview aggregated" toggle (`recommendations/aggregate.py`, `ui/aggregation.py`).
+4. ✅ **Apply integration** — "Apply aggregated…" → confirm modal → one-click
+   `mojave-apply` subprocess → ledger write + considered-submissions archive
+   (`ui/callbacks._apply_aggregated`, `aggregate.stage3_ledger_entry`,
+   `store.archive_considered_submissions`).
 
 ## TODO / future
 
