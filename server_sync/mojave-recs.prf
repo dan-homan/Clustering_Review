@@ -38,9 +38,15 @@ batch = false
 # prefer = newer
 
 # --- safety net: keep backups of anything replaced or deleted ---
+# Central location in /tmp so the SAME absolute path is valid AND writable on
+# BOTH the macOS workstation and the Linux server -- a single profile is sent
+# to both ends and can't set a per-host path, so a $HOME path (/Users/... vs
+# /home/...) fails on the server. /tmp exists on both; Unison creates the leaf
+# dir. Backups live OUTSIDE the synced tree so the app never globs them as
+# recs. Note: /tmp is cleared on reboot, so treat these as a short-term undo.
 backup = Name *
 backuplocation = central
-backupdir = /Users/homand/.unison/backups/mojave-recs
+backupdir = /tmp/unison-mojave-backups
 maxbackups = 5
 # confirmbigdel: extra prompt before any large deletion.
 confirmbigdel = true

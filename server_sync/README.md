@@ -64,8 +64,10 @@ Unison keeps a **state archive on each side**, so it:
 
    ```bash
    cp server_sync/mojave-recs.prf ~/.unison/mojave-recs.prf
-   mkdir -p ~/.unison/backups/mojave-recs
    ```
+
+   (Unison creates the backup dir — `/tmp/unison-mojave-backups` — itself on
+   each host, so there's nothing else to make.)
 
    Keep the two copies in step if you edit either (this one is the
    version-controlled record).
@@ -130,7 +132,8 @@ In `preview`/`run`, Unison won't touch anything you don't approve — review the
 listed changes and accept, or quit to abort. `auto` is for cron/unattended use
 **only once you trust the sync**; it resolves conflicts newer-wins, and every
 overwritten or deleted file is still kept under
-`~/.unison/backups/mojave-recs/` (last 5 versions).
+`/tmp/unison-mojave-backups/` (last 5 versions) on whichever host the change
+landed.
 
 ## First real run
 
@@ -156,8 +159,12 @@ Only switch to `auto` once you're comfortable with how it behaves.
 - `auto` mode passes `-prefer newer` on the command line, so unattended runs
   resolve conflicts by modification time.
 - Either way, `backup = Name *` in the profile means the losing copy is saved
-  under `~/.unison/backups/mojave-recs/`, so a wrong conflict call is
-  recoverable.
+  under `/tmp/unison-mojave-backups/` (on the host where the change was
+  applied), so a wrong conflict call is recoverable. That dir is in `/tmp`
+  because the same absolute path has to be valid on both the macOS workstation
+  and the Linux server; it's cleared on reboot, so treat it as a short-term
+  undo buffer. Your production data dir is also under Dropbox, which keeps its
+  own longer-term version history of the workstation copy.
 
 ## Gotchas
 
