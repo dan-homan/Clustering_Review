@@ -30,8 +30,8 @@ from ..recommendations.schema import (
 )
 from ..recommendations.store import (
     delete_recommendation, delete_submission, is_submitted,
-    load_recommendation, load_recommendation_by_slug, reviewer_slug,
-    save_recommendation, save_submitted, submitted_at,
+    load_recommendation, load_recommendation_by_slug, recommendations_locked,
+    reviewer_slug, save_recommendation, save_submitted, submitted_at,
 )
 
 
@@ -1068,6 +1068,9 @@ def register(
         source_name = _source_name_from_folder(source_folder)
         if source_name is None:
             return no_update, no_update
+        if recommendations_locked(recommendations_dir, source_name, admin=admin):
+            # Stage 1 / Stage 2 source, non-admin: not open for submission.
+            return no_update, no_update
         bundle = load_bundle(source_folder, "current")
         # In token-auth mode, ``current_reviewer(reviewer)`` is the
         # logged-in user's name; in single-user mode it's the CLI value.
@@ -1139,16 +1142,26 @@ def register(
         prevent_initial_call=True,
     )
 
-    # ---- Recommendations panel read-only style for non-current models ----
-    # backup_* and rec:<slug> models are view-only; lock the whole panel.
+    # ---- Recommendations panel read-only style ---------------------------
+    # Lock the whole panel when:
+    #   - the model isn't "current" (backup_* / rec:<slug> are view-only), or
+    #   - the source is still in Stage 1 / Stage 2 and we're not in --admin
+    #     mode (it isn't open for reviewer recommendations yet).
     @app.callback(
         Output("recommendations-panel", "style"),
         Input("model-picker", "value"),
+        Input("source-picker", "value"),
     )
-    def _panel_readonly(model_key):
+    def _panel_readonly(model_key, source_folder):
         base = {"borderTop": "1px solid #ddd", "background": "#fafafa",
                 "marginTop": "0.5em"}
-        if model_key and model_key != "current":
+        locked = bool(model_key and model_key != "current")
+        if not locked:
+            src = _source_name_from_folder(source_folder)
+            if src is not None and recommendations_locked(
+                recommendations_dir, src, admin=admin):
+                locked = True
+        if locked:
             return {**base, "opacity": 0.7, "pointerEvents": "none"}
         return base
 
@@ -1171,6 +1184,11 @@ def register(
             return no_update
         if model_key != "current":
             # Read-only view; never save.
+            return no_update
+        src_name = _source_name_from_folder(source_folder)
+        if src_name is not None and recommendations_locked(
+            recommendations_dir, src_name, admin=admin):
+            # Stage 1 / Stage 2 source, non-admin: panel is locked, never save.
             return no_update
         bundle = load_bundle(source_folder, model_key)
         rec = build_rec_from_ui_state(

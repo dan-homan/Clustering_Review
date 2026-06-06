@@ -278,31 +278,70 @@ def count_submissions(recommendations_dir: Path, source: str) -> int:
     return sum(1 for f in p.glob("*.json") if f.stem)
 
 
-def is_finalized(recommendations_dir: Path, source: str) -> bool:
-    """True once Stage 3 is *done* for this source.
+def source_phase(recommendations_dir: Path, source: str) -> str:
+    """Review phase of a source, read from its notes ``Status:`` line.
 
-    Read from the source's notes ``Status:`` line (``Stage 3 done · applied
-    <date>``), NOT from the ``applied/`` archive dir: ``mojave-apply`` archives
-    a JSON to ``applied/`` for *any* apply — including Stage-2 baseline applies
-    — so an archive there does not mean Stage 3 finished. The notes status is
-    only set to "Stage 3 done" by the Stage-3 aggregation apply
-    (``ui/callbacks._apply_aggregated``)."""
+    Returns one of:
+
+    - ``"stage1"`` — "Stage 1 still needs review" (not yet reviewed)
+    - ``"stage2"`` — "Stage 1 done" or "Stage 2 in progress" (baseline being
+      built; not yet open for reviewer recommendations)
+    - ``"open"``   — "Stage 2 done" (ready for reviewer recommendations)
+    - ``"final"``  — "Stage 3 done …" (aggregation applied)
+
+    We deliberately read the notes status rather than the ``applied/`` archive:
+    ``mojave-apply`` archives a JSON for *any* apply (incl. Stage-2 baseline),
+    so the archive is not a reliable Stage-3 signal. An unknown / missing
+    status falls back to ``"open"`` so a source with odd status text isn't
+    accidentally locked out of recommendations."""
     from ..notes.store import notes_dir_for, read_note, get_status
     md = read_note(notes_dir_for(recommendations_dir), source)
-    if not md:
+    status = (get_status(md) if md else "").strip().lower()
+    if status.startswith("stage 3 done"):
+        return "final"
+    if status.startswith("stage 2 done"):
+        return "open"
+    if status.startswith("stage 1 done") or status.startswith("stage 2 in progress"):
+        return "stage2"
+    if status.startswith("stage 1"):     # "stage 1 still needs review"
+        return "stage1"
+    return "open"
+
+
+def is_finalized(recommendations_dir: Path, source: str) -> bool:
+    """True once Stage 3 is *done* for this source (see ``source_phase``)."""
+    return source_phase(recommendations_dir, source) == "final"
+
+
+def recommendations_locked(
+    recommendations_dir: Path, source: str, *, admin: bool,
+) -> bool:
+    """True when reviewer recommendations should be blocked for this source.
+
+    Sources still in Stage 1 / Stage 2 are not open for recommendations, so
+    the panel is locked for ordinary reviewers. Admins (``--admin``) are never
+    locked — they need to drive Stage 2 / Stage 3."""
+    if admin:
         return False
-    return get_status(md).strip().lower().startswith("stage 3 done")
+    return source_phase(recommendations_dir, source) in ("stage1", "stage2")
 
 
 def source_badge(recommendations_dir: Path, source: str) -> str:
     """Bracketed status badge shown beside a source in the picker.
 
-    - not finalized        -> ``[N]``         (N = open submitted recs, 0 = none yet)
-    - finalized, no new rec -> ``[final]``
-    - finalized + M new recs-> ``[final - M]`` (M new submissions since apply)
+    - ``[stage 1]`` — Stage 1 still needs review
+    - ``[stage 2]`` — Stage 1 done / Stage 2 in progress (baseline being built)
+    - ``[N]``       — ready for recommendations; N open submitted recs (0 = none)
+    - ``[final]``   — Stage 3 applied, no new recs
+    - ``[final - M]`` — Stage 3 applied + M new submissions since
     """
+    phase = source_phase(recommendations_dir, source)
+    if phase == "stage1":
+        return "[stage 1]"
+    if phase == "stage2":
+        return "[stage 2]"
     n = count_submissions(recommendations_dir, source)
-    if is_finalized(recommendations_dir, source):
+    if phase == "final":
         return "[final]" if n == 0 else f"[final - {n}]"
     return f"[{n}]"
 
