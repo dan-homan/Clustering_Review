@@ -3,8 +3,8 @@
 Renders a top/bottom pair of per-cluster summary plots for one of four views:
 
     "Position"      -> distance vs epoch        |  PA vs epoch
-    "Flux"          -> log10(I flux) vs epoch   |  log10(Tb obs) vs epoch
-    "Polarization"  -> log10(P flux) vs epoch   |  EVPA vs epoch
+    "Flux"          -> I flux vs epoch          |  Tb obs vs epoch  (log y-axis)
+    "Polarization"  -> P flux vs epoch (log y)  |  EVPA vs epoch
     "Kinematics"    -> speed vs distance        |  X/Y velocity vectors
 
 The numerical behavior mirrors cluster_code.py's make_summary_plots:
@@ -69,6 +69,7 @@ class _Slice:
     cid: int
     robust: bool
     time: np.ndarray
+    ep_name: np.ndarray    # epoch labels in YYYY_MM_DD form (for hover)
     xpos: np.ndarray       # avg_x - core_x
     ypos: np.ndarray       # avg_y - core_y
     dist: np.ndarray
@@ -115,6 +116,9 @@ def _build_slices(df: pd.DataFrame, z: float, shift_pa: bool,
         m = df["clusterID"] == cid
         sub = df.loc[m].sort_values("epoch")
         time = sub["epoch"].to_numpy(dtype=float)
+        ep_name = (sub["ep_name"].astype(str).to_numpy()
+                   if "ep_name" in sub.columns
+                   else np.array([f"{t:.4f}" for t in time]))
         xpos = (sub["avg_x"] - sub["core_x"]).to_numpy(dtype=float)
         ypos = (sub["avg_y"] - sub["core_y"]).to_numpy(dtype=float)
         dist = np.sqrt(xpos**2 + ypos**2)
@@ -149,7 +153,7 @@ def _build_slices(df: pd.DataFrame, z: float, shift_pa: bool,
                     if name in sub.columns else np.full(len(sub), np.nan))
 
         out.append(_Slice(
-            cid=int(cid), robust=robust, time=time,
+            cid=int(cid), robust=robust, time=time, ep_name=ep_name,
             xpos=xpos, ypos=ypos, dist=dist, pa=pa, size=size,
             flux=flux, pflux=pflux, evpa=evpa, tb_obs=tb_obs,
             use_in_fit=use_in_fit, selected=selected,
@@ -164,6 +168,19 @@ def _build_slices(df: pd.DataFrame, z: float, shift_pa: bool,
 # ---------------------------------------------------------------------------
 
 
+def _set_log_yaxis(fig: go.Figure, row: int, col: int, title: str) -> None:
+    """Make a y-axis log-scaled with 10^x exponent-style tick labels.
+
+    Used for the flux / Tb / polarized-flux panels: we plot the RAW values
+    (Jy, K) and let the axis do the log scaling, so ticks read 10^8, 10^9, …
+    instead of the old log10() numbers on a linear axis. One tick per decade
+    (dtick=1 in log units), rendered via exponentformat="power".
+    """
+    fig.update_yaxes(title_text=title, type="log", dtick=1,
+                     exponentformat="power", showexponent="all",
+                     row=row, col=col)
+
+
 def _marker_style(color: str, symbol: str, filled: bool) -> dict:
     if filled:
         return {"color": color, "symbol": symbol, "size": 8,
@@ -173,7 +190,7 @@ def _marker_style(color: str, symbol: str, filled: bool) -> dict:
             "line": {"width": 1.5, "color": color}}
 
 
-def _customdata(s: _Slice) -> list[list[float]]:
+def _customdata(s: _Slice) -> list[list]:
     # Return PLAIN Python lists, not a numpy array. plotly.py 6 base64-encodes
     # numpy arrays as typed arrays by default; per-point ``customdata`` then
     # arrives in the browser as a Float64Array and Dash relays it into
@@ -181,8 +198,10 @@ def _customdata(s: _Slice) -> list[list[float]]:
     # The click-selection callback (ui/callbacks._toggle_on_click) indexes
     # customdata as cd[0]/cd[1], which silently fails on that object — so
     # clicking a point stopped selecting it. Plain lists serialize as JSON
-    # arrays and read back correctly. (cid first, then epoch.)
-    return [[int(s.cid), float(t)] for t in s.time]
+    # arrays and read back correctly. (cid first, then decimal epoch, then the
+    # YYYY_MM_DD epoch name for display only — the click callback reads cd[0]
+    # and cd[1], so the decimal epoch MUST stay at index 1.)
+    return [[int(s.cid), float(t), str(n)] for t, n in zip(s.time, s.ep_name)]
 
 
 def _err_dict(arr: np.ndarray | None, color: str) -> dict | None:
@@ -207,6 +226,7 @@ def _add_cluster_traces(
     fig: go.Figure, s: _Slice, row: int, col: int, ydata: np.ndarray,
     show_legend: bool, show_fit: np.ndarray | None = None,
     ylabel_for_hover: str = "y", error_y_arr: np.ndarray | None = None,
+    yunit: str = "",
 ) -> None:
     color, symbol, filled = _cluster_style(s.cid, s.robust)
     marker = _marker_style(color, symbol, filled)
@@ -230,8 +250,8 @@ def _add_cluster_traces(
             customdata=_customdata(s),
             hovertemplate=(
                 f"cluster %{{customdata[0]:.0f}}<br>"
-                f"epoch %{{customdata[1]:.4f}}<br>"
-                f"{ylabel_for_hover} %{{y:.4g}}<extra></extra>"
+                f"epoch %{{customdata[2]}}<br>"
+                f"{ylabel_for_hover} %{{y:.4g}}{yunit}<extra></extra>"
             ),
         ),
         row=row, col=col,
@@ -304,7 +324,7 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
             customdata=_customdata(s),
             hovertemplate=(
                 "cluster %{customdata[0]:.0f}<br>"
-                "epoch %{customdata[1]:.4f}<br>"
+                "epoch %{customdata[2]}<br>"
                 "x %{x:.3f} mas<br>y %{y:.3f} mas<extra></extra>"
             ),
         ),
@@ -418,8 +438,8 @@ def build_summary_figure(
     else:
         titles = {
             "Position":     ("Distance from origin [mas]", "Position angle [deg]"),
-            "Flux":         ("log10(I flux density) [Jy]", "log10(Tb obs) [K]"),
-            "Polarization": ("log10(Polarized flux) [Jy]", "EVPA [deg]"),
+            "Flux":         ("I flux density [Jy]", "Tb obs [K]"),
+            "Polarization": ("Polarized flux [Jy]", "EVPA [deg]"),
             "Kinematics":   ("Apparent speed vs distance", "X/Y velocity vectors"),
         }[view]
         fig = make_subplots(
@@ -472,41 +492,39 @@ def build_summary_figure(
         fig.update_yaxes(title_text="PA [deg]", row=2, col=1)
 
     elif view == "Flux":
+        # Plot raw I flux / Tb on log-scaled axes (10^x ticks); hover shows
+        # the real values with units.
         for s in slices:
-            with np.errstate(divide="ignore", invalid="ignore"):
-                logflux = np.log10(s.flux)
-                logtb = np.log10(s.tb_obs)
             _add_cluster_traces(
-                fig, s, row=1, col=1, ydata=logflux,
-                show_legend=True, ylabel_for_hover="log10(I)",
+                fig, s, row=1, col=1, ydata=s.flux,
+                show_legend=True, ylabel_for_hover="I", yunit=" Jy",
             )
             if s.cid >= 0:
                 _add_cluster_traces(
-                    fig, s, row=2, col=1, ydata=logtb,
-                    show_legend=False, ylabel_for_hover="log10(Tb)",
+                    fig, s, row=2, col=1, ydata=s.tb_obs,
+                    show_legend=False, ylabel_for_hover="Tb", yunit=" K",
                 )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_xaxes(title_text="Epoch", row=2, col=1)
-        fig.update_yaxes(title_text="log10(I flux) [Jy]", row=1, col=1)
-        fig.update_yaxes(title_text="log10(Tb obs) [K]", row=2, col=1)
+        _set_log_yaxis(fig, row=1, col=1, title="I flux density [Jy]")
+        _set_log_yaxis(fig, row=2, col=1, title="Tb obs [K]")
 
     elif view == "Polarization":
+        # P flux on a log-scaled axis (10^x ticks); EVPA stays linear.
         for s in slices:
             if s.cid < 0:
                 continue
-            with np.errstate(divide="ignore", invalid="ignore"):
-                logp = np.log10(s.pflux)
             _add_cluster_traces(
-                fig, s, row=1, col=1, ydata=logp,
-                show_legend=True, ylabel_for_hover="log10(P)",
+                fig, s, row=1, col=1, ydata=s.pflux,
+                show_legend=True, ylabel_for_hover="P", yunit=" Jy",
             )
             _add_cluster_traces(
                 fig, s, row=2, col=1, ydata=s.evpa,
-                show_legend=False, ylabel_for_hover="EVPA",
+                show_legend=False, ylabel_for_hover="EVPA", yunit=" deg",
             )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_xaxes(title_text="Epoch", row=2, col=1)
-        fig.update_yaxes(title_text="log10(P flux) [Jy]", row=1, col=1)
+        _set_log_yaxis(fig, row=1, col=1, title="Polarized flux [Jy]")
         fig.update_yaxes(title_text="EVPA [deg]", row=2, col=1)
 
     elif view == "Kinematics":

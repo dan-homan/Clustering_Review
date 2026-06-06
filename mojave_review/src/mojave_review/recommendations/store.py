@@ -265,6 +265,48 @@ def prune_applied_current_drafts(
 # ---------------------------------------------------------------------------
 
 
+def count_submissions(recommendations_dir: Path, source: str) -> int:
+    """How many reviewers currently have an open *submitted* recommendation
+    for this source (files under ``<recs>/<source>/submitted/*.json``).
+
+    After a Stage-3 apply the folded submissions are moved to
+    ``considered/<date>/`` (see ``archive_considered_submissions``), so a
+    finalized source reads 0 here until a *new* submission lands."""
+    p = Path(recommendations_dir) / source / "submitted"
+    if not p.is_dir():
+        return 0
+    return sum(1 for f in p.glob("*.json") if f.stem)
+
+
+def is_finalized(recommendations_dir: Path, source: str) -> bool:
+    """True once Stage 3 is *done* for this source.
+
+    Read from the source's notes ``Status:`` line (``Stage 3 done · applied
+    <date>``), NOT from the ``applied/`` archive dir: ``mojave-apply`` archives
+    a JSON to ``applied/`` for *any* apply — including Stage-2 baseline applies
+    — so an archive there does not mean Stage 3 finished. The notes status is
+    only set to "Stage 3 done" by the Stage-3 aggregation apply
+    (``ui/callbacks._apply_aggregated``)."""
+    from ..notes.store import notes_dir_for, read_note, get_status
+    md = read_note(notes_dir_for(recommendations_dir), source)
+    if not md:
+        return False
+    return get_status(md).strip().lower().startswith("stage 3 done")
+
+
+def source_badge(recommendations_dir: Path, source: str) -> str:
+    """Bracketed status badge shown beside a source in the picker.
+
+    - not finalized        -> ``[N]``         (N = open submitted recs, 0 = none yet)
+    - finalized, no new rec -> ``[final]``
+    - finalized + M new recs-> ``[final - M]`` (M new submissions since apply)
+    """
+    n = count_submissions(recommendations_dir, source)
+    if is_finalized(recommendations_dir, source):
+        return "[final]" if n == 0 else f"[final - {n}]"
+    return f"[{n}]"
+
+
 def list_other_reviewer_slugs(
     recommendations_dir: Path, source: str, exclude_slug: str,
 ) -> list[str]:

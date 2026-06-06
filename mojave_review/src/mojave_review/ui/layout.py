@@ -7,12 +7,31 @@ from pathlib import Path
 from dash import dcc, html
 
 from ..data.loader import list_sources
+from ..recommendations.store import source_badge
 from .recommendations_panel import build_recommendations_panel
 
 
-def build_layout(results_dir: Path, reviewer: str, admin: bool = False) -> html.Div:
-    sources = list_sources(results_dir)
-    source_options = [{"label": s.label, "value": str(s.folder)} for s in sources]
+def build_source_options(results_dir: Path, recommendations_dir: Path) -> list[dict]:
+    """Source-picker options with a recommendation-status badge per source.
+
+    Each label gets a bracketed badge from ``store.source_badge``:
+    ``[N]`` open submitted recs, ``[final]`` once Stage 3 is applied, and
+    ``[final - M]`` if M new recs have landed on an already-finalized source.
+    Shared by the initial layout and the live-refresh callback so the badge
+    stays in one place. Falls back to no badge if ``recommendations_dir`` is
+    None (e.g. an introspection with no recs wired up)."""
+    out: list[dict] = []
+    for s in list_sources(results_dir):
+        label = s.label
+        if recommendations_dir is not None:
+            label = f"{label}   {source_badge(recommendations_dir, s.source)}"
+        out.append({"label": label, "value": str(s.folder)})
+    return out
+
+
+def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
+                 recommendations_dir: Path | None = None) -> html.Div:
+    source_options = build_source_options(results_dir, recommendations_dir)
     initial = source_options[0]["value"] if source_options else None
 
     header = html.Div(

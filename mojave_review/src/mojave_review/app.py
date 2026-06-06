@@ -80,6 +80,7 @@ def create_app(
             results_dir=results_dir,
             reviewer=current_reviewer(reviewer),
             admin=admin,
+            recommendations_dir=recommendations_dir,
         )
     app.layout = _layout
 
