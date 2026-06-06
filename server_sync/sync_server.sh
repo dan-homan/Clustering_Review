@@ -29,7 +29,7 @@ REPO_DIR="/Users/homand/Library/CloudStorage/Dropbox/Research/Clustering_CC/Clus
 REMOTE="homand@74.140.113.72"
 REMOTE_BASE="/home/homand/mojave-review/data"
 SSH="ssh -i /Users/homand/.ssh/id_ed25519 -o StrictHostKeyChecking=no -p 2121"
-EXCLUDE_FILE="server_update_exclude.txt"
+EXCLUDE_FILE="server_sync/server_update_exclude.txt"
 UNISON_PROFILE="mojave-recs"
 
 # === Mode ===
