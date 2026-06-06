@@ -72,14 +72,31 @@ Unison keeps a **state archive on each side**, so it:
 
 ## Usage
 
-Run from the **repo root** (the script `cd`s to the repo internally, so it
-works regardless of where you invoke it from):
+**Run from your production data directory** — the one that holds `notes/`,
+`recommendations/`, and `Results/`. The script operates on the current working
+directory by default (`DATA_DIR=$PWD`) and fails fast with a clear message if
+those three trees aren't present:
 
 ```bash
-./server_sync/sync_server.sh            # preview  (default)
-./server_sync/sync_server.sh run        # apply
-./server_sync/sync_server.sh auto       # unattended
+cd /path/to/production/data            # parent of notes/ recommendations/ Results/
+/path/to/repo/server_sync/sync_server.sh           # preview  (default)
+/path/to/repo/server_sync/sync_server.sh run       # apply
+/path/to/repo/server_sync/sync_server.sh auto      # unattended
 ```
+
+You can invoke the script by any path — it locates its own helper file
+(`server_update_exclude.txt`) relative to itself, so it doesn't matter where it
+lives versus where the data is. To point at a data dir other than the current
+one, set `DATA_DIR`:
+
+```bash
+DATA_DIR=/path/to/production/data /path/to/repo/server_sync/sync_server.sh
+```
+
+The Unison local root is **relative** (`recommendations`), and the script
+`cd`s into `DATA_DIR` before calling Unison, so it syncs
+`$DATA_DIR/recommendations`. Keep launching from the same production dir so
+Unison's state archive stays consistent run to run.
 
 | Mode | rsync legs | Unison leg |
 |---|---|---|
@@ -99,9 +116,10 @@ Do the very first sync **interactively** so you can eyeball the plan —
 especially any deletions — before committing to it:
 
 ```bash
-./server_sync/sync_server.sh preview     # rsync dry-run + interactive Unison
+cd /path/to/production/data
+/path/to/repo/server_sync/sync_server.sh preview   # rsync dry-run + interactive Unison
 # looks right? then:
-./server_sync/sync_server.sh run
+/path/to/repo/server_sync/sync_server.sh run
 ```
 
 With no archive yet, Unison reconciles both sides from scratch on that first
@@ -124,10 +142,16 @@ Only switch to `auto` once you're comfortable with how it behaves.
 - **Never reintroduce `--delete` on the `recommendations/` leg.** It is the
   exact bug Unison exists to avoid here. `--delete` belongs only on the
   one-way `notes/` and `Results/` mirrors.
-- **Keep `server_update_exclude.txt` paths in mind.** `sync_server.sh`
-  references it as `server_sync/server_update_exclude.txt` (relative to the
-  repo root it `cd`s into). If you move it, update `EXCLUDE_FILE` in the
-  script.
+- **Run from the production data dir** (or set `DATA_DIR`). The script `cd`s
+  into `DATA_DIR` (default `$PWD`) and bails out if `notes/`,
+  `recommendations/`, or `Results/` aren't there — so it can't accidentally
+  mirror the wrong directory. `server_update_exclude.txt` is found relative to
+  the script itself, so it keeps working regardless of where you run from.
+- **The Unison local root is relative** (`recommendations` in the profile).
+  It resolves against `DATA_DIR`, so always launch via `sync_server.sh` (or run
+  `unison` from the same production dir). If you run `unison mojave-recs` by
+  hand from a *different* directory, it resolves to a different path and
+  rebuilds its state archive from scratch.
 - **Dropbox overlap.** `recommendations/` lives inside a Dropbox CloudStorage
   path, so Dropbox is *also* syncing it to Dropbox's cloud. The Unison ⇄ server
   channel is independent of that. It's fine for a single workstation, but if

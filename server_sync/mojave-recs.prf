@@ -6,7 +6,12 @@
 # drives this alongside the one-way rsync mirror of notes/ and Results/.
 
 # --- the two roots ---
-root = /Users/homand/Library/CloudStorage/Dropbox/Research/Clustering_CC/Clustering_Review/recommendations
+# Local root is RELATIVE: resolved against the directory Unison is launched
+# from. sync_server.sh cd's into your production data dir first, so this
+# becomes <that dir>/recommendations. Always invoke via sync_server.sh (or run
+# unison from that same production dir) so the relative root — and Unison's
+# per-side state archive — stay consistent run to run.
+root = recommendations
 root = ssh://homand@74.140.113.72//home/homand/mojave-review/data/recommendations
 #                                ^^ double slash = absolute remote path
 

@@ -25,11 +25,21 @@
 set -euo pipefail
 
 # === Configuration ===
-REPO_DIR="/Users/homand/Library/CloudStorage/Dropbox/Research/Clustering_CC/Clustering_Review"
+# DATA_DIR is the directory that holds notes/, recommendations/, Results/.
+# Defaults to the current working directory, so just run this script from your
+# production data dir. Override with:  DATA_DIR=/path/to/data ./sync_server.sh
+DATA_DIR="${DATA_DIR:-$PWD}"
+
+# The rsync exclude list ships next to this script, so resolve it relative to
+# the script itself — independent of where you run from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXCLUDE_FILE="$SCRIPT_DIR/server_update_exclude.txt"
+
 REMOTE="homand@74.140.113.72"
 REMOTE_BASE="/home/homand/mojave-review/data"
 SSH="ssh -i /Users/homand/.ssh/id_ed25519 -o StrictHostKeyChecking=no -p 2121"
-EXCLUDE_FILE="server_sync/server_update_exclude.txt"
+# Unison profile (~/.unison/mojave-recs.prf). Its LOCAL root is relative
+# ("recommendations"), resolved against DATA_DIR because we cd there below.
 UNISON_PROFILE="mojave-recs"
 
 # === Mode ===
@@ -41,8 +51,15 @@ case "$MODE" in
   *) echo "usage: $0 [preview|run|auto]" >&2; exit 1 ;;
 esac
 
-echo "=== sync_server.sh ($MODE) ==="
-cd "$REPO_DIR"
+echo "=== sync_server.sh ($MODE) — data dir: $DATA_DIR ==="
+cd "$DATA_DIR"
+
+# Fail fast if we're not actually in the data dir (parent of the three trees).
+for d in notes recommendations Results; do
+  [[ -d "$d" ]] || { echo "ERROR: '$d/' not found in $DATA_DIR" >&2
+                     echo "Run this from the dir holding notes/ recommendations/ Results/," >&2
+                     echo "or set DATA_DIR=/path/to/data." >&2; exit 1; }
+done
 
 # === 1) one-way MIRROR (delete OK): notes + Results, workstation -> server ===
 mirror() { rsync -az --delete --timeout=300 -e "$SSH" $DRY "$@"; }
