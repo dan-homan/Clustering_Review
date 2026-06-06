@@ -418,8 +418,9 @@ def build_summary_figure(
     """Build a 2-row (top/bottom) summary figure for one of the four views.
 
     `vector_scale_factor` multiplies the auto-computed arrow length in the
-    Kinematics view. 1.0 = default; <1 shrinks, >1 enlarges. Ignored by other
-    views.
+    Kinematics view. The auto scale draws the *median* speed (floored at
+    0.05 mas/yr) at ~1/5th of the panel span. 1.0 = default; <1 shrinks,
+    >1 enlarges. Ignored by other views.
 
     `hide_non_robust` drops the non-robust (slategray) clusters from both the
     plots and the legend. The unassigned cluster (-1) is treated as non-robust
@@ -528,18 +529,26 @@ def build_summary_figure(
         fig.update_yaxes(title_text="EVPA [deg]", row=2, col=1)
 
     elif view == "Kinematics":
-        from ._extent import compute_source_extent
         _draw_kinematics(fig, slices, motion_fits,
-                         vector_scale_factor=vector_scale_factor,
-                         extent=compute_source_extent(cluster_df))
-        fig.update_xaxes(title_text="Distance from origin [mas]", row=1, col=1)
-        fig.update_yaxes(title_text="Apparent speed [mas/yr]", row=1, col=1)
-        # +x to the left (astro convention). scaleanchor + constrain="domain"
-        # keeps mas/pixel equal on both axes while still allowing the user
-        # to drag a free-form zoom rectangle (panel shrinks instead of
-        # expanding the data range to match aspect).
+                         vector_scale_factor=vector_scale_factor)
+        # Always show the (0 distance, 0 speed) corner so the reader can see
+        # where each feature sits relative to the core and to zero motion.
+        # Distances and speeds are non-negative, so rangemode="tozero" anchors
+        # both axes at 0 while still auto-fitting the data maxima.
+        fig.update_xaxes(title_text="Distance from origin [mas]",
+                         rangemode="tozero", row=1, col=1)
+        fig.update_yaxes(title_text="Apparent speed [mas/yr]",
+                         rangemode="tozero", row=1, col=1)
+        # +x to the left (astro convention). We DON'T set an explicit range
+        # here: letting Plotly autorange (reversed for x) reproduces exactly
+        # what the toolbar "home"/reset button gives — a snug, equal-aspect
+        # fit to the markers (cluster tails + core). scaleanchor +
+        # constrain="domain" keep mas/pixel equal while still allowing a
+        # free-form drag-zoom (panel shrinks instead of expanding the data
+        # range to match aspect). autorange="reversed" is what flips +x left
+        # without an explicit range to fight it.
         fig.update_xaxes(title_text="X [mas]", row=2, col=1,
-                         constrain="domain")
+                         autorange="reversed", constrain="domain")
         fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
                          scaleanchor="x2", scaleratio=1.0,
                          constrain="domain")
@@ -603,7 +612,6 @@ def _draw_kinematics(
     slices: list[_Slice],
     motion_fits: dict[int, "_MotionFit | None"],
     vector_scale_factor: float = 1.0,
-    extent: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
     fits = [mf for mf in motion_fits.values() if mf is not None and mf.cid > 0]
     if not fits:
@@ -636,9 +644,14 @@ def _draw_kinematics(
     xspan = float(np.ptp(all_xs)) or 1.0
     yspan = float(np.ptp(all_ys)) or 1.0
     span = max(xspan, yspan)
-    max_v = float(np.max(np.sqrt(vx**2 + vy**2))) or 1.0
-    # Auto-fit: longest arrow ~25% of the panel span; user multiplier on top.
-    arrow_scale = 0.25 * span / max_v * float(vector_scale_factor)
+    # Auto-fit on the MEDIAN speed: draw the typical arrow at ~1/5th of the
+    # panel span, so most vectors are legible regardless of one fast outlier.
+    # Floor the reference speed at 0.05 mas/yr so a near-stationary source
+    # doesn't blow the arrows up to absurd lengths. User multiplier on top.
+    speeds = np.sqrt(vx**2 + vy**2)
+    median_speed = float(np.median(speeds)) if speeds.size else 0.0
+    ref_speed = max(median_speed, 0.05)
+    arrow_scale = 0.2 * span / ref_speed * float(vector_scale_factor)
 
     # Core marker at (0,0)
     fig.add_trace(
@@ -675,22 +688,6 @@ def _draw_kinematics(
             arrowcolor=color, standoff=0,
         )
 
-    # Base extent: prefer the data-driven cluster box (matches the overlay
-    # panel's initial zoom); fall back to the fit-cluster positions. Then
-    # always expand by arrow-tip length so vectors don't run off-panel.
-    arrow_pad_x = float(np.abs(vx).max() * arrow_scale)
-    arrow_pad_y = float(np.abs(vy).max() * arrow_scale)
-    if extent is not None:
-        (xlo, xhi), (ylo, yhi) = extent
-    else:
-        pad = 0.15
-        xlo = float(all_xs.min()) - pad * xspan
-        xhi = float(all_xs.max()) + pad * xspan
-        ylo = float(all_ys.min()) - pad * yspan
-        yhi = float(all_ys.max()) + pad * yspan
-    xlo -= arrow_pad_x
-    xhi += arrow_pad_x
-    ylo -= arrow_pad_y
-    yhi += arrow_pad_y
-    fig.update_xaxes(range=[xhi, xlo], row=2, col=1)  # reversed
-    fig.update_yaxes(range=[ylo, yhi], row=2, col=1)
+    # No explicit range: the view branch leaves x autorange="reversed" and y
+    # scaleanchor'd, so the initial view is Plotly's autorange fit to the
+    # markers (cluster tails + core) — identical to the toolbar "home" reset.
