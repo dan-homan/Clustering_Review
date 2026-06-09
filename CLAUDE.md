@@ -92,6 +92,21 @@ Four fields:
   `save_summary_plots`, falling back to this baked-in value only when the env
   var is unset (`cli/apply._resolve_root_data_dir`).
 
+### `source_run_param.csv` (one row per source; local data, gitignored)
+
+NOT under `Results/` — a single CSV the user keeps next to the production data
+(discovered via `data/source_params.find_source_params`: cwd → `results_dir`
+parent → `results_dir`). Many columns; the web app reads only two:
+
+- `Source` — **band-less** name (`0003+380`, not `0003+380u`); matched to the
+  app's source via `split_source_band`.
+- `redshift` — float `z`, or **blank when unknown**.
+
+Loaded once into a `{source: z}` map (`load_redshifts`); sources with a blank /
+non-positive z are simply absent (→ treated as z=0). Drives the host-frame Tb
+`(1+z)` correction and the Kinematics `beta_app` hovers — see "Per-source
+redshift" under the summary-plot numerical quirks.
+
 ## MOJAVE FITS retrieval
 
 Live URL pattern (from `grab_mojave_image` in `cluster_code.py`):
