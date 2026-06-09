@@ -180,6 +180,21 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                         style={"marginLeft": "1.5em", "fontSize": "0.85em",
                                "color": "#444"},
                     ),
+                    # Projected motion (Position fit line + Kinematics points /
+                    # vectors) is shown for ALL robust clusters by default;
+                    # ticking this restores the old behaviour of only drawing
+                    # motions that clear the >=3σ (or slow-and-tight) gate.
+                    # Labelled "Hide uncertain motions" since the kept set also
+                    # includes slow-but-tightly-constrained fits, not just 3σ.
+                    dcc.Checklist(
+                        id="only-3sigma-checkbox",
+                        options=[{"label": " Hide uncertain motions",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1.5em", "fontSize": "0.85em",
+                               "color": "#444"},
+                    ),
                 ],
                 style={"display": "flex", "alignItems": "center"},
             ),
@@ -273,6 +288,13 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
         [
             dcc.Store(id="reviewer-store", data=reviewer),
             dcc.Store(id="beam-params"),
+            # Decimal year of the epoch currently shown in the overlay panel,
+            # published by the epoch-label callback. A clientside callback
+            # draws a vertical marker at this epoch on the summary plots whose
+            # x-axis is epoch (Position / Flux / Polarization). epoch-line-dummy
+            # is just that callback's no-op output target.
+            dcc.Store(id="active-epoch", data=None),
+            dcc.Store(id="epoch-line-dummy", data=None),
             # Increments whenever the user clicks "Reset view"; folds into
             # the overlay's uirevision key so a click forces a complete
             # redraw + axis reset.

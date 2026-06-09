@@ -12,6 +12,9 @@ The on-disk layout produced by find_clusters.py is:
           backup_NNN_merged_win_results.csv
           backup_NNN_summary_plots.pdf
           backup_NNN_epoch_overplots.mp4
+        alt_models/                              (optional alternate models)
+          alt_model_NNN_merged_win_results.csv
+          alt_model_NNN_plotdata.npz             (unlike backups, ships its npz)
         cluster_fits/...
         config_win.json
         run_string.txt
@@ -119,6 +122,23 @@ def list_models(src: SourceRef) -> list[ModelFile]:
             key = f"backup_{m.group(1)}"
             models.append(
                 ModelFile(key=key, label=key, csv_path=csv, npz_path=None)
+            )
+    # Alternate models live in alt_models/ parallel to backups/, but DO ship
+    # their own plotdata npz (alt_model_NNN_plotdata.npz) so the overlay panel
+    # can render their own clean components instead of borrowing current's.
+    # They're surfaced in the dropdown like backups (read-only — recommendations
+    # only apply to "current").
+    alt_dir = src.folder / "alt_models"
+    if alt_dir.is_dir():
+        for csv in sorted(alt_dir.glob("alt_model_*_merged_win_results.csv")):
+            m = re.match(r"alt_model_(\d+)_merged_win_results\.csv$", csv.name)
+            if not m:
+                continue
+            key = f"alt_model_{m.group(1)}"
+            npz = alt_dir / f"alt_model_{m.group(1)}_plotdata.npz"
+            models.append(
+                ModelFile(key=key, label=key, csv_path=csv,
+                          npz_path=npz if npz.is_file() else None)
             )
     return models
 

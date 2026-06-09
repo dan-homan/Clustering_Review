@@ -23,7 +23,8 @@ Clustering_Review/
 │       ├── <prefix>.merged_win_results.plotdata.npz<-- epoch_info + raw clean components
 │       ├── <prefix>.summary_plots.pdf              <-- reference render (read-only)
 │       ├── <prefix>.epoch_overplots.mp4            <-- reference render (read-only)
-│       ├── backups/backup_NNN_*.{csv,pdf,mp4,json,txt}  <-- alternate models
+│       ├── backups/backup_NNN_*.{csv,pdf,mp4,json,txt}  <-- prior models (no npz)
+│       ├── alt_models/alt_model_NNN_*.{csv,npz,json,txt} <-- optional alt models (WITH npz)
 │       ├── cluster_fits/                                 <-- per-window cluster fits
 │       ├── config_win.json
 │       ├── history.txt
@@ -115,9 +116,9 @@ views, and a **single-plot** figure for `XY Position`:
 |---|---|---|
 | Position | distance vs epoch (+ polyfit overlay), 1σ error bars | PA vs epoch, 1σ error bars |
 | XY Position | *(single plot)* per-cluster centroid track in (x,y) mas vs core, +x reversed, equal scale, 1σ x/y error bars | — |
-| Flux | log₁₀(I flux) vs epoch | log₁₀(Tb) vs epoch (15.4 GHz, z param) |
-| Polarization | log₁₀(P flux) vs epoch | EVPA vs epoch |
-| Kinematics | speed vs distance | X/Y velocity vectors w/ arrowheads, +x reversed |
+| Flux | I flux vs epoch (log y-axis, 10ˣ ticks) | Tb vs epoch (log y-axis, 10ˣ ticks; 15.4 GHz, z param) |
+| Polarization | P flux vs epoch (log y-axis, 10ˣ ticks) | EVPA vs epoch |
+| Kinematics | speed vs distance, 1σ speed error bars, axes anchored at 0 | X/Y velocity vectors w/ arrowheads, +x reversed, autoranged |
 
 The 1σ error bars on Position / XY Position come from
 `plots/uncertainty.attach_position_uncertainties` (CC-derived `sig_dx/sig_dy/
@@ -125,6 +126,20 @@ sig_dist/sig_pa` columns); see [`docs/uncertainty_estimates.md`](docs/uncertaint
 The **Visualize recommendations** checkbox defaults ON. (The old "Show 3σ
 outlines" checkbox was removed; the 3σ-drawing code remains in
 `overlay.build_overlay_figure` behind `show_3sigma=False`, just no UI toggle.)
+
+**Active-epoch marker.** The epoch currently shown in the overlay panel is drawn
+as a thin vertical line on the epoch-axis summary views (Position / Flux /
+Polarization — both subplots), so the left and right panels stay visually
+linked while scrubbing. The `_epoch_label` callback publishes the active
+*decimal* epoch (`epoch_info[idx]['epoch_val']`) to `dcc.Store(id="active-epoch")`;
+a **clientside** callback then sets the figure's `shapes` via `Plotly.relayout`
+(refs `x`/`y domain` and `x2`/`y2 domain`) — no trace rebuild, so it's cheap and
+preserves zoom (`uirevision` untouched). It also keys on `summary-graph.figure`
+so the line re-applies after any server-side rebuild, and resets `shapes` to
+`[]` on the non-epoch views (XY Position / Kinematics). Shapes are exclusively
+this callback's; no summary view uses layout shapes otherwise. Same
+"clientside `Plotly.relayout` + return `no_update`" discipline as the beam
+callback (see Don't/gotchas).
 
 ### Plotting conventions (always apply to spatial / sky plots)
 
@@ -226,8 +241,16 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
 - **EVPA de-wrap**: same idea with period 180°, jump 150°.
 - **Size floor**: `size = max(sqrt(fwhm_maj * fwhm_min), 0.1)` mas.
 - **Tb formula**: `1.22e12 * flux * (1+z) / (15.4² * size²)` K (U-band fixed).
-- **Position polyfit** is only drawn if ≥5 valid `use_in_fit` points AND
-  (motion is >3σ OR speed < 0.05 with combined error < 0.05 mas/yr).
+- **Position polyfit / projected motion** (`_motion_fit`): computed for every
+  robust cluster with ≥5 valid `use_in_fit` points. By default the fit is drawn
+  for ALL such clusters (Position fit line + Kinematics points/vectors). The
+  `>3σ OR (speed < 0.05 with combined error < 0.05 mas/yr)` test is no longer a
+  gate — it's recorded as `_MotionFit.significant`, and the **"Hide uncertain
+  motions"** checkbox (`only-3sigma-checkbox` → `build_summary_figure(only_3sigma=)`)
+  filters the drawn fits down to the significant ones to restore the old
+  behavior. (Label is "Hide uncertain motions" rather than "3σ" because the
+  kept set also includes slow-but-tightly-constrained fits.) `_MotionFit.speed_err` (1σ on speed, propagated from the two slope
+  variances) drives the error bars on the Kinematics speed-vs-distance plot.
 
 ## Recommendations
 
@@ -362,12 +385,26 @@ table:
 | `current` | enabled, off (default) | raw current data |
 | `current` | enabled, on | current + user's in-progress UI-state recs applied |
 | `backup_NNN` | disabled, off | raw backup data |
+| `alt_model_NNN` | disabled, off | raw alternate-model data |
 | `Rec: <slug>` | disabled, on (forced) | current + that reviewer's JSON recs applied |
 
 The model dropdown is populated by `_populate_models`: `current` + any
-`backup_*` + a `Rec: <slug>` entry per other-reviewer *submitted* JSON file at
-`<recs-dir>/<source>/submitted/*.json` (excluding the current user's slug).
-In-progress drafts under `<source>/current/` are never surfaced.
+`backup_*` + any `alt_model_*` + a `Rec: <slug>` entry per other-reviewer
+*submitted* JSON file at `<recs-dir>/<source>/submitted/*.json` (excluding the
+current user's slug). In-progress drafts under `<source>/current/` are never
+surfaced.
+
+**Alternate models (`alt_models/`).** Some sources carry an optional
+`alt_models/` subdir parallel to `backups/`, holding alternate clustering runs
+(`alt_model_NNN_merged_win_results.csv`). `list_models` surfaces them with key
+`alt_model_NNN`, after the backups. Unlike a backup, an alt model **ships its
+own `alt_model_NNN_plotdata.npz`**, so the loader sets its `npz_path` and the
+overlay panel renders the alt model's *own* clean components / labels rather
+than borrowing current's. Behaviour-wise they are treated exactly like backups:
+read-only (recommendations only apply to `current`), so every `model_key !=
+"current"` gate (panel lock, autosave skip, submit block, visualize disabled,
+the empty Robustness/Edits panel in `_load_for_source`) already covers them —
+no `alt_model_`-specific branching was needed.
 
 ### Stage-3 aggregation panel (admin only)
 

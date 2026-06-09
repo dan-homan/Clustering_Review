@@ -477,13 +477,14 @@ def register_callbacks(
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
         Input("hide-non-robust-checkbox", "value"),
+        Input("only-3sigma-checkbox", "value"),
         Input("reload-counter", "data"),
         Input("agg-preview-rec", "data"),
     )
     def _refresh_summary(source_folder, model_key, view, vector_scale,
                          selection, visualize_val, cluster_rows, edits,
-                         no_changes_val, hide_non_robust_val, _reload_counter,
-                         agg_rec):
+                         no_changes_val, hide_non_robust_val, only_3sigma_val,
+                         _reload_counter, agg_rec):
         if not source_folder or not model_key:
             return go.Figure()
         src = _source_from_folder(source_folder)
@@ -526,6 +527,7 @@ def register_callbacks(
             df, view=view,
             vector_scale_factor=vector_scale or 1.0,
             hide_non_robust=bool(hide_non_robust_val),
+            only_3sigma=bool(only_3sigma_val),
         )
         # Persist the user's zoom across selection clicks, visualize toggle,
         # vector scale change, edits etc. — anything that doesn't change the
@@ -695,6 +697,7 @@ def register_callbacks(
     # ---- epoch label readout ---------------------------------------------
     @app.callback(
         Output("epoch-label", "children"),
+        Output("active-epoch", "data"),
         Input("source-picker", "value"),
         Input("model-picker", "value"),
         Input("epoch-slider", "value"),
@@ -702,13 +705,16 @@ def register_callbacks(
     )
     def _epoch_label(source_folder, model_key, epoch_int, _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
-            return ""
+            return "", None
         # rec:<slug> has no bundle of its own — its epochs are current's.
         bundle = load_bundle(source_folder, _effective_model_for_load(model_key))
         if bundle.plotdata is None or epoch_int >= len(bundle.plotdata.epoch_info):
-            return ""
+            return "", None
         info = bundle.plotdata.epoch_info[int(epoch_int)]
-        return f"{info['epoch_name']}  ·  {info['epoch_val']:.4f}"
+        epoch_val = float(info['epoch_val'])
+        # active-epoch (decimal year) drives the vertical epoch marker the
+        # clientside callback draws on the epoch-axis summary plots.
+        return f"{info['epoch_name']}  ·  {epoch_val:.4f}", epoch_val
 
     # ---- overlay figure --------------------------------------------------
     @app.callback(
@@ -861,6 +867,51 @@ def register_callbacks(
         Output("beam-params", "data", allow_duplicate=True),
         Input("overlay-graph", "relayoutData"),
         State("beam-params", "data"),
+        prevent_initial_call=True,
+    )
+
+    # ---- clientside: vertical "active epoch" marker on the summary plots ---
+    # Draws a thin vertical line at the overlay's current epoch on the summary
+    # views whose x-axis is epoch (Position / Flux / Polarization). Runs in the
+    # browser via Plotly.relayout on the figure's `shapes` (no trace rebuild),
+    # so scrubbing epochs is cheap and the user's zoom is preserved
+    # (uirevision untouched). Re-fires on summary-figure rebuilds too, since a
+    # fresh figure comes back with no shapes. Shapes are exclusively ours —
+    # no summary view uses layout shapes otherwise — so a blanket reset to []
+    # on the non-epoch views (XY Position / Kinematics) is safe.
+    app.clientside_callback(
+        """
+        function(epoch, view, _figure) {
+            var wrapper = document.getElementById('summary-graph');
+            if (!wrapper) return window.dash_clientside.no_update;
+            var gd = wrapper.querySelector('.js-plotly-plot');
+            if (!gd || !window.Plotly) return window.dash_clientside.no_update;
+
+            var epochViews = {'Position': 1, 'Flux': 1, 'Polarization': 1};
+            if (!epochViews[view] || epoch === null || epoch === undefined) {
+                window.Plotly.relayout(gd, {shapes: []});
+                return window.dash_clientside.no_update;
+            }
+            // Position/Flux/Polarization are 2-row figures: top x-axis is "x"
+            // (paired with "y"), bottom is "x2" (paired with "y2"). One full-
+            // height vertical line per subplot, spanning the axis domain.
+            var lineStyle = {color: 'rgba(90,90,90,0.65)', width: 1.5};
+            var shapes = [
+                {type: 'line', xref: 'x',  yref: 'y domain',
+                 x0: epoch, x1: epoch, y0: 0, y1: 1,
+                 line: lineStyle, layer: 'below'},
+                {type: 'line', xref: 'x2', yref: 'y2 domain',
+                 x0: epoch, x1: epoch, y0: 0, y1: 1,
+                 line: lineStyle, layer: 'below'}
+            ];
+            window.Plotly.relayout(gd, {shapes: shapes});
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("epoch-line-dummy", "data"),
+        Input("active-epoch", "data"),
+        Input("view-picker", "value"),
+        Input("summary-graph", "figure"),
         prevent_initial_call=True,
     )
 

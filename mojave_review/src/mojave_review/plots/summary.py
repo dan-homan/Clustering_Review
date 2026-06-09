@@ -370,9 +370,18 @@ class _MotionFit:
     median_x: float
     median_y: float
     speed: float              # sqrt(speed_x^2 + speed_y^2), mas/yr
+    speed_err: float          # 1-sigma uncertainty on speed (mas/yr)
+    significant: bool         # passes the >=3sigma (or slow-and-tight) gate
 
 
 def _motion_fit(s: _Slice) -> _MotionFit | None:
+    """Linear (x,y)-vs-time fit for a robust cluster with >=5 use-in-fit points.
+
+    Returns a fit for EVERY qualifying robust cluster regardless of how
+    significant the motion is; ``significant`` records whether it clears the
+    original >=3sigma (or slow-and-tightly-constrained) gate. Callers decide
+    whether to show all fits or only the significant ones (the "Show only
+    3-sigma motions" checkbox)."""
     if s.cid < 0 or s.cid >= 1000 or not s.robust:
         return None
     valid = (~np.isnan(s.xpos)) & (~np.isnan(s.ypos)) & s.use_in_fit
@@ -383,13 +392,18 @@ def _motion_fit(s: _Slice) -> _MotionFit | None:
         py, corry = np.polyfit(s.time[valid], s.ypos[valid], deg=1, cov=True)
     except (np.linalg.LinAlgError, ValueError):
         return None
-    snr_num = px[0]**2 + py[0]**2
-    snr_den = np.sqrt(px[0]**2 * corrx[0, 0] + py[0]**2 * corry[0, 0])
-    sig = snr_num / snr_den if snr_den > 0 else 0.0
-    slow = (np.sqrt(px[0]**2 + py[0]**2) < 0.05
-            and np.sqrt(corrx[0, 0] + corry[0, 0]) < 0.05)
-    if sig < 3.0 and not slow:
-        return None
+    speed = float(np.sqrt(px[0]**2 + py[0]**2))
+    var_vx, var_vy = float(corrx[0, 0]), float(corry[0, 0])
+    snr_den = np.sqrt(px[0]**2 * var_vx + py[0]**2 * var_vy)
+    sig = (px[0]**2 + py[0]**2) / snr_den if snr_den > 0 else 0.0
+    slow = speed < 0.05 and np.sqrt(var_vx + var_vy) < 0.05
+    significant = bool(sig >= 3.0 or slow)
+    # 1-sigma on speed = |grad sqrt(vx^2+vy^2)| propagated through the two
+    # independent slope variances. Degenerates gracefully when speed -> 0.
+    if speed > 0:
+        speed_err = float(np.sqrt(px[0]**2 * var_vx + py[0]**2 * var_vy) / speed)
+    else:
+        speed_err = float(np.sqrt(var_vx + var_vy))
     pred_x = px[0] * s.time + px[1]
     pred_y = py[0] * s.time + py[1]
     pred_dist = np.sqrt(pred_x**2 + pred_y**2)
@@ -398,7 +412,7 @@ def _motion_fit(s: _Slice) -> _MotionFit | None:
         median_dist=float(np.median(pred_dist)),
         median_x=float(np.median(pred_x)),
         median_y=float(np.median(pred_y)),
-        speed=float(np.sqrt(px[0]**2 + py[0]**2)),
+        speed=speed, speed_err=speed_err, significant=significant,
     )
 
 
@@ -414,6 +428,7 @@ def build_summary_figure(
     flux_threshold: float = 0.0,
     vector_scale_factor: float = 1.0,
     hide_non_robust: bool = False,
+    only_3sigma: bool = False,
 ) -> go.Figure:
     """Build a 2-row (top/bottom) summary figure for one of the four views.
 
@@ -425,6 +440,11 @@ def build_summary_figure(
     `hide_non_robust` drops the non-robust (slategray) clusters from both the
     plots and the legend. The unassigned cluster (-1) is treated as non-robust
     here and is hidden too; synthetic (>=1000) clusters are NOT affected.
+
+    `only_3sigma` restores the original behaviour of only drawing projected
+    motion (the Position fit line + the Kinematics points/vectors) for clusters
+    whose motion clears the >=3sigma (or slow-and-tight) gate. Default False:
+    projected motion is shown for ALL robust clusters.
     """
     if view not in VIEWS:
         view = "Position"
@@ -474,11 +494,14 @@ def build_summary_figure(
     if view == "Position":
         for s in slices:
             mf = motion_fits.get(s.cid)
+            show_fit = (mf.pred_dist
+                        if mf is not None and (not only_3sigma or mf.significant)
+                        else None)
             if s.cid >= 0:
                 _add_cluster_traces(
                     fig, s, row=1, col=1, ydata=s.dist,
                     show_legend=True,
-                    show_fit=mf.pred_dist if mf is not None else None,
+                    show_fit=show_fit,
                     ylabel_for_hover="dist", error_y_arr=s.sig_dist,
                 )
             if s.cid > 0:
@@ -530,7 +553,8 @@ def build_summary_figure(
 
     elif view == "Kinematics":
         _draw_kinematics(fig, slices, motion_fits,
-                         vector_scale_factor=vector_scale_factor)
+                         vector_scale_factor=vector_scale_factor,
+                         only_3sigma=only_3sigma)
         # Always show the (0 distance, 0 speed) corner so the reader can see
         # where each feature sits relative to the core and to zero motion.
         # Distances and speeds are non-negative, so rangemode="tozero" anchors
@@ -612,12 +636,15 @@ def _draw_kinematics(
     slices: list[_Slice],
     motion_fits: dict[int, "_MotionFit | None"],
     vector_scale_factor: float = 1.0,
+    only_3sigma: bool = False,
 ) -> None:
-    fits = [mf for mf in motion_fits.values() if mf is not None and mf.cid > 0]
+    fits = [mf for mf in motion_fits.values()
+            if mf is not None and mf.cid > 0
+            and (not only_3sigma or mf.significant)]
     if not fits:
         return
 
-    # speed vs distance scatter
+    # speed vs distance scatter, with 1-sigma speed error bars
     for mf in fits:
         color, symbol, filled = _cluster_style(mf.cid, True)
         marker = _marker_style(color, symbol, filled)
@@ -625,11 +652,13 @@ def _draw_kinematics(
             go.Scatter(
                 x=[mf.median_dist], y=[mf.speed],
                 mode="markers", marker=marker,
+                error_y=_err_dict(np.array([mf.speed_err]), color),
                 name=str(mf.cid), legendgroup=f"cid_{mf.cid}",
                 showlegend=True,
                 hovertemplate=(f"cluster {mf.cid}<br>"
                                "median dist %{x:.2f} mas<br>"
-                               "speed %{y:.3f} mas/yr<extra></extra>"),
+                               f"speed {mf.speed:.3f} ± {mf.speed_err:.3f} "
+                               "mas/yr<extra></extra>"),
             ),
             row=1, col=1,
         )

@@ -449,17 +449,6 @@ def register(
     def _load_for_source(source_folder: str | None, model_key: str | None):
         if not source_folder or not model_key:
             return "", [], [], [], "", []
-        # Backup models don't accept recommendations — show an empty panel
-        # using current's cluster list so the layout doesn't go blank.
-        if model_key.startswith("backup_"):
-            bundle = load_bundle(source_folder, "current")
-            cluster_rows, epoch_rows = _populate_tables(
-                bundle, Recommendation(source=bundle.source.source,
-                                       model=model_key,
-                                       reviewer=current_reviewer(reviewer)),
-            )
-            return "", cluster_rows, epoch_rows, [], \
-                   "Recommendations are only made against the current model.", []
         # rec:<slug> — show slug's review (read-only is enforced elsewhere).
         if model_key.startswith("rec:"):
             slug = model_key[4:]
@@ -482,6 +471,19 @@ def register(
             msg = f"Viewing {slug}'s review · saved {rec.updated_at}"
             checkbox = ["yes"] if rec.no_robustness_changes else []
             return rec.source_comment, cluster_rows, epoch_rows, edits_data, msg, checkbox
+
+        # Any other non-current model (backup_NNN, alt_model_NNN) doesn't accept
+        # recommendations — show an empty panel using current's cluster list so
+        # the layout doesn't go blank.
+        if model_key != "current":
+            bundle = load_bundle(source_folder, "current")
+            cluster_rows, epoch_rows = _populate_tables(
+                bundle, Recommendation(source=bundle.source.source,
+                                       model=model_key,
+                                       reviewer=current_reviewer(reviewer)),
+            )
+            return "", cluster_rows, epoch_rows, [], \
+                   "Recommendations are only made against the current model.", []
 
         # Default: model=="current".
         bundle = load_bundle(source_folder, model_key)
