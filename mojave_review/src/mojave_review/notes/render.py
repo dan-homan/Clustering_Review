@@ -81,6 +81,35 @@ def _summarize(rec: Recommendation) -> str:
     return "\n".join(out)
 
 
+def pending_notes_seed(recommendations_dir: Path, source: str) -> str:
+    """Collate every non-empty reviewer *comment* from the open submissions into
+    a plain bullet list, tagged by reviewer, for seeding the Stage-3 dated-note
+    box. Includes source / cluster / epoch / edit comments. Reviewer tags use
+    parentheses, NOT square brackets, so the appended ledger markdown doesn't
+    turn the tag into a stray link. Empty string when there are no comments."""
+    lines: list[str] = []
+    for rec in _submitted_recs(recommendations_dir, source):
+        rv = rec.reviewer or "(unknown)"
+        if rec.source_comment and rec.source_comment.strip():
+            lines.append(f"- ({rv}) source: {rec.source_comment.strip()}")
+        for cid, fb in rec.cluster_feedback.items():
+            if fb.comment and fb.comment.strip():
+                lines.append(f"- ({rv}) cl {cid}: {fb.comment.strip()}")
+        for ep, fb in rec.epoch_feedback.items():
+            if fb.comment and fb.comment.strip():
+                lines.append(f"- ({rv}) epoch {ep}: {fb.comment.strip()}")
+        for e in rec.edits:
+            cm = (getattr(e, "comment", "") or "").strip()
+            if not cm:
+                continue
+            if e.op == "change_clusterID" and e.from_id is not None and e.to_id is not None:
+                what = f"change_clusterID {e.from_id}→{e.to_id}"
+            else:
+                what = e.op
+            lines.append(f"- ({rv}) edit ({what}): {cm}")
+    return "\n".join(lines)
+
+
 def open_suggestions_markdown(recommendations_dir: Path, source: str) -> str:
     """Live summary of every submitted recommendation for this source."""
     recs = _submitted_recs(recommendations_dir, source)

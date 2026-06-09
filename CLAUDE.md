@@ -483,6 +483,49 @@ recommendation for the current source into one model. Pure logic lives in
   lives in its own `agg-apply-status` span (not `agg-summary`, which
   `_compose_agg` owns and would clobber). All in `ui/callbacks._apply_aggregated`.
 
+- **Repeat applies (run N).** Stage 3 can be applied again after a source is
+  finalized — a reviewer re-submits (badge → `[final − N]`), the panel
+  repopulates, the admin re-decides and applies. Everything **appends**:
+  `stage3_ledger_entry(run_index=)` numbers the heading `(run N)` (N counted
+  from existing "Stage 3 reconciliation" headings in the ledger), `mojave-apply`
+  archives each run to `applied/<date>__aggregated[_n].json` and cuts a new
+  backup, and considered submissions go to `considered/<date>/`. When a source
+  is `final` with no open submissions, `_build_agg_panel` shows a hint that the
+  panel is waiting for a follow-up round (rather than looking broken).
+
+- **Dated note box** (in the 🧩 panel). A textarea + **"Add dated note to log"**
+  appends a free-text `### <date> — Note (by <admin>)` entry to the ledger
+  (`notes.dated_note_entry` + `append_ledger`; never touches Status). It is
+  **seeded** with every pending reviewer comment from the open submissions
+  (`notes.render.pending_notes_seed` — source/cluster/epoch/edit comments,
+  tagged `(reviewer)` with PARENTHESES not `[]`, since `[...]` in the ledger
+  markdown would render as a link). **"Reseed from submissions"** re-pulls.
+  Lets reviewer notes be preserved into the permanent `.md` before their JSONs
+  are archived.
+
+### Stage 2 vs Stage 3 apply — two distinct admin paths
+
+Two admin "apply" actions, deliberately separated so they can't be confused:
+
+- **Stage 2 — baseline apply**: the **"Generate baseline apply command
+  (Stage 2)"** button (in the Stage-2 admin block, next to the Stage-2 notes
+  editor) produces a copy-paste `mojave-apply --recommendation <the admin's own
+  current/submitted JSON>` line. Applies the builder's **own single**
+  recommendation. (`recommendations_callbacks_admin._do_generate`.)
+- **Stage 3 — aggregated apply**: the **"Apply aggregated decisions (Stage 3)"**
+  button (in the 🧩 panel) — see above.
+
+**Stage-gated visibility** keeps only the relevant one on screen, keyed on
+`store.source_phase`: in `stage1`/`stage2` phases the baseline-apply button
+shows and the 🧩 panel is hidden; from `Stage 2 done` onward (`open`/`final`)
+the baseline-apply button is hidden and the 🧩 panel shows
+(`_toggle_btn_visibility` + `_toggle_agg_panel`).
+
+The Stage-2 notes editor also has a **"Seed from submission summary"** button:
+fills the editor with the admin's own submission's `format_submission_text`,
+cleaned by `notebook_format.strip_for_notes` (drops the `─` rule lines, unwraps
+the `[Submission for …]` header brackets so markdown doesn't make a link).
+
 ## Running the web app
 
 ```bash

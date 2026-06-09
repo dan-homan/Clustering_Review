@@ -11,7 +11,7 @@ from datetime import date as _date
 from pathlib import Path
 
 import plotly.graph_objects as go
-from dash import ALL, Dash, Input, Output, State, ctx, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, html, no_update
 
 from ..auth.runtime import current_reviewer
 from ..data.fits_cache import split_source_band
@@ -21,7 +21,7 @@ from ..data.loader import (
 from ..notes import (
     combined_markdown, notes_dir_for,
     read_note, write_note, get_section, set_section, scaffold,
-    get_status, set_status, append_ledger,
+    get_status, set_status, append_ledger, dated_note_entry, pending_notes_seed,
 )
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
@@ -29,10 +29,13 @@ from ..recommendations.apply import apply_recommendation
 from ..recommendations.aggregate import (
     build_aggregation_view, compose_aggregated, stage3_ledger_entry,
 )
+from ..recommendations.notebook_format import (
+    format_submission_text, strip_for_notes,
+)
 from ..recommendations.schema import Recommendation
 from ..recommendations.store import (
-    archive_considered_submissions, list_other_reviewer_slugs,
-    load_recommendation_by_slug, reviewer_slug,
+    archive_considered_submissions, is_submitted, list_other_reviewer_slugs,
+    load_recommendation, load_recommendation_by_slug, reviewer_slug, source_phase,
 )
 from . import recommendations_callbacks
 from .aggregation import build_aggregation_children
@@ -230,6 +233,100 @@ def register_callbacks(
             return (f"Saved {datetime.now().strftime('%H:%M:%S')} ({status})",
                     int(counter or 0) + 1)
 
+        # ---- Stage 2: seed the notes editor from the builder's own
+        #      submission summary (cleaned for markdown) -------------------
+        @app.callback(
+            Output("stage2-editor", "value", allow_duplicate=True),
+            Output("stage2-save-status", "children", allow_duplicate=True),
+            Input("seed-stage2-summary-btn", "n_clicks"),
+            State("source-picker", "value"),
+            prevent_initial_call=True,
+        )
+        def _seed_stage2_from_summary(_n, source_folder):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return no_update, "No source selected."
+            cur = current_reviewer(reviewer)
+            # Prefer the submitted snapshot (what the baseline apply targets);
+            # fall back to the in-progress current draft.
+            rec = None
+            if is_submitted(recommendations_dir, src.source, cur):
+                rec = load_recommendation_by_slug(
+                    recommendations_dir, src.source, "submitted", reviewer_slug(cur))
+            if rec is None:
+                rec = load_recommendation(
+                    recommendations_dir, src.source, "current", cur)
+            try:
+                base_df = load_bundle(source_folder, "current").cluster_df
+                eff_df = apply_recommendation(base_df, rec)
+                text = strip_for_notes(
+                    format_submission_text(rec, base_df, eff_df, cur))
+            except Exception as e:
+                return no_update, f"Seed failed: {e}"
+            return text, "Seeded from submission summary (edit, then Save)."
+
+        # ---- Stage 3: dated-note box — seed from pending reviewer comments -
+        @app.callback(
+            Output("stage3-note-input", "value"),
+            Input("source-picker", "value"),
+            Input("reseed-stage3-note-btn", "n_clicks"),
+            Input("submit-trigger", "data"),
+        )
+        def _seed_stage3_note(source_folder, _reseed_n, _submit_trigger):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return ""
+            return pending_notes_seed(recommendations_dir, src.source)
+
+        # ---- Stage 3: dated-note box — append to the ledger ----------------
+        @app.callback(
+            Output("stage3-note-status", "children"),
+            Output("notes-saved-counter", "data", allow_duplicate=True),
+            Output("stage3-note-input", "value", allow_duplicate=True),
+            Input("add-stage3-note-btn", "n_clicks"),
+            State("stage3-note-input", "value"),
+            State("source-picker", "value"),
+            State("notes-saved-counter", "data"),
+            prevent_initial_call=True,
+        )
+        def _add_stage3_note(_n, text, source_folder, counter):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return "No source selected.", no_update, no_update
+            if not (text or "").strip():
+                return "Nothing to add.", no_update, no_update
+            today = _date.today().isoformat()
+            entry = dated_note_entry(today, current_reviewer(reviewer), text)
+            try:
+                md = read_note(notes_dir, src.source)
+                if md is None:
+                    md = scaffold(src.source, src.epoch_min, src.epoch_max)
+                md = append_ledger(md, entry)
+                write_note(notes_dir, src.source, md)
+            except Exception as e:
+                return f"Add failed: {e}", no_update, no_update
+            from datetime import datetime
+            return (f"Added {datetime.now().strftime('%H:%M:%S')}.",
+                    int(counter or 0) + 1, "")
+
+        # ---- Stage 3 panel visibility: only once Stage 2 is done -----------
+        # Pre-baseline (stage1 / stage2 phases) the Stage-3 box is hidden so it
+        # can't be confused with the Stage-2 baseline apply; from Stage-2-done
+        # onward (open / final) it is shown. Pairs with the baseline-apply
+        # button's stage-gating in recommendations_callbacks_admin.
+        @app.callback(
+            Output("agg-details", "style"),
+            Input("source-picker", "value"),
+            Input("reload-counter", "data"),
+        )
+        def _toggle_agg_panel(source_folder, _reload_counter):
+            base = {"borderBottom": "1px solid #ddd", "background": "#f7f9fb"}
+            src = _source_from_folder(source_folder) if source_folder else None
+            phase = source_phase(recommendations_dir, src.source) if src else "open"
+            if phase in ("stage1", "stage2"):
+                return {**base, "display": "none"}
+            return base
+
         # ---- Stage 3 aggregation: build the admin panel for the source ----
         # Rebuilds whenever the source changes, the page reloads, or a new
         # submission lands (submit-trigger). Stashes the per-key edit dicts in
@@ -252,7 +349,20 @@ def register_callbacks(
             except Exception:
                 current_df = None
             view = build_aggregation_view(src.source, recs, current_df)
-            return build_aggregation_children(view), view.store_payload()
+            children = build_aggregation_children(view)
+            # When the source is already finalized and there are no open
+            # submissions, the empty panel can read as "broken". Make it clear
+            # the panel is just waiting for a follow-up round.
+            if not recs and source_phase(recommendations_dir, src.source) == "final":
+                md = read_note(notes_dir, src.source)
+                status = get_status(md) if md else ""
+                children = [html.Div(
+                    f"✓ {status or 'Finalized'}. New reviewer submissions will "
+                    f"appear here for a follow-up Stage 3 run.",
+                    style={"fontSize": "0.85em", "color": "#777",
+                           "padding": "0.5em 0"},
+                ), children]
+            return children, view.store_payload()
 
         # ---- Stage 3 aggregation: compose decisions -> preview rec --------
         # Collects every per-decision input, composes the aggregated
@@ -418,14 +528,18 @@ def register_callbacks(
                 pass
             ledger_note = ""
             try:
+                md = read_note(notes_dir, src.source)
+                if md is None:
+                    md = scaffold(src.source, src.epoch_min, src.epoch_max)
+                # Number repeated Stage-3 applies (run N) from the existing
+                # ledger so the appended history is easy to scan.
+                run_index = get_section(md, "ledger").count(
+                    "Stage 3 reconciliation") + 1
                 entry = stage3_ledger_entry(
                     view, finals=finals, rob_reasons=rob_reasons,
                     accepted_keys=accepted, edit_reasons=edit_reasons,
                     applied_by=current_reviewer(reviewer), date=today,
-                    backup_ref=backup_ref)
-                md = read_note(notes_dir, src.source)
-                if md is None:
-                    md = scaffold(src.source, src.epoch_min, src.epoch_max)
+                    backup_ref=backup_ref, run_index=run_index)
                 md = append_ledger(md, entry)
                 md = set_status(md, f"Stage 3 done · applied {today}")
                 write_note(notes_dir, src.source, md)

@@ -96,6 +96,16 @@ def append_ledger(md: str, entry: str) -> str:
     return set_section(md, "ledger", body)
 
 
+def dated_note_entry(date: str, author: str, text: str) -> str:
+    """Format a free-text, dated note for the ledger ("Decisions & applied
+    history"). Appended like any other ledger entry via ``append_ledger``;
+    carries no status change. Heading matches the Stage-3 entry style so the
+    history reads uniformly."""
+    head = f"### {date} — Note (by {author})"
+    body = (text or "").strip()
+    return f"{head}\n{body}" if body else head
+
+
 _STATUS_RE = re.compile(r"^Status:.*$", re.MULTILINE)
 
 

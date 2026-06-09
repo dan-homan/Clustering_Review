@@ -178,7 +178,7 @@ def test_stage3_ledger_entry_records_accepted_and_rejected():
         applied_by="homand", date="2026-06-05", backup_ref="backup_007",
     )
     assert md.startswith("### 2026-06-05 — Stage 3 reconciliation "
-                         "(applied by homand) — backup_007")
+                         "(run 1, applied by homand) — backup_007")
     assert "Considered: alice" in md and "bob" in md
     # cl2 changed to Non-robust, supported, with reason
     assert "cl 2 → Non-robust ✓ (changed from Robust)" in md
@@ -221,3 +221,15 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("PASS: aggregate logic")
+
+
+def test_stage3_ledger_entry_run_index():
+    from mojave_review.recommendations.aggregate import stage3_ledger_entry
+    view = build_aggregation_view("x", _recs(), _current_df())
+    md = stage3_ledger_entry(
+        view, finals={}, rob_reasons={}, accepted_keys=[], edit_reasons={},
+        applied_by="homand", date="2026-06-12", backup_ref="backup_009",
+        run_index=3,
+    )
+    assert md.startswith("### 2026-06-12 — Stage 3 reconciliation (run 3, "
+                         "applied by homand) — backup_009")

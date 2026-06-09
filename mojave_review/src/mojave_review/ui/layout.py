@@ -364,11 +364,21 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                 html.Div(
                                     [
                                         html.Button(
+                                            "↻ Seed from submission summary",
+                                            id="seed-stage2-summary-btn", n_clicks=0,
+                                            title="Fill the editor with your own "
+                                                  "submission's notebook summary "
+                                                  "(cleaned for markdown)",
+                                            style={"padding": "0.3em 0.9em",
+                                                   "fontSize": "0.85em"},
+                                        ),
+                                        html.Button(
                                             "Save Stage 2 notes",
                                             id="save-stage2-btn", n_clicks=0,
                                             title="Save and mark Stage 2 in progress",
                                             style={"padding": "0.3em 0.9em",
-                                                   "fontSize": "0.85em"},
+                                                   "fontSize": "0.85em",
+                                                   "marginLeft": "0.5em"},
                                         ),
                                         html.Button(
                                             "Save & set Stage 2 done",
@@ -390,6 +400,38 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                         ),
                                     ],
                                     style={"padding": "0.4em 1.25em 0.5em"},
+                                ),
+                                # Stage-2 BASELINE apply (moved here from the
+                                # recommendations header). Distinct from the
+                                # Stage-3 aggregated apply: this applies the
+                                # builder's OWN single recommendation. Visibility
+                                # is stage-gated (shown until Stage 2 is done).
+                                html.Div(
+                                    [
+                                        html.Span(
+                                            "Stage 2 — baseline apply (your own "
+                                            "single recommendation):",
+                                            style={"fontSize": "0.8em",
+                                                   "color": "#666",
+                                                   "marginRight": "0.5em"},
+                                        ),
+                                        html.Button(
+                                            "Generate baseline apply command (Stage 2)",
+                                            id="generate-apply-cmd-btn", n_clicks=0,
+                                            title="Copy-pasteable mojave-apply "
+                                                  "command for YOUR recommendation "
+                                                  "(the Stage-2 baseline apply)",
+                                            style={"padding": "0.3em 0.9em",
+                                                   "fontSize": "0.85em",
+                                                   "background": "#d68a00",
+                                                   "color": "white", "border": "none",
+                                                   "borderRadius": "4px",
+                                                   "cursor": "pointer"},
+                                        ),
+                                    ],
+                                    style={"padding": "0 1.25em 0.6em",
+                                           "display": "flex", "alignItems": "center",
+                                           "flexWrap": "wrap"},
                                 ),
                             ],
                         ),
@@ -422,10 +464,11 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                            "fontSize": "0.85em"},
                                 ),
                                 html.Button(
-                                    "Apply aggregated…",
+                                    "Apply aggregated decisions (Stage 3)…",
                                     id="agg-apply-btn", n_clicks=0,
-                                    title="Apply these decisions to Results/ "
-                                          "(runs mojave-apply, writes the ledger)",
+                                    title="Apply the reconciled reviewer decisions "
+                                          "to Results/ (runs mojave-apply, writes "
+                                          "the ledger)",
                                     style={"marginLeft": "1em", "padding": "0.3em 0.9em",
                                            "fontSize": "0.85em", "background": "#b9770e",
                                            "color": "white", "border": "none",
@@ -445,6 +488,58 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                             style={"padding": "0.2em 1.25em 0.4em",
                                    "display": "flex", "alignItems": "center",
                                    "flexWrap": "wrap"},
+                        ),
+                        # Add a dated note to the source log (section 3 ledger).
+                        # Seeded with pending reviewer comments; editable; the
+                        # admin trims and clicks "Add" to append a dated entry.
+                        html.Div(
+                            [
+                                html.Div(
+                                    "📝 Add a dated note to the source log "
+                                    "(appended to section 3; seeded with pending "
+                                    "reviewer comments):",
+                                    style={"fontSize": "0.8em", "color": "#666",
+                                           "padding": "0 0 0.25em"},
+                                ),
+                                dcc.Textarea(
+                                    id="stage3-note-input",
+                                    style={"width": "100%", "minHeight": "80px",
+                                           "fontFamily": "ui-monospace, monospace",
+                                           "fontSize": "0.85em"},
+                                ),
+                                html.Div(
+                                    [
+                                        html.Button(
+                                            "➕ Add dated note to log",
+                                            id="add-stage3-note-btn", n_clicks=0,
+                                            style={"padding": "0.3em 0.9em",
+                                                   "fontSize": "0.85em",
+                                                   "background": "#1f77b4",
+                                                   "color": "white", "border": "none",
+                                                   "borderRadius": "4px",
+                                                   "cursor": "pointer"},
+                                        ),
+                                        html.Button(
+                                            "↻ Reseed from submissions",
+                                            id="reseed-stage3-note-btn", n_clicks=0,
+                                            title="Re-pull pending reviewer comments "
+                                                  "into the box (discards edits)",
+                                            style={"padding": "0.3em 0.9em",
+                                                   "fontSize": "0.85em",
+                                                   "marginLeft": "0.5em"},
+                                        ),
+                                        html.Span(
+                                            id="stage3-note-status",
+                                            style={"marginLeft": "0.75em",
+                                                   "fontSize": "0.8em",
+                                                   "color": "#0a8"},
+                                        ),
+                                    ],
+                                    style={"padding": "0.4em 0 0.2em"},
+                                ),
+                            ],
+                            style={"padding": "0.4em 1.25em 0.6em",
+                                   "borderTop": "1px dashed #ddd"},
                         ),
                         html.Div(
                             id="agg-panel-body",

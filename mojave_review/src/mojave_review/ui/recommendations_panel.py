@@ -384,18 +384,11 @@ def build_recommendations_panel(admin: bool = False) -> html.Div:
                    "cursor": "pointer", "marginLeft": "0.5em"},
         ),
     ]
-    if admin:
-        header_buttons.append(
-            html.Button(
-                "Generate Apply Command",
-                id="generate-apply-cmd-btn",
-                n_clicks=0,
-                style={"padding": "0.35em 0.9em", "fontSize": "0.9em",
-                       "background": "#d68a00", "color": "white",
-                       "border": "none", "borderRadius": "4px",
-                       "cursor": "pointer", "marginLeft": "0.5em"},
-            ),
-        )
+    # NOTE: the admin "Generate baseline apply command (Stage 2)" button used to
+    # live here in the header. It moved to the Stage-2 admin block in
+    # ui/layout.py so the Stage-2 (baseline) and Stage-3 (aggregated) apply
+    # paths are grouped and labelled by stage. Its modal + callbacks are
+    # unchanged (id "generate-apply-cmd-btn").
 
     return html.Div(
         [

@@ -1,7 +1,7 @@
 """Admin-only callbacks for the recommendations panel.
 
-Currently: the "Generate Apply Command" button and its modal. Future
-home for the multi-reviewer aggregation dialog.
+Currently: the "Generate baseline apply command (Stage 2)" button and its
+modal (the button itself lives in the Stage-2 admin block in ui/layout.py).
 
 Only registered when ``mojave-review`` was started with ``--admin``;
 the corresponding layout chunks are also only emitted in that case
@@ -17,7 +17,8 @@ from dash import Dash, Input, Output, State, no_update
 
 from ..auth.runtime import current_reviewer
 from ..data.loader import _SOURCE_DIR_RE
-from ..recommendations.store import is_submitted, submission_path, rec_path
+from ..recommendations.store import (
+    is_submitted, submission_path, rec_path, source_phase)
 
 
 def _source_name_from_folder(folder_str: str | None) -> str | None:
@@ -48,7 +49,7 @@ def register_admin(
     reviewer: str,
 ) -> None:
 
-    # ---- "Generate Apply Command" click handler --------------------------
+    # ---- "Generate baseline apply command (Stage 2)" click handler -------
     # Prefers the submitted/<slug>.json (the reviewer's signed-off
     # snapshot). Falls back to current/<slug>.json if no submission yet,
     # so admins can still apply an in-progress draft locally.
@@ -104,20 +105,26 @@ def register_admin(
     def _close_apply_cmd_modal(_a, _b):
         return {"display": "none"}
 
-    # ---- Hide the Generate-Apply-Command button on non-current models ---
-    # Mirrors the Submit button's visibility logic so admin users don't
-    # see (or accidentally fire) the apply command from a read-only view.
+    # ---- Stage-gate the baseline-apply (Stage 2) button -----------------
+    # Hidden on non-current models (read-only views) AND once the source is
+    # past Stage 2 (phase open/final): from Stage-2-done onward the Stage-3
+    # aggregated apply is the right path, so we hide the Stage-2 baseline
+    # apply to avoid confusing the two. Pairs with the Stage-3 panel's own
+    # visibility toggle (_toggle_agg_panel).
     @app.callback(
         Output("generate-apply-cmd-btn", "style"),
         Input("source-picker", "value"),
         Input("model-picker", "value"),
+        Input("reload-counter", "data"),
     )
-    def _toggle_btn_visibility(source_folder, model_key):
-        base = {"padding": "0.35em 0.9em", "fontSize": "0.9em",
+    def _toggle_btn_visibility(source_folder, model_key, _reload_counter):
+        base = {"padding": "0.3em 0.9em", "fontSize": "0.85em",
                 "background": "#d68a00", "color": "white",
-                "border": "none", "borderRadius": "4px",
-                "cursor": "pointer", "marginLeft": "0.5em"}
-        if not source_folder or model_key != "current":
+                "border": "none", "borderRadius": "4px", "cursor": "pointer"}
+        source_name = _source_name_from_folder(source_folder)
+        if not source_folder or model_key != "current" or source_name is None:
+            return {**base, "display": "none"}
+        if source_phase(recommendations_dir, source_name) in ("open", "final"):
             return {**base, "display": "none"}
         return base
 

@@ -247,3 +247,21 @@ def format_submission_text(
         lines.pop()
     lines.append(_RULE)
     return "\n".join(lines)
+
+
+def strip_for_notes(text: str) -> str:
+    """Clean a ``format_submission_text`` block for embedding into the markdown
+    notes file: drop the ``─``-rule lines, and unwrap the ``[Submission for …]``
+    header brackets (markdown would otherwise treat ``[...]`` as a link
+    reference). Leaves all other content untouched."""
+    out: list[str] = []
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if s and set(s) <= {"─"}:          # a _RULE line (all box-drawing dashes)
+            continue
+        if s.startswith("[") and s.endswith("]") and len(s) >= 2:
+            # keep any leading indentation, drop the surrounding [ ]
+            out.append(line[: line.index("[")] + s[1:-1])
+        else:
+            out.append(line)
+    return "\n".join(out).strip("\n")

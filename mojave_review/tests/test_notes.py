@@ -178,3 +178,53 @@ if __name__ == "__main__":
     test_hard_breaks_for_consecutive_lines()
     test_hard_breaks_leaves_paragraph_breaks()
     print("PASS: notes store + seed parser + render hard-breaks")
+
+
+# ---------------------------------------------------------------------------
+# Dated notes + submission-summary cleaning (Stage-3 note box / Stage-2 seed)
+# ---------------------------------------------------------------------------
+
+def test_dated_note_entry_and_append_is_additive():
+    md = store.scaffold("x")
+    md = store.append_ledger(md, store.dated_note_entry("2026-06-10", "Dan", "one"))
+    md = store.append_ledger(md, store.dated_note_entry("2026-06-11", "Dan", "two"))
+    ledger = store.get_section(md, "ledger")
+    assert "### 2026-06-10 — Note (by Dan)" in ledger
+    assert "one" in ledger and "two" in ledger          # append, not replace
+    assert ledger.index("one") < ledger.index("two")    # newest last
+
+
+def test_dated_note_entry_empty_text_is_heading_only():
+    assert store.dated_note_entry("2026-06-10", "Dan", "   ") == \
+        "### 2026-06-10 — Note (by Dan)"
+
+
+def test_strip_for_notes_drops_rules_and_unwraps_brackets():
+    from mojave_review.recommendations.notebook_format import strip_for_notes, _RULE
+    raw = f"{_RULE}\n[Submission for 0003-066 — Dan — 2026-06-10 12:00]\n\nbody\n{_RULE}"
+    out = strip_for_notes(raw)
+    assert "─" not in out                                # rule lines gone
+    assert "[" not in out and "]" not in out             # header unwrapped
+    assert out.startswith("Submission for 0003-066")
+    assert "body" in out
+
+
+def test_pending_notes_seed_uses_parens_not_brackets(tmp_path):
+    import json
+    from mojave_review.notes.render import pending_notes_seed
+    sub = tmp_path / "0003-066u" / "submitted"
+    sub.mkdir(parents=True)
+    (sub / "alice.json").write_text(json.dumps({
+        "source": "0003-066u", "model": "current", "reviewer": "Alice",
+        "source_comment": "ragged",
+        "cluster_feedback": {"3": {"comment": "merges with 4"}},
+        "epoch_feedback": {"2003.10": {"comment": "flare"}},
+        "edits": [{"op": "change_clusterID", "scope": "all_epochs",
+                   "from_id": 5, "to_id": 3, "comment": "knot"}],
+    }))
+    seed = pending_notes_seed(tmp_path, "0003-066u")
+    assert "[" not in seed and "]" not in seed           # no markdown-link brackets
+    assert "(Alice) source: ragged" in seed
+    assert "(Alice) cl 3: merges with 4" in seed
+    assert "(Alice) epoch 2003.10: flare" in seed
+    assert "edit (change_clusterID 5→3): knot" in seed

@@ -307,14 +307,19 @@ def stage3_ledger_entry(
     applied_by: str,
     date: str,
     backup_ref: str,
+    run_index: int = 1,
 ) -> str:
     """Render the append-only "Decisions & applied history" entry recording
     both what was **accepted ✓** and what was **rejected ✗**, with reasons and
-    proposers — the human-readable suggested-vs-applied record."""
+    proposers — the human-readable suggested-vs-applied record.
+
+    ``run_index`` numbers repeated Stage-3 applications on the same source
+    (run 1, run 2, …) so the sequential history is easy to scan."""
     accepted = set(accepted_keys)
     considered = ", ".join(f"{rv} ({when})" for rv, when in view.submissions) or "—"
     lines = [
-        f"### {date} — Stage 3 reconciliation (applied by {applied_by}) — {backup_ref}",
+        f"### {date} — Stage 3 reconciliation (run {run_index}, "
+        f"applied by {applied_by}) — {backup_ref}",
         f"Considered: {considered}",
     ]
 
