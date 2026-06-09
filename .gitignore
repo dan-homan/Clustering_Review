@@ -11,6 +11,9 @@
 /notes/
 /.mojave_review/
 
+# --- Per-source run parameters (redshift etc.); local data, not tracked ---
+/source_run_param.csv
+
 # --- Local-only editor / Claude Code settings ---
 .claude/
 

@@ -457,9 +457,13 @@ def build_summary_figure(
             subplot_titles=("XY position relative to core [mas]",),
         )
     else:
+        # With a known z the Tb formula's (1+z) factor puts it in the host
+        # galaxy frame; with z=0 (unknown) it's the observed value.
+        z_known = z is not None and z > 0
+        tb_label = "Tb host-frame [K]" if z_known else "Tb obs [K]"
         titles = {
             "Position":     ("Distance from origin [mas]", "Position angle [deg]"),
-            "Flux":         ("I flux density [Jy]", "Tb obs [K]"),
+            "Flux":         ("I flux density [Jy]", tb_label),
             "Polarization": ("Polarized flux [Jy]", "EVPA [deg]"),
             "Kinematics":   ("Apparent speed vs distance", "X/Y velocity vectors"),
         }[view]
@@ -531,7 +535,7 @@ def build_summary_figure(
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_xaxes(title_text="Epoch", row=2, col=1)
         _set_log_yaxis(fig, row=1, col=1, title="I flux density [Jy]")
-        _set_log_yaxis(fig, row=2, col=1, title="Tb obs [K]")
+        _set_log_yaxis(fig, row=2, col=1, title=tb_label)
 
     elif view == "Polarization":
         # P flux on a log-scaled axis (10^x ticks); EVPA stays linear.
@@ -554,7 +558,7 @@ def build_summary_figure(
     elif view == "Kinematics":
         _draw_kinematics(fig, slices, motion_fits,
                          vector_scale_factor=vector_scale_factor,
-                         only_3sigma=only_3sigma)
+                         only_3sigma=only_3sigma, z=z)
         # Always show the (0 distance, 0 speed) corner so the reader can see
         # where each feature sits relative to the core and to zero motion.
         # Distances and speeds are non-negative, so rangemode="tozero" anchors
@@ -637,12 +641,23 @@ def _draw_kinematics(
     motion_fits: dict[int, "_MotionFit | None"],
     vector_scale_factor: float = 1.0,
     only_3sigma: bool = False,
+    z: float = 0.0,
 ) -> None:
     fits = [mf for mf in motion_fits.values()
             if mf is not None and mf.cid > 0
             and (not only_3sigma or mf.significant)]
     if not fits:
         return
+
+    # beta_app (apparent speed in units of c) for the hovers, when z is known.
+    from ..data.source_params import beta_app as _beta_app
+    z_known = z is not None and np.isfinite(z) and z > 0
+
+    def _beta_line(speed: float) -> str:
+        if not z_known:
+            return ""
+        b = _beta_app(speed, z)
+        return f"β_app {b:.2f} c<br>" if b is not None else ""
 
     # speed vs distance scatter, with 1-sigma speed error bars
     for mf in fits:
@@ -658,7 +673,8 @@ def _draw_kinematics(
                 hovertemplate=(f"cluster {mf.cid}<br>"
                                "median dist %{x:.2f} mas<br>"
                                f"speed {mf.speed:.3f} ± {mf.speed_err:.3f} "
-                               "mas/yr<extra></extra>"),
+                               "mas/yr<br>"
+                               f"{_beta_line(mf.speed)}<extra></extra>"),
             ),
             row=1, col=1,
         )
@@ -705,7 +721,8 @@ def _draw_kinematics(
                 showlegend=False, legendgroup=f"cid_{mf.cid}",
                 hovertemplate=(f"cluster {mf.cid}<br>"
                                "tail (%{x:.2f}, %{y:.2f}) mas<br>"
-                               f"vx {sx:.3f} mas/yr<br>vy {sy:.3f} mas/yr<extra></extra>"),
+                               f"vx {sx:.3f} mas/yr<br>vy {sy:.3f} mas/yr<br>"
+                               f"{_beta_line(mf.speed)}<extra></extra>"),
             ),
             row=2, col=1,
         )

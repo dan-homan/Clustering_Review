@@ -78,6 +78,13 @@ def register_callbacks(
         admin=admin,
     )
 
+    # Per-source redshift table (source_run_param.csv), loaded once. Drives the
+    # (1+z) host-frame Tb correction and the beta_app Kinematics hovers. Empty
+    # map => every source behaves as z unknown (z=0), exactly as before.
+    from ..data.source_params import (
+        find_source_params, load_redshifts, redshift_for)
+    _redshift_map = load_redshifts(find_source_params(results_dir))
+
     # Local helpers that resolve a (source, model) pair into a possibly
     # rec-applied DataFrame, closing over recommendations_dir and the
     # reviewer-name resolver (token mode: g.reviewer; otherwise the
@@ -523,8 +530,11 @@ def register_callbacks(
                 eps = df["epoch"].round(4).to_numpy()
                 mask = [(int(c), float(e)) in sel_keys for c, e in zip(cids, eps)]
                 df.loc[mask, "select"] = True
+        # z drives the (1+z) host-frame Tb correction and beta_app on the
+        # Kinematics hovers; 0.0 (unknown) leaves Tb as the observed value.
+        z = redshift_for(_redshift_map, src.source) or 0.0
         fig = build_summary_figure(
-            df, view=view,
+            df, view=view, z=z,
             vector_scale_factor=vector_scale or 1.0,
             hide_non_robust=bool(hide_non_robust_val),
             only_3sigma=bool(only_3sigma_val),

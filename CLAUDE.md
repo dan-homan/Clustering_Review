@@ -241,6 +241,9 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
 - **EVPA de-wrap**: same idea with period 180°, jump 150°.
 - **Size floor**: `size = max(sqrt(fwhm_maj * fwhm_min), 0.1)` mas.
 - **Tb formula**: `1.22e12 * flux * (1+z) / (15.4² * size²)` K (U-band fixed).
+  `z` is the per-source redshift (see "Per-source redshift" below). With a known
+  z the `(1+z)` factor puts Tb in the host-galaxy frame and the axis label reads
+  "Tb host-frame [K]"; with z=0 (unknown) it's the observed value, "Tb obs [K]".
 - **Position polyfit / projected motion** (`_motion_fit`): computed for every
   robust cluster with ≥5 valid `use_in_fit` points. By default the fit is drawn
   for ALL such clusters (Position fit line + Kinematics points/vectors). The
@@ -251,6 +254,23 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
   behavior. (Label is "Hide uncertain motions" rather than "3σ" because the
   kept set also includes slow-but-tightly-constrained fits.) `_MotionFit.speed_err` (1σ on speed, propagated from the two slope
   variances) drives the error bars on the Kinematics speed-vs-distance plot.
+
+### Per-source redshift (`source_run_param.csv`)
+
+A `source_run_param.csv` kept alongside the production data (NOT tracked in
+git — gitignored) carries a per-source `redshift` column (band-less `Source`
+names like `0003+380`; blank = unknown). [`data/source_params.py`](mojave_review/src/mojave_review/data/source_params.py)
+loads it once (`find_source_params` checks cwd, then `results_dir`'s parent,
+then `results_dir`) into a `{source: z}` map; `_refresh_summary` looks up
+`z = redshift_for(map, src.source) or 0.0` and passes it to
+`build_summary_figure(z=)`. Two uses:
+
+- **Host-frame Tb**: the `(1+z)` factor in the Tb formula (above).
+- **`beta_app` on Kinematics hovers**: apparent speed in units of c,
+  `beta_app = (1+z)·µ·D_A/c` (µ = angular speed mas/yr, D_A = angular-diameter
+  distance). `source_params.beta_app` computes it with astropy + the MOJAVE
+  standard cosmology (flat ΛCDM, H0=71, Ωm=0.27); shown on both the
+  speed-vs-distance and velocity-vector hovers, and omitted when z is unknown.
 
 ## Recommendations
 
