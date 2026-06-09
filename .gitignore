@@ -8,6 +8,7 @@
 
 # --- Runtime output from the web app ---
 /recommendations/
+/notes/
 /.mojave_review/
 
 # --- Local-only editor / Claude Code settings ---
