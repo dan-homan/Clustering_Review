@@ -657,7 +657,7 @@ def _draw_kinematics(
         if not z_known:
             return ""
         b = _beta_app(speed, z)
-        return f"β_app {b:.2f} c<br>" if b is not None else ""
+        return f"β_app = {b:.2f} c for z = {z:g}<br>" if b is not None else ""
 
     # speed vs distance scatter, with 1-sigma speed error bars
     for mf in fits:
