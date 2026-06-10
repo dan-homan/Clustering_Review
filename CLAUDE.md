@@ -478,20 +478,27 @@ recommendation for the current source into one model. Pure logic lives in
   precedence over the reviewer's own Visualize on the `current` model. The
   store is always present (non-admin leaves it `None`).
 
-- **Apply** — the **"Apply aggregated…"** button opens a confirm modal, then
-  (one-click subprocess) writes the composed rec to
-  `recommendations/<source>/stage3/aggregated.json`, runs `mojave-apply`
-  (`python -m mojave_review.cli.apply … --no-confirm`, production-code dir from
-  `$MOJAVE_CODE` or `<results-dir>/..`) which backs up + regenerates `Results/`
-  and archives the JSON to `applied/`. **On success** it then moves the folded
-  reviewer submissions `submitted/*.json` → `considered/<date>/` (so they leave
-  "open suggestions" / the `Rec:` dropdown — a later re-submission reappears),
-  appends a **suggested-vs-applied ledger entry** (`stage3_ledger_entry`,
-  recording ✓accepted / ✗rejected with reasons + proposers) to the notes
-  "Decisions & applied history", bumps Status → `Stage 3 done · applied <date>`,
-  and bumps `reload-counter` to refresh the panel/notes/plots. The result line
-  lives in its own `agg-apply-status` span (not `agg-summary`, which
-  `_compose_agg` owns and would clobber). All in `ui/callbacks._apply_aggregated`.
+- **Apply** — the **"Apply aggregated decisions (Stage 3)"** button opens a
+  confirm modal whose action **generates a copy-paste `mojave-apply` command**
+  (NOT an in-app subprocess — that inherited the app's env and hit the
+  `MOJAVE_CODE` pitfall; same cut-n-paste model as the Stage-2 baseline apply).
+  `ui/callbacks._apply_aggregated` composes the rec → writes
+  `recommendations/<source>/stage3/aggregated.json` + a **sidecar**
+  `aggregated.stage3.json` (`considered_slugs`, the pre-rendered
+  `stage3_ledger_entry` with a `{{BACKUP_REF}}` placeholder + run N counted from
+  the ledger, and the target `status`), then shows the command in the shared
+  Stage-2 `apply-cmd-modal`. The command is
+  `mojave-apply --recommendation …/aggregated.json --stage3-meta …/aggregated.stage3.json`
+  (+ `--results-dir/--source/--recommendations-dir/--production-code-dir`, no
+  `--no-confirm` so the terminal prompts). The app writes only under
+  `recommendations/`, never `Results/`. **`mojave-apply --stage3-meta`**
+  (`cli/apply._apply_stage3_meta`) does the bookkeeping atomically after the
+  apply: backs up + regenerates `Results/`, archives the JSON to `applied/`,
+  moves the folded `submitted/*.json` → `considered/<date>/`, appends the
+  ledger entry (resolving `{{BACKUP_REF}}` to the backup it cut), and sets
+  Status → `Stage 3 done · applied <date>`. After running it, the admin clicks
+  ↻ Reload. The `agg-apply-status` span reports the generated command (run N);
+  it's separate from `agg-summary`, which `_compose_agg` owns.
 
 - **Repeat applies (run N).** Stage 3 can be applied again after a source is
   finalized — a reviewer re-submits (badge → `[final − N]`), the panel
@@ -515,15 +522,23 @@ recommendation for the current source into one model. Pure logic lives in
 
 ### Stage 2 vs Stage 3 apply — two distinct admin paths
 
-Two admin "apply" actions, deliberately separated so they can't be confused:
+Two admin "apply" actions, deliberately separated so they can't be confused.
+**Both now use the same cut-n-paste model** — generate a `mojave-apply` command
+the admin runs in a terminal (correct env + a confirm prompt); the app never
+shells out and never writes `Results/`:
 
 - **Stage 2 — baseline apply**: the **"Generate baseline apply command
   (Stage 2)"** button (in the Stage-2 admin block, next to the Stage-2 notes
-  editor) produces a copy-paste `mojave-apply --recommendation <the admin's own
-  current/submitted JSON>` line. Applies the builder's **own single**
-  recommendation. (`recommendations_callbacks_admin._do_generate`.)
+  editor) produces `mojave-apply --recommendation <the admin's own
+  current/submitted JSON>`. Applies the builder's **own single** recommendation.
+  (`recommendations_callbacks_admin._do_generate`.)
 - **Stage 3 — aggregated apply**: the **"Apply aggregated decisions (Stage 3)"**
-  button (in the 🧩 panel) — see above.
+  button (in the 🧩 panel) produces `mojave-apply --recommendation
+  …/aggregated.json --stage3-meta …/aggregated.stage3.json` — the
+  `--stage3-meta` sidecar folds in the considered-archive + ledger + Status.
+  See above.
+
+Both populate the shared `apply-cmd-modal` (copy-paste + Copy button).
 
 **Stage-gated visibility** keeps only the relevant one on screen, keyed on
 `store.source_phase`: in `stage1`/`stage2` phases the baseline-apply button

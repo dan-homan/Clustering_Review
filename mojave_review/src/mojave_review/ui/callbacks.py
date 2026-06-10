@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import sys
+import shlex
 from datetime import date as _date
 from pathlib import Path
 
@@ -436,17 +435,22 @@ def register_callbacks(
         def _close_apply_modal(*_):
             return {"display": "none"}
 
-        # ---- Stage 3 apply: the one-click orchestration -------------------
-        # Composes the aggregated rec, runs mojave-apply as a subprocess
-        # (synchronous), and on success archives the considered submissions,
-        # writes the notes ledger + bumps Status, and refreshes everything via
-        # reload-counter. Destructive — only reachable behind the confirm modal.
+        # ---- Stage 3 apply: generate the cut-n-paste command --------------
+        # Like the Stage-2 baseline apply, we do NOT run mojave-apply as an
+        # in-app subprocess (that inherited the app's env — the MOJAVE_CODE
+        # pitfall). Instead compose the aggregated rec + a Stage-3 sidecar, then
+        # show a copy-paste command the admin runs in a terminal (correct env,
+        # plus mojave-apply's own confirm prompt). The command's --stage3-meta
+        # makes mojave-apply do EVERYTHING atomically: apply + archive
+        # considered + ledger (run N) + Status. The app writes only the staged
+        # rec + sidecar under recommendations/ (never under Results/). The
+        # command modal + Copy button are the shared Stage-2 ones.
         @app.callback(
             Output("agg-apply-modal", "style", allow_duplicate=True),
+            Output("apply-cmd-modal", "style", allow_duplicate=True),
+            Output("apply-cmd-text", "value", allow_duplicate=True),
+            Output("apply-cmd-hint", "children", allow_duplicate=True),
             Output("agg-apply-status", "children"),
-            Output("reload-counter", "data", allow_duplicate=True),
-            Output("agg-preview-rec", "data", allow_duplicate=True),
-            Output("agg-preview-toggle", "value", allow_duplicate=True),
             Input("agg-apply-confirm", "n_clicks"),
             State({"type": "agg-rob-final", "cid": ALL}, "value"),
             State({"type": "agg-rob-final", "cid": ALL}, "id"),
@@ -457,28 +461,30 @@ def register_callbacks(
             State({"type": "agg-edit-reason", "key": ALL}, "value"),
             State({"type": "agg-edit-reason", "key": ALL}, "id"),
             State("source-picker", "value"),
-            State("reload-counter", "data"),
             prevent_initial_call=True,
         )
         def _apply_aggregated(_n, final_vals, final_ids, rob_reason_vals,
                               rob_reason_ids, accept_vals, accept_ids,
                               edit_reason_vals, edit_reason_ids,
-                              source_folder, reload_counter):
+                              source_folder):
             hide = {"display": "none"}
-            err = (hide, no_update, no_update, no_update, no_update)
+
+            def fail(msg):
+                return (hide, no_update, no_update, no_update, msg)
+
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
-                return (hide, "No source selected.", no_update, no_update, no_update)
+                return fail("No source selected.")
             finals, rob_reasons, accepted, edit_reasons = _collect_decisions(
                 final_ids, final_vals, rob_reason_ids, rob_reason_vals,
                 accept_ids, accept_vals, edit_reason_ids, edit_reason_vals)
             recs = _submitted_recs(recommendations_dir, src.source)
             if not recs:
-                return (hide, "No submissions to apply.", *err[2:])
+                return fail("No submissions to apply.")
             try:
                 current_df = load_bundle(source_folder, "current").cluster_df
             except Exception as e:
-                return (hide, f"Could not load current model: {e}", *err[2:])
+                return fail(f"Could not load current model: {e}")
             view = build_aggregation_view(src.source, recs, current_df)
             rec = compose_aggregated(
                 src.source, "aggregated",
@@ -486,69 +492,57 @@ def register_callbacks(
                 accepted_edit_keys=accepted, edit_reasons=edit_reasons,
                 store_payload=view.store_payload())
             if rec.is_empty():
-                return (hide, "No decisions to apply (set a Final or accept an "
-                        "edit first).", *err[2:])
+                return fail("No decisions to apply (set a Final or accept an "
+                            "edit first).")
 
             today = _date.today().isoformat()
             stage3_dir = recommendations_dir / src.source / "stage3"
             stage3_dir.mkdir(parents=True, exist_ok=True)
-            # mojave-apply archives this to applied/<date>__<stem>.json, so the
-            # stem is just "aggregated" (the date prefix is added there).
+            # mojave-apply archives this to applied/<date>__aggregated.json.
             staging = stage3_dir / "aggregated.json"
             staging.write_text(json.dumps(rec.to_dict(), indent=2))
 
+            # Pre-render the Stage-3 bookkeeping into the sidecar that the
+            # command's --stage3-meta consumes. ``{{BACKUP_REF}}`` is a
+            # placeholder mojave-apply fills with the backup it actually cuts;
+            # the run number is counted from the ledger now.
+            md = read_note(notes_dir, src.source)
+            ledger_text = get_section(md, "ledger") if md else ""
+            run_index = ledger_text.count("Stage 3 reconciliation") + 1
+            entry = stage3_ledger_entry(
+                view, finals=finals, rob_reasons=rob_reasons,
+                accepted_keys=accepted, edit_reasons=edit_reasons,
+                applied_by=current_reviewer(reviewer), date=today,
+                backup_ref="{{BACKUP_REF}}", run_index=run_index)
+            sidecar = stage3_dir / "aggregated.stage3.json"
+            sidecar.write_text(json.dumps({
+                "considered_slugs": [reviewer_slug(r.reviewer) for r in recs],
+                "ledger_entry": entry,
+                "status": f"Stage 3 done · applied {today}",
+                "date": today,
+            }, indent=2))
+
             prod_dir = os.environ.get("MOJAVE_CODE") or str(Path(results_dir).parent)
-            cmd = [sys.executable, "-m", "mojave_review.cli.apply",
-                   "--results-dir", str(results_dir),
-                   "--source", Path(source_folder).name,
-                   "--recommendation", str(staging),
-                   "--recommendations-dir", str(recommendations_dir),
-                   "--production-code-dir", prod_dir, "--no-confirm"]
-            try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      env=os.environ.copy(), timeout=1800)
-            except Exception as e:
-                return (hide, f"Apply failed to launch: {e}", *err[2:])
-            if proc.returncode != 0:
-                tail = (proc.stderr or proc.stdout or "").strip()[-400:]
-                return (hide, f"mojave-apply failed (rc={proc.returncode}): {tail}",
-                        *err[2:])
-
-            out = proc.stdout or ""
-            m = re.search(r"backup_(\d+)", out)
-            backup_ref = (f"backup_{m.group(1)}" if m else
-                          "no changes (concluded)" if "no changes" in out.lower()
-                          else "applied")
-
-            slugs = [reviewer_slug(r.reviewer) for r in recs]
-            try:
-                archive_considered_submissions(
-                    recommendations_dir, src.source, slugs, date=today)
-            except Exception:
-                pass
-            ledger_note = ""
-            try:
-                md = read_note(notes_dir, src.source)
-                if md is None:
-                    md = scaffold(src.source, src.epoch_min, src.epoch_max)
-                # Number repeated Stage-3 applies (run N) from the existing
-                # ledger so the appended history is easy to scan.
-                run_index = get_section(md, "ledger").count(
-                    "Stage 3 reconciliation") + 1
-                entry = stage3_ledger_entry(
-                    view, finals=finals, rob_reasons=rob_reasons,
-                    accepted_keys=accepted, edit_reasons=edit_reasons,
-                    applied_by=current_reviewer(reviewer), date=today,
-                    backup_ref=backup_ref, run_index=run_index)
-                md = append_ledger(md, entry)
-                md = set_status(md, f"Stage 3 done · applied {today}")
-                write_note(notes_dir, src.source, md)
-            except Exception as e:
-                ledger_note = f" (ledger write failed: {e})"
-            clear_bundle_cache()
-            msg = (f"Applied ✓ {backup_ref} — archived {len(slugs)} considered "
-                   f"submission(s), ledger written{ledger_note}.")
-            return (hide, msg, int(reload_counter or 0) + 1, None, [])
+            cmd = " \\\n    ".join([
+                "mojave-apply",
+                f"--results-dir {shlex.quote(str(results_dir))}",
+                f"--source {shlex.quote(Path(source_folder).name)}",
+                f"--recommendation {shlex.quote(str(staging))}",
+                f"--recommendations-dir {shlex.quote(str(recommendations_dir))}",
+                f"--production-code-dir {shlex.quote(prod_dir)}",
+                f"--stage3-meta {shlex.quote(str(sidecar))}",
+            ])
+            overlay = {"display": "block", "position": "fixed", "top": "0",
+                       "left": "0", "right": "0", "bottom": "0",
+                       "background": "rgba(0,0,0,0.4)", "zIndex": 1000,
+                       "overflow": "auto"}
+            hint = (f"Run in a terminal with write access to Results/ "
+                    f"(MOJAVE_CODE / MOJAVE_DATA set). One step: applies the "
+                    f"aggregated decisions, archives {len(recs)} considered "
+                    f"submission(s), writes the run-{run_index} ledger entry, and "
+                    f"sets Status. Then click ↻ Reload here.")
+            return (hide, overlay, cmd, hint,
+                    f"Command generated (run {run_index}) — copy it below, then Reload.")
 
     # ---- robust-consistency warning banner -------------------------------
     # Read-only: flag a source whose saved CSV has a per-epoch robust

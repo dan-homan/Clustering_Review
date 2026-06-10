@@ -585,11 +585,12 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                            "marginBottom": "0.4em"},
                                 ),
                                 html.P(
-                                    "This runs mojave-apply on the current model: "
-                                    "it backs up and regenerates Results/ (CSV + "
-                                    "PDF + MP4), archives the considered submissions, "
-                                    "and writes the Stage-3 ledger. This modifies "
-                                    "research data on disk.",
+                                    "This generates a copy-paste mojave-apply "
+                                    "command (it does NOT modify anything from the "
+                                    "app). Running that command in a terminal backs "
+                                    "up + regenerates Results/ (CSV + PDF + MP4), "
+                                    "archives the considered submissions, and writes "
+                                    "the Stage-3 ledger + Status — all in one step.",
                                     style={"color": "#666", "fontSize": "0.88em",
                                            "margin": "0 0 0.5em"},
                                 ),
@@ -599,7 +600,8 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                 html.Div(
                                     [
                                         html.Button(
-                                            "Apply now", id="agg-apply-confirm",
+                                            "Generate apply command",
+                                            id="agg-apply-confirm",
                                             n_clicks=0,
                                             style={"padding": "0.45em 1em",
                                                    "background": "#b9770e",

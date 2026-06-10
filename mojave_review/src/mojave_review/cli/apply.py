@@ -442,7 +442,45 @@ def build_parser() -> argparse.ArgumentParser:
                         "Defaults to <results-dir>/..")
     p.add_argument("--no-confirm", action="store_true",
                    help="Skip the interactive confirmation prompt.")
+    p.add_argument("--stage3-meta", type=Path, default=None,
+                   help="Stage-3 sidecar JSON (considered_slugs / ledger_entry "
+                        "/ status). After applying the aggregated recommendation "
+                        "this archives the folded submissions, appends the "
+                        "ledger entry, and bumps the notes Status. Written by "
+                        "the web app's 'Apply aggregated decisions (Stage 3)'.")
     return p
+
+
+def _apply_stage3_meta(
+    meta_path: Path, recommendations_dir: Path, source_name: str,
+    backup_ref: str, fallback_date: str,
+) -> None:
+    """Run the Stage-3 post-apply bookkeeping recorded in the sidecar: move the
+    folded reviewer submissions to ``considered/<date>/``, append the
+    (app-rendered) ledger entry — with ``{{BACKUP_REF}}`` resolved to this run's
+    backup — and set the notes Status. Pure file ops; needs no production code."""
+    import json as _json
+    from ..recommendations.store import archive_considered_submissions
+    from ..notes import (notes_dir_for, read_note, write_note,
+                         append_ledger, set_status, scaffold)
+    with meta_path.open() as f:
+        meta = _json.load(f)
+    date = meta.get("date") or fallback_date
+    slugs = meta.get("considered_slugs") or []
+    if slugs:
+        archive_considered_submissions(
+            recommendations_dir, source_name, slugs, date=date)
+    notes_dir = notes_dir_for(recommendations_dir)
+    md = read_note(notes_dir, source_name) or scaffold(source_name)
+    entry = (meta.get("ledger_entry") or "").replace("{{BACKUP_REF}}", backup_ref)
+    if entry:
+        md = append_ledger(md, entry)
+    status = meta.get("status") or ""
+    if status:
+        md = set_status(md, status)
+    write_note(notes_dir, source_name, md)
+    print(f"Stage 3: archived {len(slugs)} considered submission(s), "
+          f"wrote ledger + status.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -462,6 +500,10 @@ def main(argv: list[str] | None = None) -> int:
     rec_path = args.recommendation.expanduser().resolve()
     if not rec_path.is_file():
         raise SystemExit(f"Recommendation JSON not found: {rec_path}")
+    stage3_meta = (args.stage3_meta.expanduser().resolve()
+                   if args.stage3_meta else None)
+    if stage3_meta is not None and not stage3_meta.is_file():
+        raise SystemExit(f"Stage-3 meta JSON not found: {stage3_meta}")
 
     # ---- All read-only checks first (fail fast before destructive writes) -
     with rec_path.open() as f:
@@ -533,6 +575,11 @@ def main(argv: list[str] | None = None) -> int:
                                  "current", rec.reviewer):
             print(f"Removed now-applied current/ draft "
                   f"({reviewer_slug(rec.reviewer)})")
+        if stage3_meta is not None:
+            _apply_stage3_meta(stage3_meta, recommendations_dir,
+                               existing.source_name,
+                               backup_ref="no changes (concluded)",
+                               fallback_date=timestamp[:10])
         print(f"\nNo changes for {existing.source_name}; concluded "
               f"(no backup / regen).")
         return 0
@@ -558,7 +605,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Wrote {existing.prefix}.merged_win_results.csv")
 
     header = (f"# {timestamp} Applied recommendation {rec_label} "
-              f"(backup_{backup_idx})")
+              f"(prior CSV -> backups/backup_{backup_idx})")
     _append_history(existing.folder, header, edit_history)
     print("Appended to history.txt")
 
@@ -578,6 +625,12 @@ def main(argv: list[str] | None = None) -> int:
                              "current", rec.reviewer):
         print(f"Removed now-applied current/ draft "
               f"({reviewer_slug(rec.reviewer)})")
+
+    if stage3_meta is not None:
+        _apply_stage3_meta(stage3_meta, recommendations_dir,
+                           existing.source_name,
+                           backup_ref=f"backups/backup_{backup_idx}",
+                           fallback_date=timestamp[:10])
 
     summary = _format_notebook_summary(rec, existing.df, new_df, backup_idx)
     print()
