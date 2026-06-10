@@ -198,6 +198,15 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                 ],
                 style={"display": "flex", "alignItems": "center"},
             ),
+            # Read-only warning when the loaded model's saved CSV has a
+            # per-epoch robust inconsistency (a latent data bug). The viewer
+            # renders correctly regardless (per-cluster robust), but this flags
+            # the source for repair via `mojave-review-audit-robust`. Hidden
+            # when consistent. The app never writes to Results/ itself.
+            html.Div(
+                id="robust-warning",
+                style={"display": "none"},
+            ),
             vector_scale_row,
             dcc.Loading(
                 dcc.Graph(

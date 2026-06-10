@@ -75,6 +75,25 @@ def epoch_match_mask(epoch_array: np.ndarray, epoch_val: float) -> np.ndarray:
     return np.abs(np.asarray(epoch_array, dtype=float) - float(epoch_val)) <= EPOCH_MATCH_ATOL
 
 
+def robust_by_cluster(cluster_df: pd.DataFrame) -> dict[int, bool]:
+    """One robust flag per clusterID, collapsing any per-epoch inconsistency.
+
+    ``robust`` is a per-CLUSTER property, but the CSV can carry a flag that
+    varies across a cluster's epochs (e.g. cluster 3 in 0003-066 is flagged
+    non-robust at three epochs, robust at the rest). The summary plot already
+    collapses it to one value (``sub['robust'].iloc[0]`` after sorting by
+    epoch); the overlay must agree or a feature's CC scatter + ellipse colour
+    flickers between robust (coloured) and non-robust (slategray) styling as you
+    scrub epochs. Same rule here: the value at the cluster's earliest epoch."""
+    out: dict[int, bool] = {}
+    if "clusterID" not in cluster_df.columns or "robust" not in cluster_df.columns:
+        return out
+    for cid, g in cluster_df.groupby("clusterID"):
+        gi = g.sort_values("epoch") if "epoch" in g.columns else g
+        out[int(cid)] = bool(gi["robust"].iloc[0])
+    return out
+
+
 @dataclass
 class EpochAxes:
     """Convenience bundle for one FITS image after coord conversion."""
@@ -208,6 +227,11 @@ def build_overlay_figure(
     core_x = float(fitted["core_x"].iloc[0]) if len(fitted) else 0.0
     core_y = float(fitted["core_y"].iloc[0]) if len(fitted) else 0.0
 
+    # One robust flag per cluster (from the full df, all epochs) so the CC +
+    # ellipse colours don't flicker across epochs on a cluster whose CSV flag
+    # is inconsistent. See robust_by_cluster().
+    robust_by_cluster_map = robust_by_cluster(cluster_df)
+
     ax = epoch_axes
     cbase = max(cbase_factor * float(inoise), 1e-9)
 
@@ -264,16 +288,12 @@ def build_overlay_figure(
             ))
         else:
             orig_to_cluster = {}
-        robust_lookup = {
-            int(row["clusterID"]): bool(row["robust"])
-            for _, row in fitted.iterrows()
-        }
         for lbl in np.unique(cc_lbl):
             in_lbl = cc_lbl == lbl
             if not np.any(in_lbl):
                 continue
             cid = orig_to_cluster.get(int(lbl), int(lbl))
-            robust = robust_lookup.get(cid, True)
+            robust = robust_by_cluster_map.get(cid, True)
             color, _, _ = _cluster_style(cid, robust)
             fig.add_trace(
                 go.Scattergl(
@@ -297,8 +317,11 @@ def build_overlay_figure(
         fmin = fitted["fwhm_min"].to_numpy(dtype=float)
         cpa = fitted["cpa"].to_numpy(dtype=float)
         ids = fitted["clusterID"].astype(int).to_numpy()
-        robs = fitted["robust"].astype(bool).to_numpy()
-        for x, y, maj, minor, pa, cid, rob in zip(cx_arr, cy_arr, fmaj, fmin, cpa, ids, robs):
+        for x, y, maj, minor, pa, cid in zip(cx_arr, cy_arr, fmaj, fmin, cpa, ids):
+            # Per-cluster robust (consistent across epochs), not the per-epoch
+            # fitted flag, so the ellipse colour matches the summary + the CC
+            # scatter at every epoch.
+            rob = robust_by_cluster_map.get(int(cid), True)
             color, _, _ = _cluster_style(int(cid), bool(rob))
             if np.isfinite(maj) and np.isfinite(minor) and maj > 0 and minor > 0:
                 pa_use = float(pa) if np.isfinite(pa) else 0.0

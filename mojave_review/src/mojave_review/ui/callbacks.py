@@ -25,7 +25,7 @@ from ..notes import (
 )
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
-from ..recommendations.apply import apply_recommendation
+from ..recommendations.apply import apply_recommendation, robust_inconsistencies
 from ..recommendations.aggregate import (
     build_aggregation_view, compose_aggregated, stage3_ledger_entry,
 )
@@ -549,6 +549,40 @@ def register_callbacks(
             msg = (f"Applied ✓ {backup_ref} — archived {len(slugs)} considered "
                    f"submission(s), ledger written{ledger_note}.")
             return (hide, msg, int(reload_counter or 0) + 1, None, [])
+
+    # ---- robust-consistency warning banner -------------------------------
+    # Read-only: flag a source whose saved CSV has a per-epoch robust
+    # inconsistency (latent data bug). The plots already render correctly via
+    # the per-cluster robust rule; this just surfaces the source for repair via
+    # the audit CLI. The bundle is cached (loaded by the plot callbacks too), so
+    # this is a cheap groupby — no meaningful load-time cost.
+    @app.callback(
+        Output("robust-warning", "children"),
+        Output("robust-warning", "style"),
+        Input("source-picker", "value"),
+        Input("model-picker", "value"),
+        Input("reload-counter", "data"),
+    )
+    def _robust_warning(source_folder, model_key, _reload_counter):
+        hidden = {"display": "none"}
+        if not source_folder or not model_key:
+            return "", hidden
+        try:
+            bundle = load_bundle(source_folder, _effective_model_for_load(model_key))
+        except Exception:
+            return "", hidden
+        bad = robust_inconsistencies(bundle.cluster_df)
+        if not bad:
+            return "", hidden
+        cids = ", ".join(str(c) for c in sorted(bad))
+        msg = (f"⚠ Saved robust flags are inconsistent across epochs for "
+               f"cluster(s) {cids}. The plots show one value per cluster, but "
+               f"the on-disk model has a data inconsistency — an admin can "
+               f"repair it with: mojave-review-audit-robust --apply")
+        style = {"display": "block", "background": "#fff3cd", "color": "#664d03",
+                 "border": "1px solid #ffe69c", "borderRadius": "4px",
+                 "padding": "0.4em 0.7em", "margin": "0.25em 0", "fontSize": "0.82em"}
+        return msg, style
 
     # ---- model picker (depends on source) --------------------------------
     # Options include:

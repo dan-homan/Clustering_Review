@@ -177,8 +177,10 @@ def _apply_set_robust(
     mask = df["clusterID"] == cluster_id
     if not mask.any():
         return
-    current = bool(df.loc[mask, "robust"].iloc[0])
-    if current == bool(value):
+    # Skip only when EVERY epoch is already at the target value — guarding on
+    # iloc[0] alone would leave a cluster with a pre-existing per-epoch
+    # inconsistency unrepaired when the target equals its first-epoch value.
+    if bool((df.loc[mask, "robust"].astype(bool) == bool(value)).all()):
         return
     df.loc[mask, "robust"] = bool(value)
     history.append(f"# Set cluster {cluster_id} as robust={bool(value)}")
@@ -299,7 +301,56 @@ def apply_recommendation_with_history(
     # 3) Auto-eligibility constraint on the clusters this round touched.
     history.extend(_apply_auto_eligibility(df, affected, explicit_cf_cids))
 
+    # 4) Enforce the invariant that every row of a clusterID shares ONE robust
+    #    flag. Guarantees the output table / saved CSV is never per-epoch
+    #    inconsistent, whatever the input was — a mixed flag is a latent source
+    #    of bugs (e.g. the overlay flickering a feature's colour across epochs).
+    history.extend(_normalize_robust_per_cluster(df))
+
     return df, history
+
+
+def robust_inconsistencies(df: pd.DataFrame) -> dict[int, list[bool]]:
+    """clusterID -> sorted unique ``robust`` values, for every cluster whose
+    flag is NOT uniform across its epochs. Empty dict == fully consistent.
+
+    Pure (no mutation) — shared by the audit CLI's dry-run and the in-app
+    warning so both agree on what counts as inconsistent."""
+    out: dict[int, list[bool]] = {}
+    if "clusterID" not in df.columns or "robust" not in df.columns:
+        return out
+    for cid, g in df.groupby("clusterID"):
+        vals = sorted(set(bool(x) for x in g["robust"]))
+        if len(vals) > 1:
+            out[int(cid)] = vals
+    return out
+
+
+def _canonical_robust(cid: int, sub: pd.DataFrame) -> bool:
+    """The single robust value a cluster should collapse to. The core
+    (clusterID 0) is robust by definition; every other cluster takes its
+    earliest-epoch value (matching the viewer's per-cluster rule in
+    ``plots.summary`` / ``overlay.robust_by_cluster``)."""
+    if int(cid) == 0:
+        return True
+    return bool(sub.sort_values("epoch")["robust"].iloc[0])
+
+
+def _normalize_robust_per_cluster(df: pd.DataFrame) -> list[str]:
+    """Force each clusterID to a single ``robust`` value across all its epochs
+    (see ``_canonical_robust``). Idempotent on already-consistent data — only
+    writes (and logs) where a cluster's flag actually varied, so it preserves
+    mojave-apply's no-op fast path for consistent inputs."""
+    history: list[str] = []
+    for cid, idx in df.groupby("clusterID").groups.items():
+        vals = df.loc[idx, "robust"].astype(bool)
+        if vals.nunique() <= 1:
+            continue
+        canon = _canonical_robust(int(cid), df.loc[idx])
+        df.loc[idx, "robust"] = canon
+        history.append(f"# Normalized cluster {int(cid)} robust={canon} "
+                       f"(was inconsistent across epochs)")
+    return history
 
 
 def apply_recommendation(cluster_df: pd.DataFrame, rec: Recommendation) -> pd.DataFrame:

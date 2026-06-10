@@ -190,7 +190,17 @@ returns `(figure, beam_params)`. Layered traces in z-order (bottom to top):
    convolved with the restoring beam — do NOT apply additional smoothing.
    `line.smoothing=1.0` (Bezier) is the most we add.
 2. Clean components, scattered, colored by their cluster (uses
-   `cc_labels` mapped through `origID → clusterID`).
+   `cc_labels` mapped through `origID → clusterID`; `origID` is the stable
+   join key — `mojave-apply` rewrites `clusterID` but never `origID` and the
+   npz isn't regenerated, so a CC's label equals its `origID` and the map
+   recolors it to its current cluster, incl. after a `change_clusterID`).
+   **Robust styling is per-CLUSTER, not per-epoch.** `robust` can vary across a
+   cluster's epochs in the CSV (e.g. cluster 3 in 0003-066 is flagged
+   non-robust at three epochs only); the overlay collapses it to one value per
+   cluster via `overlay.robust_by_cluster` (the cluster's earliest-epoch value,
+   matching the summary's `sub['robust'].iloc[0]`) for BOTH the CC scatter and
+   the FWHM/3σ ellipses. Using the raw per-epoch flag made a feature flicker
+   between its color and slategray as you scrubbed epochs.
 3. Per-cluster 3σ inclusion ellipse: `2.548 × FWHM`, dotted outline,
    `rgba(<cluster>, 0.04)` fill — drawn first so the FWHM layers on top.
    Gated by `show_3sigma` (default False, no UI toggle since the checkbox
@@ -567,6 +577,17 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
 
 ## Don't / gotchas
 
+- **`robust` is a per-CLUSTER property — keep it uniform across a cluster's
+  epochs.** A per-epoch-inconsistent `robust` flag is a latent bug (it made the
+  overlay flicker a feature's colour). `apply.apply_recommendation` enforces this
+  on every apply (`_normalize_robust_per_cluster`, canonical = earliest-epoch
+  value, **core forced True**), so `mojave-apply` output is always consistent.
+  The viewer collapses any stray inconsistency per-cluster too (summary's
+  `iloc[0]`, `overlay.robust_by_cluster`). For the legacy back-catalog, the app
+  shows a read-only ⚠ banner on load (`_robust_warning`) and
+  **`mojave-review-audit-robust --results-dir … [--apply]`** sweeps/repairs
+  existing CSVs (CSV-only, backs up the prior CSV + logs to `history.txt`;
+  detect via `apply.robust_inconsistencies`).
 - **Don't write back into `Results/`.** Recommendations are the only output.
 - **`grab_mojave_image` in `cluster_code.py` opens local files**, not URLs.
   The web app has its own fetcher; don't try to reuse that function.
@@ -650,6 +671,10 @@ commit was reverted. **Do not add `uid`s to the contour trace.**
 ## Useful local commands
 
 ```bash
+# Audit (and repair) per-epoch robust inconsistencies in saved CSVs
+mojave-review-audit-robust --results-dir ./Results            # dry-run report
+mojave-review-audit-robust --results-dir ./Results --apply    # repair + backup
+
 # Smoke test the loader + figure
 python3 -c "
 from pathlib import Path
