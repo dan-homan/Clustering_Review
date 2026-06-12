@@ -36,6 +36,7 @@ Clustering_Review/
         ├── app.py                       # Dash factory (points assets_folder at the pkg)
         ├── data/
         │   ├── loader.py                # source/model discovery, CSV+NPZ load
+        │   ├── window_fits.py           # cluster_fits/*.npz loader + nwin_choices store
         │   └── fits_cache.py            # MOJAVE URL + on-disk FITS cache
         ├── plots/
         │   ├── summary.py               # Plotly port of make_summary_plots
@@ -51,6 +52,8 @@ Clustering_Review/
         └── ui/
             ├── layout.py                # header + body + recommendations panel
             ├── callbacks.py             # source/model/view + selection + summary/overlay
+            ├── nwin_panel.py            # admin Window-N review panel (--editN replacement)
+            ├── nwin_callbacks.py        # ... and its callbacks (admin-only)
             ├── recommendations_panel.py # the 4-tab bottom panel
             └── recommendations_callbacks.py
 ```
@@ -550,6 +553,62 @@ The Stage-2 notes editor also has a **"Seed from submission summary"** button:
 fills the editor with the admin's own submission's `format_submission_text`,
 cleaned by `notebook_format.strip_for_notes` (drops the `─` rule lines, unwraps
 the `[Submission for …]` header brackets so markdown doesn't make a link).
+
+## Window-N review (admin — the `--editN` replacement)
+
+A collapsible **"🔢 Window-N review"** panel (rendered only with `--admin`)
+replaces the interactive matplotlib `--editN` session in `find_clusters.py`.
+The pipeline caches a fit for **every** candidate N per time window under
+`Results/<source>/cluster_fits/<source>.<first_ep>-<last_ep>.{npz,csv}`; the
+panel just browses those cached fits and records per-window N choices —
+no clustering runs in the app.
+
+- **Data layer** ([`data/window_fits.py`](mojave_review/src/mojave_review/data/window_fits.py)):
+  `list_window_fits` discovers the files; `window_bundle(src, ref, N)` adapts
+  one (window, N) fit into a `SourceBundle` (the window's `cluster_epoch_df`
+  plays cluster_df, its `labels` the cc_labels), so
+  `overlay_figure_for_epoch` renders it with zero plotting changes (always
+  `image_source="synthesize"`). `bic_table` reproduces the pipeline's
+  BIC* = ln(Ndata)·k + complex·Ndata·⟨d²⟩/⟨Σbeam²⟩ from the per-window CSV
+  (`complex` read from `config_win.json`); `build_window_meta` adds the
+  current model's N per window (core row at the window's ref epoch — the
+  same lookup as the pipeline's `get_previous_Nclusters_labels`).
+- **UI**: window / N / epoch sliders (epoch defaults to the window's
+  reference epoch), a BIC*-vs-N curve + an N-per-window strip chart
+  (click a strip-chart point to jump to that window), and the overlay
+  panel for the displayed (window, N, epoch). The N slider seeds to:
+  recorded choice > current model N > BIC* suggestion.
+- **Choices** autosave to
+  `<recs>/<source>/nwin_edits/nwin_choices.json` on every record/clear
+  (file deleted when the last choice is cleared; `model_sha` records the
+  merged CSV the choices were made against). The directory name is
+  deliberately stage-agnostic — N editing is *technically* a Stage-2
+  activity the builder has been doing offline, so it is NOT named
+  `stage1/`/`stage2/`. Schema (what `find_clusters.py --N_win_file`
+  consumes; bare int when there's no comment):
+
+  ```jsonc
+  { "source": "0003-066u", "model_sha": "<sha256>",
+    "choices": { "1995.57-2000.03": 6,
+                 "2001.83-2006.51": {"N": 4, "comment": "..."} } }
+  ```
+
+- **Hand-off** is the usual cut-n-paste model: **"Generate rerun command"**
+  reads the source's `run_string.txt`, strips `--editN` / `--show_results` /
+  `--recalc_*` / any old `--N_win_file`, and appends
+  `--N_win_file <abs path to nwin_choices.json>`. The admin runs it in the
+  production working directory; cached fits make the rerun fast, and the
+  pipeline invalidates + re-matches cross-IDs only for windows whose N
+  changed (see `load_N_win_choices` / `cluster_window_matching` in
+  cluster_code.py). Unmatched window labels are a hard error there —
+  regenerate the choices file if the windowing changed.
+- `cluster_fits/` is **excluded from the server sync**
+  (server_sync/server_update_exclude.txt), so the panel is effectively
+  local-only; on a server deploy it shows a hint instead of the body.
+- All component ids are prefixed `nwin-`; callbacks register only when
+  `--admin` ([`ui/nwin_callbacks.py`](mojave_review/src/mojave_review/ui/nwin_callbacks.py)).
+  The beam-repositioning clientside callback is a copy of the main
+  overlay's (same restyle-and-`no_update` discipline, different ids).
 
 ## Running the web app
 

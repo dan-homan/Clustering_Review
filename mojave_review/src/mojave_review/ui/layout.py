@@ -8,6 +8,7 @@ from dash import dcc, html
 
 from ..data.loader import list_sources
 from ..recommendations.store import source_badge
+from .nwin_panel import build_nwin_panel
 from .recommendations_panel import build_recommendations_panel
 
 
@@ -633,6 +634,13 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     ],
                 ),
             ]),
+            # Admin-only Window-N review (the --editN replacement): scrub the
+            # pipeline's per-window cluster fits, record per-window N choices
+            # (autosaved under <recs>/<source>/nwin_edits/), and generate the
+            # find_clusters.py --N_win_file rerun command. Needs the local
+            # cluster_fits/ files (excluded from the server sync), so on a
+            # server deploy it just shows a hint.
+            *([] if not admin else [build_nwin_panel()]),
             body,
             build_recommendations_panel(admin=admin),
         ],

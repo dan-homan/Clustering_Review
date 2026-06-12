@@ -80,6 +80,17 @@ def register_callbacks(
         admin=admin,
     )
 
+    # Window-N review panel (admin-only, layout renders it only with --admin).
+    if admin:
+        from . import nwin_callbacks
+        nwin_callbacks.register(
+            app,
+            results_dir=results_dir,
+            recommendations_dir=recommendations_dir,
+            cache_dir=cache_dir,
+            fits_data_dir=fits_data_dir,
+        )
+
     # Per-source redshift table (source_run_param.csv), loaded once. Drives the
     # (1+z) host-frame Tb correction and the beta_app Kinematics hovers. Empty
     # map => every source behaves as z unknown (z=0), exactly as before.

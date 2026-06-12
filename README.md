@@ -118,6 +118,12 @@ absolute paths for `--results-dir` and `--recommendations-dir`.
 - Other reviewers' submissions on a shared `recommendations/` folder
   appear in the model dropdown as `Rec: <slug>` for read-only
   side-by-side review.
+- With `--admin` and local `cluster_fits/` files: the **Window-N review**
+  panel replaces `find_clusters.py --editN` — scrub the per-window cluster
+  fits across candidate N values (with the BIC* curve and the current
+  model for reference), record per-window N choices (autosaved to
+  `<recs>/<source>/nwin_edits/nwin_choices.json`), and generate the
+  `find_clusters.py ... --N_win_file` rerun command.
 
 ---
 
