@@ -28,7 +28,7 @@ from ..data.window_fits import (
     list_window_fits, load_nwin_choices, load_window_fit, nwin_choices_path,
     save_nwin_choices, window_bundle,
 )
-from ..plots.overlay import overlay_figure_for_epoch
+from ..plots.overlay import _ellipse_xy, overlay_figure_for_epoch
 from .callbacks import _source_from_folder
 
 _GRAPH_HEIGHT = 560
@@ -165,6 +165,31 @@ def build_window_overlay(meta: dict, win_idx: int, n: int, epoch_idx: int,
         image_source="synthesize",
         uirevision=uirevision,
     )
+    # Fixed initial zoom: override the per-(window, N) extent that
+    # build_overlay_figure computed with the source-wide box covering every
+    # candidate cluster of every window (meta["extent"]). Identical ranges on
+    # every render = the view doesn't jump as the admin scrubs windows / N /
+    # epochs, and the constant uirevision preserves any manual toolbox zoom
+    # on top of it. (The old matplotlib N_win_edit fixed its limits the same
+    # way.) The beam trace + the clientside-reposition extents move to the
+    # corner of this box too.
+    extent = meta.get("extent")
+    if extent:
+        (x_lo, x_hi), (y_lo, y_hi) = extent
+        fig.update_xaxes(range=[x_hi, x_lo])     # +x reversed, like overlay
+        fig.update_yaxes(range=[y_lo, y_hi])
+        if beam is not None:
+            bx = x_hi - 0.08 * (x_hi - x_lo)
+            by = y_lo + 0.08 * (y_hi - y_lo)
+            bex, bey = _ellipse_xy(bx, by, float(beam["bmaj"]),
+                                   float(beam["bmin"]), float(beam["bpa"]))
+            for trace in fig.data:
+                if getattr(trace, "name", None) == "beam":
+                    trace.x = bex
+                    trace.y = bey
+                    break
+            beam = {**beam, "x_extent": [x_lo, x_hi],
+                    "y_extent": [y_lo, y_hi]}
     fig.update_layout(
         height=_GRAPH_HEIGHT,
         title=dict(text=(f"window {ref.label} · N={n} · "
@@ -416,17 +441,20 @@ def register(
         Input("nwin-window-slider", "value"),
         Input("nwin-n-slider", "value"),
         Input("nwin-epoch-slider", "value"),
+        Input("nwin-reset-counter", "data"),
         State("nwin-meta", "data"),
     )
-    def _nwin_overlay(win_idx, n, epoch_idx, meta):
+    def _nwin_overlay(win_idx, n, epoch_idx, reset_counter, meta):
         if not meta or win_idx is None or n is None or epoch_idx is None:
             return _empty(), None, ""
         fig, beam = build_window_overlay(
             meta, int(win_idx), int(n), int(epoch_idx), cache_dir,
             fits_data_dir=fits_data_dir,
             # Persist the admin's zoom across window / N / epoch scrubbing —
-            # the old matplotlib editor kept fixed limits the same way.
-            uirevision=f"nwin-overlay:{meta['folder']}",
+            # the old matplotlib editor kept fixed limits the same way. The
+            # reset counter folds in so Reset view forces a fresh axis state
+            # back at the fixed all-clusters default.
+            uirevision=f"nwin-overlay:{meta['folder']}:{reset_counter or 0}",
         )
         refs = list_window_fits(Path(meta["folder"]), meta["source"])
         wi = int(np.clip(int(win_idx), 0, len(refs) - 1))
@@ -435,6 +463,16 @@ def register(
         info = wf.ep_info[ei]
         lbl = f"{info['epoch_name']}  ·  {float(info['epoch_val']):.4f}"
         return fig, beam, lbl
+
+    # ---- Reset view button ----------------------------------------------------
+    @app.callback(
+        Output("nwin-reset-counter", "data"),
+        Input("nwin-reset", "n_clicks"),
+        State("nwin-reset-counter", "data"),
+        prevent_initial_call=True,
+    )
+    def _nwin_bump_reset(_n, current):
+        return int(current or 0) + 1
 
     # ---- BIC* + strip chart --------------------------------------------------
     @app.callback(

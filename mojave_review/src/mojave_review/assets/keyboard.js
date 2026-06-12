@@ -3,6 +3,14 @@
 // Left  arrow → click #epoch-prev (previous epoch)
 // Right arrow → click #epoch-next (next epoch)
 //
+// When the admin Window-N review panel (#nwin-details) is OPEN, the arrows
+// route there instead — matplotlib N_win_edit parity:
+//   Left/Right → #nwin-win-prev / #nwin-win-next  (previous/next time window)
+//   Up/Down    → #nwin-n-up   / #nwin-n-down      (cluster count N ± 1)
+// Close the panel to give Left/Right back to the main epoch overlay.
+// (Up/Down are only claimed while the panel is open, so normal page
+// scrolling is unaffected the rest of the time.)
+//
 // Skipped when focus is in a text input / textarea / contenteditable element
 // so the arrows don't fight with typing in the recommendations panel.
 //
@@ -39,9 +47,14 @@
         // editing recommendation comments, etc.).
         if (inEditableTarget(e.target)) return;
 
+        const nwin = document.getElementById("nwin-details");
+        const nwinOpen = !!(nwin && nwin.open);
+
         let btnId = null;
-        if (e.key === "ArrowLeft") btnId = "epoch-prev";
-        else if (e.key === "ArrowRight") btnId = "epoch-next";
+        if (e.key === "ArrowLeft") btnId = nwinOpen ? "nwin-win-prev" : "epoch-prev";
+        else if (e.key === "ArrowRight") btnId = nwinOpen ? "nwin-win-next" : "epoch-next";
+        else if (e.key === "ArrowUp" && nwinOpen) btnId = "nwin-n-up";
+        else if (e.key === "ArrowDown" && nwinOpen) btnId = "nwin-n-down";
         else return;
 
         const btn = document.getElementById(btnId);

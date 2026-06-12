@@ -196,6 +196,57 @@ def bic_table(csv_path: Path, complex_factor: float) -> pd.DataFrame | None:
     return out.reset_index(drop=True)
 
 
+def global_window_extent(refs: list[WindowFitRef], median_beam: float = 0.0,
+                         *, padding: float = 0.05, beam_factor: float = 1.5,
+                         size_factor: float = 2.0):
+    """One fixed initial zoom box containing every candidate cluster of every
+    window fit — the union over all windows AND all N values, from the cheap
+    per-window CSVs (``centX``/``centY`` are core-relative; the core row sits
+    at ~0). Mirrors the ``compute_source_extent`` formula (positions ±
+    2·sizeMaj ± 1.5·beam, then 5% padding).
+
+    The old matplotlib ``N_win_edit`` fixed its plot limits once from the
+    most complex window; the union over all N is the strictly-safe version of
+    that — whatever N the admin dials in, nothing is clipped. Returns
+    ``((x_lo, x_hi), (y_lo, y_hi))`` or None when no usable CSVs exist."""
+    x_lo = x_hi = y_lo = y_hi = None
+    for ref in refs:
+        try:
+            df = pd.read_csv(ref.csv_path)
+        except (OSError, ValueError):
+            continue
+        if not {"centX", "centY", "sizeMaj"}.issubset(df.columns):
+            continue
+        x = df["centX"].to_numpy(dtype=float)
+        y = df["centY"].to_numpy(dtype=float)
+        s = np.nan_to_num(df["sizeMaj"].to_numpy(dtype=float))
+        valid = np.isfinite(x) & np.isfinite(y)
+        if not valid.any():
+            continue
+        lo = float(np.min(x[valid] - size_factor * s[valid]))
+        hi = float(np.max(x[valid] + size_factor * s[valid]))
+        x_lo = lo if x_lo is None else min(x_lo, lo)
+        x_hi = hi if x_hi is None else max(x_hi, hi)
+        lo = float(np.min(y[valid] - size_factor * s[valid]))
+        hi = float(np.max(y[valid] + size_factor * s[valid]))
+        y_lo = lo if y_lo is None else min(y_lo, lo)
+        y_hi = hi if y_hi is None else max(y_hi, hi)
+    if x_lo is None or y_lo is None:
+        return None
+    if not np.isfinite(median_beam):
+        median_beam = 0.0
+    x_lo -= beam_factor * median_beam
+    x_hi += beam_factor * median_beam
+    y_lo -= beam_factor * median_beam
+    y_hi += beam_factor * median_beam
+    x_span = x_hi - x_lo
+    y_span = y_hi - y_lo
+    if x_span <= 0 or y_span <= 0:
+        return None
+    return ((x_lo - padding * x_span, x_hi + padding * x_span),
+            (y_lo - padding * y_span, y_hi + padding * y_span))
+
+
 def load_complex_factor(src_folder: Path) -> float:
     """The --complex factor the source was run with (config_win.json),
     needed to reproduce the pipeline's BIC* suggestion. 3.0 is the
@@ -221,6 +272,8 @@ class WindowMeta:
     minN: int
     maxN: int
     complex_factor: float
+    extent: tuple | None          # fixed zoom box over all windows x all N
+                                  # ((x_lo, x_hi), (y_lo, y_hi)), or None
 
     def to_store(self) -> dict:
         return {
@@ -229,6 +282,7 @@ class WindowMeta:
             "bic_N": self.bic_N, "cur_N": self.cur_N,
             "minN": self.minN, "maxN": self.maxN,
             "complex_factor": self.complex_factor,
+            "extent": self.extent,
         }
 
 
@@ -273,11 +327,21 @@ def build_window_meta(src: SourceRef,
             if np.any(hit):
                 cur_N[i] = int(current_df.loc[hit, "Nclusters"].iloc[0])
 
+    # Fixed initial zoom box over all windows x all N. Beam padding comes from
+    # the current model's bmaj column (the window CSVs don't carry a beam).
+    median_beam = 0.0
+    if current_df is not None and "bmaj" in current_df.columns:
+        mb = float(np.nanmedian(current_df["bmaj"].to_numpy(dtype=float)))
+        if np.isfinite(mb):
+            median_beam = mb
+    extent = global_window_extent(refs, median_beam)
+
     return WindowMeta(
         folder=str(src.folder), source=src.source,
         labels=labels, ref_epochs=ref_epochs,
         bic_N=bic_N, cur_N=cur_N,
         minN=minN, maxN=maxN, complex_factor=complex_factor,
+        extent=extent,
     )
 
 

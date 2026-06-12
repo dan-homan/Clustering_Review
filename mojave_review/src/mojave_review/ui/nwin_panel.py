@@ -77,6 +77,18 @@ def build_nwin_panel() -> html.Details:
                     html.Span("Epoch:", style=_LABEL),
                     html.Button("◀", id="nwin-epoch-prev", n_clicks=0, style=_BTN),
                     html.Button("▶", id="nwin-epoch-next", n_clicks=0, style=_BTN),
+                    # Same escape hatch as the main overlay panel: a
+                    # double-click in the plot autoranges to the current
+                    # window's data and (with scaleanchor + uirevision) won't
+                    # toggle back; this forces a redraw at the fixed
+                    # all-clusters default zoom.
+                    html.Button("Reset view", id="nwin-reset", n_clicks=0,
+                                title="Redraw at the default zoom (all "
+                                      "candidate clusters of all windows)",
+                                style={"marginRight": "1em",
+                                       "padding": "0.2em 0.6em",
+                                       "fontSize": "0.85em",
+                                       "whiteSpace": "nowrap"}),
                     html.Div(
                         dcc.Slider(
                             id="nwin-epoch-slider", min=0, max=0, step=1,
@@ -218,6 +230,9 @@ def build_nwin_panel() -> html.Details:
             dcc.Store(id="nwin-meta", data=None),
             dcc.Store(id="nwin-choices-store", data={}),
             dcc.Store(id="nwin-beam-params", data=None),
+            # Bumped by the Reset view button; folds into the overlay's
+            # uirevision so a click forces a full redraw + axis reset.
+            dcc.Store(id="nwin-reset-counter", data=0),
         ],
         id="nwin-details",
         open=False,

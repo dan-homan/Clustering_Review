@@ -581,6 +581,27 @@ no clustering runs in the app.
   (click a strip-chart point to jump to that window), and the overlay
   panel for the displayed (window, N, epoch). The N slider seeds to:
   recorded choice > current model N > BIC* suggestion.
+- **Fixed zoom** (reviewer-requested): the overlay's initial view is ONE
+  source-wide box covering every candidate cluster of every window × every
+  N (`window_fits.global_window_extent`, from the cheap per-window CSVs'
+  core-relative `centX`/`centY` ± 2·sizeMaj ± 1.5·median-beam + 5% pad;
+  stored in `WindowMeta.extent`). `build_window_overlay` overrides the
+  per-(window, N) ranges with it and repositions the beam trace +
+  `beam_params` extents to its corner. Identical ranges every render + a
+  constant uirevision (`nwin-overlay:<folder>:<reset-counter>`) = the view
+  never jumps while scrubbing windows / N / epochs, and a manual drag-zoom
+  persists across all three. The matplotlib `N_win_edit` fixed its limits
+  once (from the most complex window) the same way; all-N union is the
+  strictly-safe version. **Reset view** button (`nwin-reset` →
+  `nwin-reset-counter` folded into uirevision) restores the default box —
+  needed because a double-click autoranges to the current window's data
+  and won't toggle back (scaleanchor + uirevision quirk, same as the main
+  overlay's Reset view).
+- **Keyboard** (matplotlib `N_win_edit` parity): while `#nwin-details` is
+  OPEN, `assets/keyboard.js` routes ←/→ to `nwin-win-prev/next` (time
+  window) and ↑/↓ to `nwin-n-up/down` (N ± 1), capture-phase +
+  `stopImmediatePropagation` like the epoch arrows. Panel closed → ←/→
+  step the main epoch overlay again; ↑/↓ are only claimed while open.
 - **Choices** autosave to
   `<recs>/<source>/nwin_edits/nwin_choices.json` on every record/clear
   (file deleted when the last choice is cleared; `model_sha` records the
