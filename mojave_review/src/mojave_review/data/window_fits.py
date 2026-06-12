@@ -248,14 +248,19 @@ def global_window_extent(refs: list[WindowFitRef], median_beam: float = 0.0,
 
 
 def load_complex_factor(src_folder: Path) -> float:
-    """The --complex factor the source was run with (config_win.json),
-    needed to reproduce the pipeline's BIC* suggestion. 3.0 is the
-    find_clusters.py default."""
-    cfg = Path(src_folder) / "config_win.json"
-    try:
-        return float(json.loads(cfg.read_text()).get("complex", 3.0))
-    except (OSError, ValueError, TypeError):
-        return 3.0
+    """The --complex factor of the CURRENT model, needed to reproduce the
+    pipeline's BIC* suggestion. find_clusters.py rewrites the config file on
+    every save, so this always reflects the most recent saved run — the
+    per-window CSVs only store the BIC* ingredients, never a baked-in
+    complex. config_win.json for windowed runs (the norm), config.json for
+    non-windowed ones; 3.0 is the find_clusters.py default."""
+    for name in ("config_win.json", "config.json"):
+        cfg = Path(src_folder) / name
+        try:
+            return float(json.loads(cfg.read_text()).get("complex", 3.0))
+        except (OSError, ValueError, TypeError):
+            continue
+    return 3.0
 
 
 @dataclass

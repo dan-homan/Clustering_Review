@@ -573,9 +573,16 @@ no clustering runs in the app.
   `overlay_figure_for_epoch` renders it with zero plotting changes (always
   `image_source="synthesize"`). `bic_table` reproduces the pipeline's
   BIC* = ln(Ndata)·k + complex·Ndata·⟨d²⟩/⟨Σbeam²⟩ from the per-window CSV
-  (`complex` read from `config_win.json`); `build_window_meta` adds the
-  current model's N per window (core row at the window's ref epoch — the
-  same lookup as the pipeline's `get_previous_Nclusters_labels`).
+  `complex` is the CURRENT model's value (`load_complex_factor`:
+  `config_win.json`, falling back to `config.json` — find_clusters rewrites
+  it on every save), NOT whatever the source was first run with: the window
+  CSVs carry only the BIC* ingredients, never a baked-in complex. The
+  BIC*-vs-N curve uses a log y-axis whenever all values are positive — the
+  N=1 point can sit an order of magnitude above the minimum (e.g.
+  0415+379's 1997.19-2002.18 window) and flatten the interesting region on
+  a linear axis. `build_window_meta` adds the current model's N per window
+  (core row at the window's ref epoch — the same lookup as the pipeline's
+  `get_previous_Nclusters_labels`).
 - **UI**: window / N / epoch sliders (epoch defaults to the window's
   reference epoch), a BIC*-vs-N curve + an N-per-window strip chart
   (click a strip-chart point to jump to that window), and the overlay

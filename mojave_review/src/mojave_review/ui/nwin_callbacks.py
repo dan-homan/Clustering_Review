@@ -70,6 +70,12 @@ def build_bic_figure(meta: dict, win_idx: int, chosen_n: int | None,
                        hovertemplate="N=%{x}<br>BIC* %{y:.1f}<extra></extra>"),
             row=1, col=1,
         )
+        # Log y-axis when every value allows it: the N=1 point can sit an
+        # order of magnitude above the minimum (e.g. 0415+379's
+        # 1997.19-2002.18 window: 4073 vs ~391), flattening the region
+        # around the optimum on a linear axis.
+        if (tab["bicstar"] > 0).all():
+            fig.update_yaxes(type="log", row=1, col=1)
         # Mark the displayed / chosen N on the curve.
         if chosen_n is not None and (tab["Nclusters"] == chosen_n).any():
             y = float(tab.loc[tab["Nclusters"] == chosen_n, "bicstar"].iloc[0])

@@ -157,6 +157,20 @@ def test_global_window_extent_no_columns(tmp_path):
     assert global_window_extent(refs) is None
 
 
+def test_complex_factor_tracks_current_config(tmp_path):
+    """BIC* must be recomputed with the CURRENT model's --complex (the config
+    file find_clusters.py rewrites on every save), not whatever the source
+    was first run with — the window CSVs only carry the ingredients."""
+    from mojave_review.data.window_fits import load_complex_factor
+    folder = tmp_path / f"{SOURCE}_1994.00-2026.00"
+    folder.mkdir()
+    assert load_complex_factor(folder) == 3.0          # default when absent
+    (folder / "config.json").write_text(json.dumps({"complex": 2.0}))
+    assert load_complex_factor(folder) == 2.0          # non-windowed fallback
+    (folder / "config_win.json").write_text(json.dumps({"complex": 4.5}))
+    assert load_complex_factor(folder) == 4.5          # windowed wins
+
+
 def test_build_window_meta_no_fits(tmp_path):
     folder = tmp_path / f"{SOURCE}_1994.00-2026.00"
     folder.mkdir()
