@@ -496,7 +496,10 @@ recommendation for the current source into one model. Pure logic lives in
   `--no-confirm` so the terminal prompts). The app writes only under
   `recommendations/`, never `Results/`. **`mojave-apply --stage3-meta`**
   (`cli/apply._apply_stage3_meta`) does the bookkeeping atomically after the
-  apply: backs up + regenerates `Results/`, archives the JSON to `applied/`,
+  apply: backs up + regenerates `Results/` (PDF/MP4 only when the source
+  carries them — plots are opt-in via `find_clusters --make_plots` now, and
+  `--skip-plots` force-skips; skipped plots are MOVED into the backup),
+  archives the JSON to `applied/`,
   moves the folded `submitted/*.json` → `considered/<date>/`, appends the
   ledger entry (resolving `{{BACKUP_REF}}` to the backup it cut), and sets
   Status → `Stage 3 done · applied <date>`. After running it, the admin clicks

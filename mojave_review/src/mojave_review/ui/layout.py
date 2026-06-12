@@ -589,9 +589,11 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                     "This generates a copy-paste mojave-apply "
                                     "command (it does NOT modify anything from the "
                                     "app). Running that command in a terminal backs "
-                                    "up + regenerates Results/ (CSV + PDF + MP4), "
-                                    "archives the considered submissions, and writes "
-                                    "the Stage-3 ledger + Status — all in one step.",
+                                    "up + regenerates Results/ (CSV, plus PDF + MP4 "
+                                    "when the source carries them — plots are "
+                                    "opt-in now), archives the considered "
+                                    "submissions, and writes the Stage-3 ledger + "
+                                    "Status — all in one step.",
                                     style={"color": "#666", "fontSize": "0.88em",
                                            "margin": "0 0 0.5em"},
                                 ),

@@ -6,6 +6,13 @@ CSV, regenerate the PDF + MP4 via ``find_clusters.save_summary_plots``,
 append `history.txt`, archive the recommendation JSON, and print a
 copy-pasteable notebook-summary block.
 
+Plot files are opt-in in the pipeline now (``find_clusters.py
+--make_plots``), so regeneration is conditional: it runs only when the
+source actually carries a PDF/MP4 and ``--skip-plots`` wasn't given. When
+regeneration is skipped, any existing plot files are MOVED into the backup
+(not copied) so a stale render never sits next to the new CSV — and a
+plot-less apply doesn't need the production code or matplotlib at all.
+
 Important data-model assumptions (per the project author):
 
 * The ``.plotdata.npz`` is **not** rewritten. The npz is interpreted
@@ -136,13 +143,16 @@ def _next_backup_index(backups_dir: Path) -> str:
     return f"{(max(indices) if indices else 0) + 1:03d}"
 
 
-def _backup_existing(folder: Path, prefix: str, idx: str) -> Path:
+def _backup_existing(folder: Path, prefix: str, idx: str,
+                     move_plots: bool = False) -> Path:
     """Move/copy the existing artifacts into `backups/backup_<idx>_*`.
 
     The CSV is renamed (the old file disappears from ``folder``; the new
-    one will be written next). PDF / MP4 / config / run_string are copied
-    so the originals stay in place — `save_summary_plots` will overwrite
-    the PDF + MP4 in step.
+    one will be written next). Config / run_string are copied so the
+    originals stay in place. The PDF / MP4 (when present — they're opt-in
+    in the pipeline now) are copied when they're about to be regenerated,
+    or MOVED (``move_plots=True``) when regeneration is skipped, so a
+    stale render never sits next to the new CSV.
     """
     backups_dir = folder / "backups"
     backups_dir.mkdir(parents=True, exist_ok=True)
@@ -151,9 +161,9 @@ def _backup_existing(folder: Path, prefix: str, idx: str) -> Path:
         (f"{prefix}.merged_win_results.csv",
          f"backup_{idx}_merged_win_results.csv", True),
         (f"{prefix}.summary_plots.pdf",
-         f"backup_{idx}_summary_plots.pdf", False),
+         f"backup_{idx}_summary_plots.pdf", move_plots),
         (f"{prefix}.epoch_overplots.mp4",
-         f"backup_{idx}_epoch_overplots.mp4", False),
+         f"backup_{idx}_epoch_overplots.mp4", move_plots),
         ("config_win.json",     f"backup_{idx}_config.json", False),
         ("run_string.txt",      f"backup_{idx}_run_string.txt", False),
     ]
@@ -423,8 +433,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Apply a recommendation JSON to a Results/<source>/ folder. "
             "Backs up the existing CSV / PDF / MP4 / config / run_string, "
             "writes the modified CSV, regenerates the PDF + MP4 via "
-            "find_clusters.save_summary_plots, appends history.txt, "
-            "archives the JSON, and prints a notebook-summary block."
+            "find_clusters.save_summary_plots (only when the source carries "
+            "them — they are opt-in in the pipeline now), appends "
+            "history.txt, archives the JSON, and prints a notebook-summary "
+            "block."
         ),
     )
     p.add_argument("--results-dir", type=Path, required=True,
@@ -442,6 +454,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "Defaults to <results-dir>/..")
     p.add_argument("--no-confirm", action="store_true",
                    help="Skip the interactive confirmation prompt.")
+    p.add_argument("--skip-plots", action="store_true",
+                   help="Don't regenerate the summary PDF / epoch MP4 even "
+                        "when the source carries them (they are moved into "
+                        "the backup instead). When the source has no plot "
+                        "files — the default now that find_clusters.py only "
+                        "makes them with --make_plots — regeneration is "
+                        "skipped automatically.")
     p.add_argument("--stage3-meta", type=Path, default=None,
                    help="Stage-3 sidecar JSON (considered_slugs / ledger_entry "
                         "/ status). After applying the aggregated recommendation "
@@ -585,8 +604,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # ---- Changes to apply -------------------------------------------------
-    # Confirm save_summary_plots is importable BEFORE we touch any files.
-    save_summary_plots = _import_save_summary_plots(production_code_dir)
+    # Plot regeneration is conditional now that the pipeline only makes the
+    # PDF/MP4 with --make_plots: regenerate only when the source actually
+    # carries them AND --skip-plots wasn't given. When skipping, the backup
+    # below MOVES any existing plot files so a stale render can't sit next
+    # to the new CSV. Confirm save_summary_plots is importable BEFORE we
+    # touch any files (only needed when regenerating).
+    plots_present = (
+        (existing.folder / f"{existing.prefix}.summary_plots.pdf").is_file()
+        or (existing.folder / f"{existing.prefix}.epoch_overplots.mp4").is_file()
+    )
+    regen_plots = plots_present and not args.skip_plots
+    save_summary_plots = (_import_save_summary_plots(production_code_dir)
+                          if regen_plots else None)
     backup_idx = _next_backup_index(existing.folder / "backups")
 
     if not args.no_confirm:
@@ -599,7 +629,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     # ---- Destructive operations from here ---------------------------------
-    _backup_existing(existing.folder, existing.prefix, backup_idx)
+    _backup_existing(existing.folder, existing.prefix, backup_idx,
+                     move_plots=not regen_plots)
     print(f"Wrote backups/backup_{backup_idx}_*.*")
     _save_new_csv(existing.folder, existing.prefix, new_df)
     print(f"Wrote {existing.prefix}.merged_win_results.csv")
@@ -609,10 +640,17 @@ def main(argv: list[str] | None = None) -> int:
     _append_history(existing.folder, header, edit_history)
     print("Appended to history.txt")
 
-    print("Regenerating summary_plots.pdf + epoch_overplots.mp4 …")
-    _regen_plots(existing.folder, existing.prefix, existing.plotdata,
-                 new_df, save_summary_plots)
-    print("  done.")
+    if regen_plots:
+        print("Regenerating summary_plots.pdf + epoch_overplots.mp4 …")
+        _regen_plots(existing.folder, existing.prefix, existing.plotdata,
+                     new_df, save_summary_plots)
+        print("  done.")
+    elif plots_present:
+        print("Skipped plot regeneration (--skip-plots); prior PDF/MP4 moved "
+              "into the backup.")
+    else:
+        print("No PDF/MP4 to regenerate (plots are opt-in via "
+              "find_clusters.py --make_plots).")
 
     archived = _archive_recommendation(rec_path, recommendations_dir,
                                        existing.source_name)
