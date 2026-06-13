@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -175,6 +176,34 @@ def test_build_window_meta_no_fits(tmp_path):
     folder = tmp_path / f"{SOURCE}_1994.00-2026.00"
     folder.mkdir()
     assert build_window_meta(_src(folder), None) is None
+
+
+def test_window_bundle_defaults_robust_true(monkeypatch):
+    # Raw window fits have robust=None; window_bundle must default it to True
+    # so the overlay colours clusters (rather than styling everything
+    # slategray via bool(None) -> False). Stub the npz load so the test stays
+    # synthetic.
+    import mojave_review.data.window_fits as wf_mod
+    cluster_df = pd.DataFrame([
+        dict(epoch=2000.0, clusterID=0, origID=0, robust=None, avg_x=0.0,
+             avg_y=0.0, core_x=0.0, core_y=0.0),
+        dict(epoch=2000.0, clusterID=1, origID=1, robust=None, avg_x=1.0,
+             avg_y=1.0, core_x=0.0, core_y=0.0),
+    ])
+    fake = wf_mod.WindowFit(
+        clusters=np.array([5]),
+        ep_info=np.array([], dtype=float),
+        cc_data=np.array([], dtype=float),
+        results={5: {"cluster_epoch_df": cluster_df,
+                     "labels": np.array([0, 1]), "ref_epoch": 2000.0}},
+    )
+    monkeypatch.setattr(wf_mod, "load_window_fit", lambda _p: fake)
+    ref = wf_mod.WindowFitRef("1999.00-2001.00", 1999.0, 2001.0,
+                              Path("x.npz"), Path("x.csv"))
+    src = SourceRef(source=SOURCE, epoch_min=1994.0, epoch_max=2026.0,
+                    folder=Path("."))
+    bundle = wf_mod.window_bundle(src, ref, 5)
+    assert bundle.cluster_df["robust"].tolist() == [True, True]
 
 
 # ---------------------------------------------------------------------------

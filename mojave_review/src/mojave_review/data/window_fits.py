@@ -139,6 +139,15 @@ def window_bundle(src: SourceRef, ref: WindowFitRef, n: int) -> SourceBundle:
                          f"(available: {wf.clusters.tolist()})")
     result = wf.results[n]
     cluster_df = result["cluster_epoch_df"].copy()
+    # Raw window fits carry no robustness yet — it's a later Stage-2 decision,
+    # so the column is all None. The overlay styles non-robust clusters
+    # slategray (bool(None) -> False), which would render every cluster +
+    # its clean components grey and defeat the whole point of the N-edit
+    # view: seeing how the cluster structure changes with N. Default robust
+    # to True here so both the FWHM ellipses and the CC scatter take their
+    # per-cluster colours. Unassigned (-1) / synthetic (>=1000) clusters stay
+    # black via _cluster_style regardless of this flag.
+    cluster_df["robust"] = True
     plotdata = PlotData(
         epoch_info=wf.ep_info,
         cc_data=wf.cc_data,
