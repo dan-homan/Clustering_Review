@@ -287,7 +287,9 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
 
     # Vertical drag handle between the two panels — wired up by
     # assets/resizable.js. Initial flex is 1/1, drag updates to fixed-px.
-    split_handle = html.Div(id="split-handle", title="Drag to resize panels")
+    # Shares the .split-handle class with the Window-N panel's divider.
+    split_handle = html.Div(id="split-handle", className="split-handle",
+                            title="Drag to resize panels")
 
     body = html.Div(
         [summary_panel, split_handle, overlay_panel],

@@ -1,5 +1,7 @@
-/* Vertical drag handle between the two main panels. */
-#split-handle {
+/* Vertical drag handle between two side-by-side plotting panels. Shared by
+   the main #split-handle and the Window-N panel's #nwin-split-handle via the
+   .split-handle class. */
+.split-handle {
     flex: 0 0 6px;
     background: #e6e6e6;
     cursor: col-resize;
@@ -7,12 +9,12 @@
     position: relative;
     transition: background 0.12s ease-in-out;
 }
-#split-handle:hover,
-#split-handle.split-handle-active {
+.split-handle:hover,
+.split-handle.split-handle-active {
     background: #b8b8b8;
 }
 /* Gripper dots, centered vertically. */
-#split-handle::after {
+.split-handle::after {
     content: "";
     position: absolute;
     left: 50%;

@@ -609,6 +609,12 @@ no clustering runs in the app.
   window) and ↑/↓ to `nwin-n-up/down` (N ± 1), capture-phase +
   `stopImmediatePropagation` like the epoch arrows. Panel closed → ←/→
   step the main epoch overlay again; ↑/↓ are only claimed while open.
+- **Resizable split**: a draggable vertical divider (`#nwin-split-handle`
+  between `#nwin-left-panel` / `#nwin-right-panel`) resizes the BIC*/strip
+  panel vs the overlay. Same `assets/resizable.js` + `.split-handle` CSS
+  class as the main `#split-handle` — the JS now wires a list of splitter
+  configs (the Window-N one is skipped in non-admin mode) and reflows the
+  Plotly charts on drag.
 - **Choices** autosave to
   `<recs>/<source>/nwin_edits/nwin_choices.json` on every record/clear
   (file deleted when the last choice is cleared; `model_sha` records the

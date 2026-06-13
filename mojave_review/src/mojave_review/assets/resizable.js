@@ -1,24 +1,31 @@
-// Draggable vertical splitter between the summary-plots panel and the
-// FITS-overlay panel. Adjusts the two panels' `flex` widths on mouse
-// drag and calls Plotly.Plots.resize() on every chart inside them so
-// the figures reflow live.
+// Draggable vertical splitters between side-by-side plotting panels.
+// Adjusts the two panels' `flex` widths on mouse drag and calls
+// Plotly.Plots.resize() on every chart inside them so the figures reflow
+// live.
+//
+// Two splitters use this:
+//   #split-handle      — main summary-panel | overlay-panel
+//   #nwin-split-handle — Window-N panel's BIC*/strip | overlay (admin only)
 //
 // Dash auto-loads any .js file under the configured `assets_folder`
 // (see app.py — points at the installed package's assets/ dir).
 
 (function () {
-    function init() {
-        const handle = document.getElementById("split-handle");
-        const left = document.getElementById("summary-panel");
-        const right = document.getElementById("overlay-panel");
+    // Each splitter: the drag handle plus the panels on its left and right.
+    // The Window-N one only exists in --admin mode, so a missing handle is
+    // simply skipped (not an error).
+    const SPLITTERS = [
+        { handle: "split-handle", left: "summary-panel", right: "overlay-panel" },
+        { handle: "nwin-split-handle", left: "nwin-left-panel", right: "nwin-right-panel" },
+    ];
 
-        // Dash renders asynchronously — the body may not be wired up yet
-        // on the first DOMContentLoaded fire. Retry until the elements
-        // exist (a few hundred ms is enough on a cold load).
-        if (!handle || !left || !right) {
-            setTimeout(init, 150);
-            return;
-        }
+    function wire(cfg) {
+        const handle = document.getElementById(cfg.handle);
+        const left = document.getElementById(cfg.left);
+        const right = document.getElementById(cfg.right);
+        if (!handle || !left || !right) return false;
+        if (handle.dataset.splitWired) return true;   // idempotent
+        handle.dataset.splitWired = "1";
 
         let dragging = false;
         let startX = 0;
@@ -82,6 +89,23 @@
         // Also reflow on window resize so the proportions stay sane when
         // the viewport itself changes size.
         window.addEventListener("resize", resizePlots);
+        return true;
+    }
+
+    function init() {
+        // Dash renders asynchronously — panels may not be wired up yet on
+        // the first fire. Wire whatever's present; retry a bounded number of
+        // times for any still-missing splitter (the Window-N one is absent
+        // entirely in non-admin mode, so we stop after a few tries rather
+        // than spin forever).
+        let attempts = 0;
+        function attempt() {
+            const allWired = SPLITTERS.every((cfg) => wire(cfg));
+            if (allWired || attempts > 20) return;
+            attempts += 1;
+            setTimeout(attempt, 150);
+        }
+        attempt();
     }
 
     if (document.readyState === "loading") {

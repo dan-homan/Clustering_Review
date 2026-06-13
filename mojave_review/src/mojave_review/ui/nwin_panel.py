@@ -192,8 +192,15 @@ def build_nwin_panel() -> html.Details:
                     ),
                     type="default",
                 ),
+                id="nwin-left-panel",
                 style={"flex": "1 1 0", "minWidth": "0"},
             ),
+            # Draggable vertical splitter between the BIC*/strip-chart panel
+            # and the overlay panel — wired up by assets/resizable.js (same
+            # mechanism as the main #split-handle). Shares the .split-handle
+            # class for styling.
+            html.Div(id="nwin-split-handle", className="split-handle",
+                     title="Drag to resize panels"),
             html.Div(
                 dcc.Loading(
                     dcc.Graph(
@@ -204,6 +211,7 @@ def build_nwin_panel() -> html.Details:
                     ),
                     type="default",
                 ),
+                id="nwin-right-panel",
                 style={"flex": "1.2 1 0", "minWidth": "0"},
             ),
         ],
