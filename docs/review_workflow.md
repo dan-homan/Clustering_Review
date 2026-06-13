@@ -94,12 +94,14 @@ Cross-ID / use-in-fit:
 - **Stage 1 — brief review.** Quick flags. Seeded from the Google doc. (Future:
   a pure-text entry field in the app for brand-new sources — see TODO.)
 - **Stage 2 — baseline model.** One person builds the model others will see
-  (pipeline run: `--complex` / `--editN` / cross-IDs), writes the Stage 2 prose,
+  (pipeline run: `--complex` from `recommend_c.py` / per-window N from the
+  Window-N review's `--N_win_file` / cross-IDs), writes the Stage 2 prose,
   then in the app makes their *own* recommendation (robustness + any post-fit
   cross-IDs), **Submits**, and **`mojave-apply`s** it (a no-change one uses the
   no-op fast path). That apply finalizes the `current` model and **concludes
   Stage 2**. Seeded for the ~100 done sources; going forward the builder updates
-  Stage 2 via the app during their apply round.
+  Stage 2 via the app during their apply round. Full step-by-step under
+  "Stage-2 procedure (builder)" below.
 - **Stage 3 — aggregation.** Other reviewers submit suggestions via the app
   (→ `submitted/`). An admin reviews them side-by-side, accepts/rejects each
   edit with a one-line reason, previews the aggregated model, and applies →
@@ -117,7 +119,8 @@ Cross-ID / use-in-fit:
 - **Reviewer.** Unchanged: submit via the (hosted) app; their latest submission
   shows live to others. No markdown editing, ever.
 - **Builder (Stage 2).** After building a baseline, edits the Stage 2 field in
-  the app; saving writes that section of the `.md`.
+  the app; saving writes that section of the `.md`. The build itself follows
+  the "Stage-2 procedure (builder)" steps below.
 - **Admin (aggregation, run from a LOCAL copy of the app where `mojave-apply`
   can write `Results/`).** In the admin-only "🧩 Aggregate reviews (Stage 3)"
   panel: per-cluster **Final** robustness picker (default = majority of reviewer
@@ -126,6 +129,41 @@ Cross-ID / use-in-fit:
   the plots → **Apply aggregated…** (confirm modal → one-click `mojave-apply`).
   Needs `find_clusters.py` reachable (`$MOJAVE_CODE` or `<results-dir>/..`) and
   `$MOJAVE_DATA` for plot regen.
+
+## Stage-2 procedure (builder)
+
+The build steps the Stage-2 baseline owner runs before submitting + applying
+their recommendation. As of 2026-06 this replaces the interactive `--editN`
+matplotlib session with the app's Window-N review + `find_clusters.py
+--N_win_file`, and adds the `recommend_c.py` `--complex` recommender.
+
+1. **Recommend `--complex`.** From the results parent directory, run
+   `python ../Nestimate/recommend_c.py <source>` against the existing
+   (any-complex) run. The default is a trained classifier; `--rule` prints the
+   interpretable slope rule instead. When the recommended `--complex` differs
+   from the last run, it prints a ready-to-paste re-run command (old
+   `run_string.txt` with `--complex` swapped, `--editN`/`--recalc_IDs`
+   stripped, `--show_results` appended).
+2. **Re-run if needed.** If the recommended `--complex` differs, re-run
+   `find_clusters.py` with the new value (use the printed command). Skip when
+   the recommendation matches the current run.
+3. **Adjust N per window in the app.** Use the **🔢 Window-N review** panel
+   (admin) — the `--editN` replacement — to set Ncluster per window. Choices
+   autosave to `<recs>/<source>/nwin_edits/nwin_choices.json`.
+4. **Generate the apply command.** Hit **"Generate rerun command"** in the
+   panel to get the `find_clusters.py … --N_win_file <…>/nwin_choices.json`
+   string (`--recalc_IDs` is added so cross-window labels re-match), and run it
+   in the production working directory. Cached `cluster_fits/` make this fast.
+5. **Make ID / robustness / use-in-fit edits in the app.** With the model
+   rebuilt, make post-fit cross-ID, robustness, and use-in-fit edits in the
+   recommendations panel.
+6. **Submit.** **Submit** the recommendation (→ `submitted/<slug>.json`).
+7. **Apply (Stage-2 baseline apply).** Use **"Generate baseline apply command
+   (Stage 2)"** to get the `mojave-apply --recommendation <own JSON>` command
+   and run it in a terminal. This finalizes the `current` model, archives the
+   submission out of `submitted/`, updates the Stage-2 prose + `Status:`, and
+   writes `history.txt`. It writes **no ledger entry** (that is Stage 3 only;
+   see below). A no-change apply uses the no-op fast path.
 
 ## Two kinds of apply — the ledger is Stage 3 only
 
