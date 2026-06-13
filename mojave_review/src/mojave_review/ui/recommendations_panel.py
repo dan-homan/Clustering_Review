@@ -124,6 +124,11 @@ def _clusters_tab() -> dcc.Tab:
                                "marginBottom": "0.5em"},
                     ),
                     html.Div(
+                        "💡 Double-click a Comment cell to edit it.",
+                        style={"fontSize": "0.85em", "color": "#666",
+                               "fontStyle": "italic", "marginBottom": "0.5em"},
+                    ),
+                    html.Div(
                         id="cluster-table-wrapper",
                         children=[
                     dash_table.DataTable(
