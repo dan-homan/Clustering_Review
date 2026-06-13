@@ -7,32 +7,72 @@ from pathlib import Path
 from dash import dcc, html
 
 from ..data.loader import list_sources
-from ..recommendations.store import source_badge
+from ..recommendations.store import (
+    source_badge, source_phase, is_submitted, load_recommendation)
 from .nwin_panel import build_nwin_panel
 from .recommendations_panel import build_recommendations_panel
 
 
-def build_source_options(results_dir: Path, recommendations_dir: Path) -> list[dict]:
-    """Source-picker options with a recommendation-status badge per source.
+def _reviewer_status(recommendations_dir: Path, source: str,
+                     reviewer: str | None) -> tuple[str | None, dict]:
+    """Per-reviewer review-state note for the picker: where THIS reviewer is on
+    THIS source, so they can see what they've done and resume. Returns
+    ``(text, style)`` or ``(None, {})``:
 
-    Each label gets a bracketed badge from ``store.source_badge``:
-    ``[N]`` open submitted recs, ``[final]`` once Stage 3 is applied, and
-    ``[final - M]`` if M new recs have landed on an already-finalized source.
-    Shared by the initial layout and the live-refresh callback so the badge
-    stays in one place. Falls back to no badge if ``recommendations_dir`` is
-    None (e.g. an introspection with no recs wired up)."""
+    - **submitted** (bold) — the reviewer has a submitted review.
+    - **review in progress** (plain) — a non-empty ``current/`` draft, not yet
+      submitted. (An empty draft does NOT count.)
+    - **needs review** (italic) — the source is open for recommendations
+      (``open`` phase = Stage 2 done) and the reviewer hasn't touched it.
+    - nothing — locked (Stage 1/2) or finalized sources aren't actionable for
+      the reviewer; the bracket badge already conveys their state.
+    """
+    if recommendations_dir is None or not reviewer:
+        return None, {}
+    if is_submitted(recommendations_dir, source, reviewer):
+        return "submitted", {"fontWeight": 700, "color": "#1a7a1a"}
+    if source_phase(recommendations_dir, source) != "open":
+        return None, {}
+    draft = load_recommendation(recommendations_dir, source, "current", reviewer)
+    if not draft.is_empty():
+        return "review in progress", {"color": "#555"}
+    return "needs review", {"fontStyle": "italic", "color": "#999"}
+
+
+def build_source_options(results_dir: Path, recommendations_dir: Path,
+                         reviewer: str | None = None) -> list[dict]:
+    """Source-picker options. Each label is ``<source>  <reviewer-status>  [badge]``:
+
+    - the source name only (the date range is dropped — it's the same for every
+      source in this review; revisit if mixed ranges ever appear);
+    - a per-reviewer status note (``_reviewer_status``) so reviewers can see what
+      they've done / resume where they left off;
+    - the bracket badge from ``store.source_badge`` (``[N]`` / ``[final]`` /
+      ``[stage 1]`` …), kept as-is.
+
+    Labels are rich (html.Span) for the italic/plain/bold note; a ``search``
+    field keeps type-to-filter working. Shared by the initial layout and the
+    live-refresh callback. With ``recommendations_dir=None`` (introspection) the
+    note + badge are omitted."""
     out: list[dict] = []
     for s in list_sources(results_dir):
-        label = s.label
+        children: list = [html.Span(s.source)]
+        text, style = _reviewer_status(recommendations_dir, s.source, reviewer)
+        if text:
+            children.append(html.Span(f"   {text}", style=style))
         if recommendations_dir is not None:
-            label = f"{label}   {source_badge(recommendations_dir, s.source)}"
-        out.append({"label": label, "value": str(s.folder)})
+            children.append(html.Span(
+                f"   {source_badge(recommendations_dir, s.source)}",
+                style={"color": "#888"}))
+        out.append({"label": html.Span(children), "value": str(s.folder),
+                    "search": s.source})
     return out
 
 
 def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                  recommendations_dir: Path | None = None) -> html.Div:
-    source_options = build_source_options(results_dir, recommendations_dir)
+    source_options = build_source_options(results_dir, recommendations_dir,
+                                          reviewer)
     initial = source_options[0]["value"] if source_options else None
 
     header = html.Div(

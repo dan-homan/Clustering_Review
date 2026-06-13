@@ -157,21 +157,23 @@ def register_callbacks(
         clear_bundle_cache()
         return int(current or 0) + 1
 
-    # ---- live source-picker badges --------------------------------------
-    # Each source label carries a recommendation-status badge ([N] / [final]
-    # / [final - M]; see store.source_badge). The initial layout computes them
-    # once at page load; this keeps them fresh during the session when the
-    # current reviewer submits (submit-trigger), the page is reloaded
-    # (reload-counter), or a Stage-3 apply lands (also bumps reload-counter).
-    # The picker's value is the source folder path, which never changes here,
-    # so updating only the labels preserves the current selection.
+    # ---- live source-picker labels --------------------------------------
+    # Each source label carries the per-reviewer status note (needs review /
+    # review in progress / submitted) + the bracket badge ([N] / [final] …).
+    # The initial layout computes them at page load (so a reviewer returning to
+    # a fresh tab sees where they left off); this keeps them fresh during the
+    # session when the current reviewer submits (submit-trigger), the page is
+    # reloaded (reload-counter), or a Stage-3 apply lands (also bumps
+    # reload-counter). The picker's value is the source folder path, which never
+    # changes here, so updating only the labels preserves the current selection.
     @app.callback(
         Output("source-picker", "options"),
         Input("reload-counter", "data"),
         Input("submit-trigger", "data"),
     )
     def _refresh_source_badges(_reload_counter, _submit_trigger):
-        return build_source_options(results_dir, recommendations_dir)
+        return build_source_options(
+            results_dir, recommendations_dir, current_reviewer(reviewer))
 
     # ---- read-only source notes panel ------------------------------------
     # Renders notes/<source>.md (Stages 1-2 + ledger) plus the live

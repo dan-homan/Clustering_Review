@@ -302,6 +302,27 @@ then `results_dir`) into a `{source: z}` map; `_refresh_summary` looks up
 
 ## Recommendations
 
+### Source picker labels (`build_source_options`, `ui/layout.py`)
+
+Each dropdown option is `<source>   <reviewer-status>   [badge]` — built by
+`build_source_options(results_dir, recommendations_dir, reviewer)` and refreshed
+live by `_refresh_source_badges` (on reload-counter / submit-trigger; the
+initial layout builds it too, so a returning reviewer sees their state on a
+fresh tab). Rich `html.Span` labels carry the italic/plain/bold; a `search`
+field (= source name) keeps type-to-filter working.
+
+- **Source name only** — the date range is dropped (same for every source in
+  this review; revisit if mixed ranges ever appear).
+- **Per-reviewer status note** (`_reviewer_status`, scoped to the current
+  reviewer so each sees their own progress / where to resume): *needs review*
+  (italic) when the source is `open` (Stage 2 done) and untouched;
+  "review in progress" (plain) when there's a **non-empty** `current/` draft and
+  no submission (an empty draft does NOT count); **submitted** (bold) when a
+  submission exists. Locked (`stage1`/`stage2`) and `final` sources get no note
+  (not actionable — the badge says why).
+- **Bracket badge** (`store.source_badge`) — `[N]` open submitted recs /
+  `[final]` / `[final − M]` / `[stage 1]` / `[stage 2]`, unchanged.
+
 Reviewer feedback lives in per-(source, model, reviewer) JSON files at
 `<recommendations-dir>/<source>/<model>/<reviewer-slug>.json`. The app
 NEVER modifies anything under `Results/`. The on-disk shape (full schema
