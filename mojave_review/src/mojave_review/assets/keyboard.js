@@ -7,9 +7,10 @@
 // route there instead — matplotlib N_win_edit parity:
 //   Left/Right → #nwin-win-prev / #nwin-win-next  (previous/next time window)
 //   Up/Down    → #nwin-n-up   / #nwin-n-down      (cluster count N ± 1)
+//   r          → #nwin-record-btn                 (record N for this window)
 // Close the panel to give Left/Right back to the main epoch overlay.
-// (Up/Down are only claimed while the panel is open, so normal page
-// scrolling is unaffected the rest of the time.)
+// (Up/Down and r are only claimed while the panel is open, so normal page
+// scrolling / typing is unaffected the rest of the time.)
 //
 // Skipped when focus is in a text input / textarea / contenteditable element
 // so the arrows don't fight with typing in the recommendations panel.
@@ -55,6 +56,7 @@
         else if (e.key === "ArrowRight") btnId = nwinOpen ? "nwin-win-next" : "epoch-next";
         else if (e.key === "ArrowUp" && nwinOpen) btnId = "nwin-n-up";
         else if (e.key === "ArrowDown" && nwinOpen) btnId = "nwin-n-down";
+        else if (e.key === "r" && nwinOpen) btnId = "nwin-record-btn";
         else return;
 
         const btn = document.getElementById(btnId);

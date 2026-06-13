@@ -111,10 +111,11 @@ def build_nwin_panel() -> html.Details:
             html.Div(
                 [
                     html.Button(
-                        "Record N for this window",
+                        "Record N for this window  (r)",
                         id="nwin-record-btn", n_clicks=0,
                         title="Save the displayed N as this window's choice "
-                              "(autosaves to nwin_edits/nwin_choices.json)",
+                              "(autosaves to nwin_edits/nwin_choices.json). "
+                              "Shortcut: press r while the panel is open.",
                         style={"padding": "0.3em 0.9em", "fontSize": "0.85em",
                                "background": "#1f77b4", "color": "white",
                                "border": "none", "borderRadius": "4px",

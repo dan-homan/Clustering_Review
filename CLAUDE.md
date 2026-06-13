@@ -606,9 +606,12 @@ no clustering runs in the app.
   overlay's Reset view).
 - **Keyboard** (matplotlib `N_win_edit` parity): while `#nwin-details` is
   OPEN, `assets/keyboard.js` routes ←/→ to `nwin-win-prev/next` (time
-  window) and ↑/↓ to `nwin-n-up/down` (N ± 1), capture-phase +
-  `stopImmediatePropagation` like the epoch arrows. Panel closed → ←/→
-  step the main epoch overlay again; ↑/↓ are only claimed while open.
+  window), ↑/↓ to `nwin-n-up/down` (N ± 1), and `r` to `nwin-record-btn`
+  (record N for this window) — capture-phase + `stopImmediatePropagation`
+  like the epoch arrows. Panel closed → ←/→ step the main epoch overlay
+  again; ↑/↓ and `r` are only claimed while open. All are skipped when
+  focus is in a text input (the `inEditableTarget` guard), so typing an
+  `r` into the choice-comment field doesn't fire a record.
 - **Resizable split**: a draggable vertical divider (`#nwin-split-handle`
   between `#nwin-left-panel` / `#nwin-right-panel`) resizes the BIC*/strip
   panel vs the overlay. Same `assets/resizable.js` + `.split-handle` CSS
