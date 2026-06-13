@@ -33,6 +33,7 @@ from ..recommendations.store import (
     load_recommendation, load_recommendation_by_slug, recommendations_locked,
     reviewer_slug, save_recommendation, save_submitted, submitted_at,
 )
+from .recommendations_panel import build_epoch_rows
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +440,7 @@ def register(
     @app.callback(
         Output("source-comment", "value"),
         Output("cluster-feedback-table", "data"),
-        Output("epoch-feedback-table", "data"),
+        Output("epoch-feedback-rows", "children"),
         Output("edits-store", "data"),
         Output("save-indicator", "children"),
         Output("no-changes-checkbox", "value"),
@@ -448,7 +449,7 @@ def register(
     )
     def _load_for_source(source_folder: str | None, model_key: str | None):
         if not source_folder or not model_key:
-            return "", [], [], [], "", []
+            return "", [], build_epoch_rows([]), [], "", []
         # rec:<slug> — show slug's review (read-only is enforced elsewhere).
         if model_key.startswith("rec:"):
             slug = model_key[4:]
@@ -458,7 +459,8 @@ def register(
             )
             if rec is None:
                 # Stale dropdown entry — file was removed. Show a hint.
-                return "", [], [], [], f"Could not find recommendation for {slug}.", []
+                return ("", [], build_epoch_rows([]), [],
+                        f"Could not find recommendation for {slug}.", [])
             cluster_rows, epoch_rows = _populate_tables(bundle, rec)
             edits_data = [
                 {
@@ -470,7 +472,8 @@ def register(
             ]
             msg = f"Viewing {slug}'s review · saved {rec.updated_at}"
             checkbox = ["yes"] if rec.no_robustness_changes else []
-            return rec.source_comment, cluster_rows, epoch_rows, edits_data, msg, checkbox
+            return (rec.source_comment, cluster_rows, build_epoch_rows(epoch_rows),
+                    edits_data, msg, checkbox)
 
         # Any other non-current model (backup_NNN, alt_model_NNN) doesn't accept
         # recommendations — show an empty panel using current's cluster list so
@@ -482,7 +485,7 @@ def register(
                                        model=model_key,
                                        reviewer=current_reviewer(reviewer)),
             )
-            return "", cluster_rows, epoch_rows, [], \
+            return "", cluster_rows, build_epoch_rows(epoch_rows), [], \
                    "Recommendations are only made against the current model.", []
 
         # Default: model=="current".
@@ -502,7 +505,27 @@ def register(
         ]
         msg = f"Loaded {rec.updated_at}" if rec.updated_at else "New review"
         checkbox = ["yes"] if rec.no_robustness_changes else []
-        return rec.source_comment, cluster_rows, epoch_rows, edits_data, msg, checkbox
+        return (rec.source_comment, cluster_rows, build_epoch_rows(epoch_rows),
+                edits_data, msg, checkbox)
+
+    # ---- 1b) Epoch comments: bridge the per-epoch textareas -> the
+    #      ``epoch-feedback-table`` store that every consumer (autosave /
+    #      submit / build_rec_from_ui_state) reads. The store mirrors the old
+    #      DataTable's ``.data`` shape ([{epoch, comment}]) so no consumer
+    #      changed. The textareas are debounce=True (commit on blur/Enter), so
+    #      this fires on blur — same cadence the DataTable committed at — not
+    #      per keystroke. Keyed on n_blur (commit on blur) + fires on creation
+    #      (load/reset rebuild the textareas), reading the current values via
+    #      State. Sole writer of the store.
+    @app.callback(
+        Output("epoch-feedback-table", "data"),
+        Input({"type": "epoch-comment", "epoch": ALL}, "n_blur"),
+        State({"type": "epoch-comment", "epoch": ALL}, "value"),
+        State({"type": "epoch-comment", "epoch": ALL}, "id"),
+    )
+    def _sync_epoch_store(_blurs, values, ids):
+        return [{"epoch": i["epoch"], "comment": (v or "")}
+                for i, v in zip(ids, values)]
 
     # ---- 2) Render the edits list (manual store + derived from clusters) -
     @app.callback(
@@ -953,7 +976,7 @@ def register(
     @app.callback(
         Output("source-comment", "value", allow_duplicate=True),
         Output("cluster-feedback-table", "data", allow_duplicate=True),
-        Output("epoch-feedback-table", "data", allow_duplicate=True),
+        Output("epoch-feedback-rows", "children", allow_duplicate=True),
         Output("edits-store", "data", allow_duplicate=True),
         Output("no-changes-checkbox", "value", allow_duplicate=True),
         Output("save-indicator", "children", allow_duplicate=True),
@@ -994,7 +1017,7 @@ def register(
             save_recommendation(recommendations_dir, rec, model_sha=bundle.csv_sha)
             cluster_rows, epoch_rows = _populate_tables(bundle, rec)
             checkbox = ["yes"] if rec.no_robustness_changes else []
-            return (rec.source_comment, cluster_rows, epoch_rows,
+            return (rec.source_comment, cluster_rows, build_epoch_rows(epoch_rows),
                     _edits_to_store(rec), checkbox,
                     f"Reset to last submitted ({rec.updated_at})",
                     hide, new_counter)
@@ -1005,7 +1028,7 @@ def register(
             empty = Recommendation(source=source_name, model="current",
                                    reviewer=cur)
             cluster_rows, epoch_rows = _populate_tables(bundle, empty)
-            return ("", cluster_rows, epoch_rows, [], [],
+            return ("", cluster_rows, build_epoch_rows(epoch_rows), [], [],
                     "Draft and submission deleted", hide, new_counter)
 
         return (*nu6, hide, no_update)
@@ -1056,13 +1079,21 @@ def register(
         State("model-picker", "value"),
         State("source-comment", "value"),
         State("cluster-feedback-table", "data"),
-        State("epoch-feedback-table", "data"),
+        # Read the epoch comments straight from the live textareas (their value
+        # prop is current client-side), NOT the epoch store: the store is fed by
+        # the n_blur bridge — a server round-trip the submit clientside's
+        # microtask yield can't await — so reading the store here could drop a
+        # just-typed-but-unblurred comment.
+        State({"type": "epoch-comment", "epoch": ALL}, "value"),
+        State({"type": "epoch-comment", "epoch": ALL}, "id"),
         State("edits-store", "data"),
         State("no-changes-checkbox", "value"),
         prevent_initial_call=True,
     )
     def _do_submit(_trigger, source_folder, model_key, source_comment,
-                   cluster_rows, epoch_rows, edits, no_changes_val):
+                   cluster_rows, epoch_vals, epoch_ids, edits, no_changes_val):
+        epoch_rows = [{"epoch": i["epoch"], "comment": (v or "")}
+                      for i, v in zip(epoch_ids or [], epoch_vals or [])]
         # Defensive: don't fire on non-current models (button is hidden but
         # could still be triggered by stale state).
         if not source_folder or model_key != "current":

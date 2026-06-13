@@ -17,6 +17,49 @@ from __future__ import annotations
 from dash import dash_table, dcc, html
 
 
+def build_epoch_rows(epoch_rows: list[dict]) -> list:
+    """Build the Epoch Notes rows: one ``dcc.Textarea`` per epoch (a real text
+    field, so editing behaves normally — cursor / arrows / backspace / click /
+    LTR). Each textarea's id carries the epoch key so a bridge callback can
+    reconstruct the ``[{epoch, comment}]`` store the consumers expect. The
+    bridge keys on ``n_blur`` (commit on blur), so typing stays purely
+    client-side — no per-keystroke server round-trip — matching the old
+    DataTable's commit-on-blur cadence."""
+    header = html.Div(
+        [
+            html.Div("Epoch", style={"width": "26%", "fontWeight": 600}),
+            html.Div("Year", style={"width": "16%", "fontWeight": 600,
+                                    "textAlign": "right"}),
+            html.Div("Comment", style={"flex": "1", "fontWeight": 600,
+                                       "marginLeft": "0.6em"}),
+        ],
+        style={"display": "flex", "gap": "0.4em", "padding": "2px 0",
+               "borderBottom": "1px solid #ddd", "fontSize": "0.9em"},
+    )
+    rows = [header]
+    for r in epoch_rows:
+        rows.append(html.Div(
+            [
+                html.Div(str(r["epoch"]), style={"width": "26%"}),
+                html.Div(f"{float(r['epoch_val']):.4f}",
+                         style={"width": "16%", "textAlign": "right",
+                                "color": "#666"}),
+                dcc.Textarea(
+                    id={"type": "epoch-comment", "epoch": str(r["epoch"])},
+                    value=r.get("comment") or "",
+                    style={"flex": "1", "marginLeft": "0.6em",
+                           "minHeight": "2.2em", "resize": "vertical",
+                           "fontFamily": "system-ui, sans-serif",
+                           "fontSize": "0.9em", "direction": "ltr",
+                           "textAlign": "left"},
+                ),
+            ],
+            style={"display": "flex", "gap": "0.4em", "alignItems": "center",
+                   "padding": "2px 0", "fontSize": "0.9em"},
+        ))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Tab: Source
 # ---------------------------------------------------------------------------
@@ -214,21 +257,18 @@ def _epochs_tab() -> dcc.Tab:
                         style={"fontSize": "0.85em", "color": "#666",
                                "marginBottom": "0.5em"},
                     ),
-                    dash_table.DataTable(
-                        id="epoch-feedback-table",
-                        columns=[
-                            {"name": "Epoch", "id": "epoch", "editable": False},
-                            {"name": "Year", "id": "epoch_val",
-                             "type": "numeric", "editable": False},
-                            {"name": "Comment", "id": "comment", "editable": True},
-                        ],
-                        data=[],
-                        editable=True,
-                        style_table={"maxHeight": "320px", "overflowY": "auto"},
-                        style_cell={"textAlign": "left", "padding": "4px 8px",
-                                    "fontFamily": "system-ui, sans-serif",
-                                    "fontSize": "0.9em"},
-                        style_header={"fontWeight": 600, "background": "#f0f0f0"},
+                    # Real dcc.Textarea per epoch (NOT a DataTable cell) so the
+                    # comment edits like a normal text field — proper cursor,
+                    # arrow keys, backspace, click-to-position, left-to-right.
+                    # `epoch-feedback-table` is now a dcc.Store mirroring the old
+                    # table's `.data` shape ([{epoch, comment}]) so every
+                    # consumer (autosave / submit / build_rec) is unchanged; a
+                    # bridge callback keeps it in sync from the textareas.
+                    dcc.Store(id="epoch-feedback-table", data=[]),
+                    html.Div(
+                        id="epoch-feedback-rows",
+                        children=build_epoch_rows([]),
+                        style={"maxHeight": "320px", "overflowY": "auto"},
                     ),
                 ],
                 style={"padding": "0.75em"},

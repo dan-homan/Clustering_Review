@@ -366,7 +366,7 @@ in [`recommendations/schema.py`](mojave_review/src/mojave_review/recommendations
 | Robustness | "No changes suggested" checkbox at top + editable table of *eligible* clusters (≥ 5 epochs with `use_in_fit=True`). Columns: Eligible Clusters, Current Robust Status, Recommended Changes (—/Robust/Non-robust), Comment. Cluster 0 (the core) has its dropdown locked to "—" (the core is always robust); its Comment cell stays editable. |
 | ID / use-in-fit Edits | Selection-driven action panel (visible only when summary-plot points are selected) + pending-edits list (manual + derived `set_robust` together). When no selection: instruction to click a summary point. Manual edits get a `[remove]` button; derived ones are read-only and tagged "from Clusters tab". |
 | Source Notes | One textarea, `source_comment`. |
-| Epoch Notes | One editable row per epoch, comment cell. |
+| Epoch Notes | One **real `dcc.Textarea`** per epoch (`build_epoch_rows`), NOT a DataTable cell — so the comment edits like a normal field (cursor / arrows / backspace / click-to-position / LTR). `epoch-feedback-table` is now a `dcc.Store` mirroring the old `.data` shape (`[{epoch, comment}]`) so every consumer is unchanged; `_sync_epoch_store` bridges the textareas (on `n_blur` → commit-on-blur, snappy typing) into that store. `_do_submit` reads the textareas' live `value` directly (the bridge is a server round-trip the submit clientside's microtask can't await). **The Robustness tab is still a DataTable** (its dropdown / live highlighting / resync / derived edits) — a follow-up will convert its comment cell the same way. |
 
 The panel auto-saves on every field change. Read-only modes:
 
