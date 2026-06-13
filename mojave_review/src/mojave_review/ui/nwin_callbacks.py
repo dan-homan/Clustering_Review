@@ -564,7 +564,9 @@ def register(
                     f"the find_clusters.py command manually and add: "
                     f"--N_win_file {path.resolve()}"), shown
         return (f"# run from your production working directory "
-                f"(where find_clusters.py was originally run):\n{cmd}"), shown
+                f"(where find_clusters.py was originally run).\n"
+                f"# --recalc_IDs is included by default (re-match cross-window "
+                f"cluster labels); delete it if not wanted:\n{cmd}"), shown
 
     # ---- clientside: reposition the beam ellipse on zoom/pan ----------------------
     # Same restyle-and-no_update discipline as the main overlay's beam

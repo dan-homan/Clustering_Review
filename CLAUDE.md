@@ -643,13 +643,18 @@ no clustering runs in the app.
 
 - **Hand-off** is the usual cut-n-paste model: **"Generate rerun command"**
   reads the source's `run_string.txt`, strips `--editN` / `--show_results` /
-  `--recalc_*` / any old `--N_win_file`, and appends
-  `--N_win_file <abs path to nwin_choices.json>`. The admin runs it in the
-  production working directory; cached fits make the rerun fast, and the
-  pipeline invalidates + re-matches cross-IDs only for windows whose N
-  changed (see `load_N_win_choices` / `cluster_window_matching` in
-  cluster_code.py). Unmatched window labels are a hard error there —
-  regenerate the choices file if the windowing changed.
+  `--recalc_*` / any old `--N_win_file`, and appends `--recalc_IDs
+  --N_win_file <abs path to nwin_choices.json>`. `--recalc_IDs` is added
+  back unconditionally (exactly one, even if the run_string had none)
+  because an N change usually wants the cross-window labels fully
+  re-matched; it's cheap (cached fits are reused) and the user can delete
+  it from the drafted command. The admin runs the command in the production
+  working directory; cached fits make the rerun fast. Without `--recalc_IDs`
+  the pipeline still invalidates + re-matches cross-IDs only for windows
+  whose N changed (see `load_N_win_choices` / `cluster_window_matching` in
+  cluster_code.py); with it, all cross-IDs are recomputed. Unmatched window
+  labels are a hard error there — regenerate the choices file if the
+  windowing changed.
 - `cluster_fits/` is **excluded from the server sync**
   (server_sync/server_update_exclude.txt), so the panel is effectively
   local-only; on a server deploy it shows a hint instead of the body.

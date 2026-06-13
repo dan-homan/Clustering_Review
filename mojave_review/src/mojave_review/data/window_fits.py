@@ -439,9 +439,11 @@ def save_nwin_choices(path: Path, source: str, choices: dict[str, dict],
 # ---------------------------------------------------------------------------
 
 # Flags stripped from the recorded run string when composing the rerun:
-# --editN is what the choices file replaces; the recalc family would throw
-# away exactly the cached fits / cross-IDs the fast rerun relies on; and an
-# older --N_win_file (with its value) is superseded by ours.
+# --editN is what the choices file replaces; --recalc_all/_fits/_N would
+# throw away exactly the cached fits / N values the fast rerun relies on; and
+# an older --N_win_file (with its value) is superseded by ours. --recalc_IDs
+# is stripped here too but then ADDED back unconditionally below, so the
+# drafted command always carries exactly one.
 _DROP_BARE_FLAGS = {"--editN", "--show_results", "--recalc_all",
                     "--recalc_fits", "--recalc_N", "--recalc_IDs"}
 _DROP_VALUE_FLAGS = {"--N_win_file"}
@@ -449,8 +451,14 @@ _DROP_VALUE_FLAGS = {"--N_win_file"}
 
 def build_rerun_command(src_folder: Path, choices_path: Path) -> str | None:
     """Compose the find_clusters.py rerun command from the source's
-    run_string.txt, with --editN (and recalc flags) stripped and
-    --N_win_file <choices> appended. None when run_string.txt is missing."""
+    run_string.txt, with --editN (and recalc flags) stripped, then
+    --recalc_IDs + --N_win_file <choices> appended. None when run_string.txt
+    is missing.
+
+    --recalc_IDs is included by default because changing N in a window
+    usually means the cross-window cluster labels need re-matching; it's
+    cheap (the cached fits are reused, only the cross-ID pass re-runs). The
+    user can delete it from the drafted command if they don't want it."""
     rs_path = Path(src_folder) / "run_string.txt"
     try:
         recorded = rs_path.read_text().strip()
@@ -473,5 +481,5 @@ def build_rerun_command(src_folder: Path, choices_path: Path) -> str | None:
         if any(tok.startswith(f + "=") for f in _DROP_VALUE_FLAGS):
             continue
         out.append(tok)
-    out += ["--N_win_file", str(Path(choices_path).resolve())]
+    out += ["--recalc_IDs", "--N_win_file", str(Path(choices_path).resolve())]
     return " ".join(shlex.quote(t) for t in out)

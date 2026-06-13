@@ -261,11 +261,25 @@ def test_build_rerun_command_strips_and_appends(tmp_path):
     cmd = build_rerun_command(folder, choices)
     assert cmd is not None
     assert "--editN" not in cmd
-    assert "--recalc_IDs" not in cmd
+    # existing --recalc_IDs is stripped then re-added exactly once (no dup)
+    assert cmd.count("--recalc_IDs") == 1
     assert "/old/choices.json" not in cmd
     assert cmd.count("--N_win_file") == 1
     assert cmd.endswith(f"--N_win_file {choices.resolve()}")
     assert cmd.startswith("python find_clusters.py 0003-066 --band u")
+
+
+def test_build_rerun_command_adds_recalc_ids_when_absent(tmp_path):
+    # A source whose run_string had no --recalc_IDs still gets one (it's the
+    # usual want after an N edit; the user can delete it from the command).
+    folder = tmp_path / f"{SOURCE}_1994.00-2026.00"
+    folder.mkdir()
+    (folder / "run_string.txt").write_text(
+        "python find_clusters.py 0003-066 --band u --max_clusters 12\n")
+    choices = tmp_path / "nwin_choices.json"
+    cmd = build_rerun_command(folder, choices)
+    assert cmd.count("--recalc_IDs") == 1
+    assert cmd.endswith(f"--recalc_IDs --N_win_file {choices.resolve()}")
 
 
 def test_build_rerun_command_missing_run_string(tmp_path):
