@@ -124,7 +124,12 @@ def build_nwin_panel() -> html.Details:
                     dcc.Input(
                         id="nwin-comment", type="text", value="",
                         placeholder="optional comment for this choice",
-                        debounce=True,
+                        # debounce=False (default): no callback fires on
+                        # comment keystrokes, but Record/'r' reads the comment
+                        # as State — so it must reflect every keystroke
+                        # immediately, otherwise a quick type-then-record saves
+                        # a stale/empty comment.
+                        debounce=False,
                         style={"marginLeft": "0.75em", "flex": "1 1 0",
                                "maxWidth": "28em", "fontSize": "0.85em",
                                "padding": "0.25em 0.5em"},
@@ -156,10 +161,11 @@ def build_nwin_panel() -> html.Details:
                 ],
                 style={**_ROW, "padding": "0.4em 0"},
             ),
-            # Recorded choices + generated command
-            html.Div(id="nwin-choices-list",
-                     style={"fontSize": "0.85em", "color": "#444",
-                            "padding": "0.1em 0 0.3em"}),
+            # No bulleted list of recorded N choices — they're shown on the
+            # N-per-window strip chart (red dots), and each window's comment is
+            # loaded into the comment box on arrival. Keeps the plot area from
+            # shrinking on sources with many edits.
+            # Generated rerun command (revealed by "Generate rerun command").
             html.Div(
                 [
                     dcc.Clipboard(

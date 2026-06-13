@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, ctx, html, no_update
+from dash import Dash, Input, Output, State, ctx, no_update
 
 from ..data.fits_cache import split_source_band
 from ..data.loader import load_bundle
@@ -237,32 +237,6 @@ def _status_text(meta: dict, win_idx: int, n: int,
     else:
         parts.append("no recorded choice")
     return " · ".join(parts)
-
-
-def _choices_children(meta: dict, choices: dict[str, dict]) -> list:
-    if not choices:
-        return [html.Span("No recorded choices for this source.",
-                          style={"color": "#888"})]
-    items = []
-    label_set = set(meta["labels"]) if meta else set()
-    for label in sorted(choices):
-        c = choices[label]
-        stale = label not in label_set
-        cur = None
-        if meta and label in label_set:
-            cur = meta["cur_N"][meta["labels"].index(label)]
-        txt = f"{label}: N={c['N']}"
-        if cur is not None:
-            txt += f" (model has {cur})"
-        if c["comment"]:
-            txt += f" — {c['comment']}"
-        if stale:
-            txt += "  ⚠ matches no current window"
-        items.append(html.Li(txt, style={"color": "#a33" if stale else "#444"}))
-    return [html.Span(f"{len(choices)} recorded choice"
-                      f"{'' if len(choices) == 1 else 's'} "
-                      f"(autosaved to nwin_edits/nwin_choices.json):"),
-            html.Ul(items, style={"margin": "0.2em 0 0 1.2em"})]
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +486,6 @@ def register(
     # ---- record / clear / clear-all — autosaves to disk -----------------------
     @app.callback(
         Output("nwin-choices-store", "data", allow_duplicate=True),
-        Output("nwin-comment", "value"),
         Input("nwin-record-btn", "n_clicks"),
         Input("nwin-clear-btn", "n_clicks"),
         Input("nwin-clear-all-btn", "n_clicks"),
@@ -525,14 +498,14 @@ def register(
     )
     def _nwin_edit_choices(_r, _c, _ca, win_idx, n, comment, choices, meta):
         if not meta or win_idx is None:
-            return no_update, no_update
+            return no_update
         wi = int(np.clip(int(win_idx), 0, len(meta["labels"]) - 1))
         label = meta["labels"][wi]
         out = dict(choices or {})
         trig = ctx.triggered_id
         if trig == "nwin-record-btn":
             if n is None:
-                return no_update, no_update
+                return no_update
             out[label] = {"N": int(n), "comment": (comment or "").strip()}
         elif trig == "nwin-clear-btn":
             out.pop(label, None)
@@ -545,16 +518,27 @@ def register(
         save_nwin_choices(
             nwin_choices_path(recommendations_dir, meta["source"]),
             meta["source"], out, model_sha=csv_sha)
-        return out, ""
+        return out
 
-    # ---- recorded-choices list --------------------------------------------------
+    # ---- load a window's recorded comment into the comment box ----------------
+    # The recorded N choices are shown visually on the N-per-window strip chart,
+    # so there's no separate (growing) list. The per-choice comment is surfaced
+    # by loading it into the comment box when you arrive at that window; an
+    # empty box (no recorded comment) shows the placeholder inviting one. Fires
+    # on window change AND on the choices store changing (so a fresh record /
+    # clear is reflected without leaving the window).
     @app.callback(
-        Output("nwin-choices-list", "children"),
+        Output("nwin-comment", "value"),
+        Input("nwin-window-slider", "value"),
         Input("nwin-choices-store", "data"),
-        Input("nwin-meta", "data"),
+        State("nwin-meta", "data"),
     )
-    def _nwin_choices_list(choices, meta):
-        return _choices_children(meta or {}, choices or {})
+    def _nwin_load_comment(win_idx, choices, meta):
+        if not meta or win_idx is None:
+            return ""
+        wi = int(np.clip(int(win_idx), 0, len(meta["labels"]) - 1))
+        entry = (choices or {}).get(meta["labels"][wi])
+        return entry["comment"] if entry else ""
 
     # ---- generate the rerun command ----------------------------------------------
     @app.callback(

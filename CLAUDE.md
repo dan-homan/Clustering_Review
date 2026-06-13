@@ -624,7 +624,15 @@ no clustering runs in the app.
   merged CSV the choices were made against). The directory name is
   deliberately stage-agnostic — N editing is *technically* a Stage-2
   activity the builder has been doing offline, so it is NOT named
-  `stage1/`/`stage2/`. Schema (what `find_clusters.py --N_win_file`
+  `stage1/`/`stage2/`. There is **no on-screen list** of recorded choices
+  (it grew with edit count and shrank the plots) — the recorded N values
+  are the red dots on the N-per-window strip chart, and each window's
+  comment is loaded into the comment box by `_nwin_load_comment` when you
+  arrive at that window (empty box ⇒ placeholder invites one; the status
+  line also echoes it). The comment `dcc.Input` is `debounce=False` so a
+  type-then-record (button or `r`) never saves a stale/empty comment — no
+  callback keys on comment keystrokes, so per-keystroke updates are free.
+  Schema (what `find_clusters.py --N_win_file`
   consumes; bare int when there's no comment):
 
   ```jsonc
