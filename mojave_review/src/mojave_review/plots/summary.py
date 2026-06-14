@@ -473,8 +473,15 @@ def build_summary_figure(
     vector_scale_factor: float = 1.0,
     hide_non_robust: bool = False,
     only_3sigma: bool = False,
+    source_label: str = "",
 ) -> go.Figure:
     """Build a 2-row (top/bottom) summary figure for one of the four views.
+
+    `source_label`, when set, is drawn as a small badge in the top-right
+    corner (paper coords) instead of as a subplot/figure title. Subplot
+    titles were removed (they duplicated the axis titles); the only one
+    that carried extra meaning — the Kinematics velocity-vector panel — is
+    re-added as a single targeted annotation below.
 
     `vector_scale_factor` multiplies the auto-computed arrow length in the
     Kinematics view. The auto scale draws the *median* speed (floored at
@@ -496,25 +503,17 @@ def build_summary_figure(
     # Position Angle is a single plot; the other four views are top/bottom pairs.
     is_single = view == "Position Angle"
     if is_single:
-        fig = make_subplots(
-            rows=1, cols=1,
-            subplot_titles=("Position angle vs epoch [deg]",),
-        )
+        fig = make_subplots(rows=1, cols=1)
     else:
         # With a known z the Tb formula's (1+z) factor puts it in the host
-        # galaxy frame; with z=0 (unknown) it's the observed value.
+        # galaxy frame; with z=0 (unknown) it's the observed value. Used only
+        # for the y-axis title now that subplot titles are gone.
         z_known = z is not None and z > 0
         tb_label = "Tb host-frame [K]" if z_known else "Tb obs [K]"
-        titles = {
-            "Position":     ("Distance from origin [mas]",
-                             "XY position relative to core [mas]"),
-            "Flux":         ("I flux density [Jy]", tb_label),
-            "Polarization": ("Polarized flux [Jy]", "EVPA [deg]"),
-            "Kinematics":   ("Apparent speed vs distance", "X/Y velocity vectors"),
-        }[view]
+        # No subplot_titles: they duplicated the axis titles. Frees the
+        # inter-panel space for the resizable divider and the source badge.
         fig = make_subplots(
             rows=2, cols=1, shared_xaxes=False,
-            subplot_titles=titles,
             vertical_spacing=0.10,
         )
 
@@ -638,10 +637,29 @@ def build_summary_figure(
     fig.update_layout(
         template="plotly_white",
         height=720,
-        margin={"l": 60, "r": 20, "t": 50, "b": 50},
+        margin={"l": 60, "r": 20, "t": 36, "b": 50},
         legend={"title": "Cluster", "tracegroupgap": 4},
         dragmode="zoom",
     )
+
+    # Per-panel source badge, top-left of EACH subplot, anchored to the axis
+    # DOMAIN (not paper) so it (a) sits just above the actual plotted box —
+    # correct even where constrain="domain" shrinks it — and (b) tracks the
+    # panel when the divider resizes it. The Kinematics bottom panel is the
+    # velocity-vector plot, which used to carry a subtitle; that label is
+    # folded into its badge instead of a separate annotation.
+    if source_label:
+        def _badge(text, xref, yref):
+            fig.add_annotation(
+                text=f"<b>{text}</b>", xref=xref, yref=yref,
+                x=0.0, y=1.0, xanchor="left", yanchor="bottom", showarrow=False,
+                font={"size": 14, "color": "#333"},
+            )
+        _badge(source_label, "x domain", "y domain")          # top panel
+        if not is_single:
+            bottom = (f"{source_label},  X/Y Vector Plot"
+                      if view == "Kinematics" else source_label)
+            _badge(bottom, "x2 domain", "y2 domain")          # bottom panel
     return fig
 
 

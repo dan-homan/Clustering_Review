@@ -693,6 +693,7 @@ def register_callbacks(
             vector_scale_factor=vector_scale or 1.0,
             hide_non_robust=bool(hide_non_robust_val),
             only_3sigma=bool(only_3sigma_val),
+            source_label=src.source,
         )
         # Persist the user's zoom across selection clicks, visualize toggle,
         # vector scale change, edits etc. — anything that doesn't change the
@@ -938,6 +939,7 @@ def register_callbacks(
             image_source="fits" if use_fits_val else "synthesize",
             stacked=bool(stacked_val),
             uirevision=f"overlay:{source_folder}:{model_key}:{reset_counter or 0}",
+            source_label=src.source,
         )
 
     # ---- overlay Reset view button ---------------------------------------

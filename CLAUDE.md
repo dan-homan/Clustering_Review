@@ -160,6 +160,44 @@ views (Kinematics). Shapes are exclusively this callback's; no summary view uses
 layout shapes otherwise. Same "clientside `Plotly.relayout` + return
 `no_update`" discipline as the beam callback (see Don't/gotchas).
 
+**Source / context badges (no subplot or figure titles).** Neither pane uses
+subplot titles or a figure title — they duplicated the axis titles and ate
+vertical space. Instead:
+
+- **Summary (left)**: `build_summary_figure(source_label=)` draws the source
+  name as a top-left badge above **each** subplot. `make_subplots` is called
+  with **no `subplot_titles`**. Badges are anchored to the **axis domain**
+  (`x/y domain` top panel, `x2/y2 domain` bottom panel), NOT paper, so they sit
+  just above each plotted box and track the panels when the divider (below)
+  resizes them. The Kinematics velocity-vector panel — the one subplot title
+  that carried meaning beyond the axes (its X/Y axes are mas *positions* but
+  the arrows are *velocities*) — has no separate annotation; that label is
+  folded into the bottom badge as `<source>,  X/Y Vector Plot`.
+- **Overlay (right)**: `build_overlay_figure(source_label=)` /
+  `overlay_figure_for_epoch(source_label=)` replace the old centered figure
+  title with a top-left **three-line** badge: `<b>source</b>` / `epoch (val) ·
+  cbase` (+ mapping caveat) / the image provenance — one of `Clean Component
+  Convolution`, `Clean Component Convolution -Stacked · N epochs · median beam`,
+  or `FITS Image` (set as `image_source_label` in `overlay_figure_for_epoch`).
+  Anchored to **`x/y domain`** (NOT paper): the y-axis's `scaleanchor` +
+  `constrain="domain"` shrinks the actual plot box inside the paper area, so a
+  paper-anchored badge floated well above the image; the domain anchor pins it
+  just above the real plot-box top. Top margin is 52 to clear the 3 lines when
+  the box fills to the paper top (tall sources). Rebuilt per epoch server-side.
+
+**Resizable left-pane divider.** `assets/subplot_resize.js` floats a horizontal
+grab bar (`.hsplit-handle`) over `#summary-graph` at the inter-panel gap; a drag
+re-balances the two subplots' heights via `Plotly.relayout` of
+`yaxis.domain` / `yaxis2.domain`. Domains are independent of axis *ranges*, so
+zoom (`uirevision`) and the figure-level legend are untouched — that's why the
+legend survives. The split fraction lives in a module var and is re-applied
+after every redraw via the graph div's `plotly_afterplot` event (guarded
+against recursion; no-ops when already at target). Default split `0.50`
+reproduces `vertical_spacing=0.10` exactly (top `[0.55,1]`, bottom `[0,0.45]`),
+so the initial look is unchanged. Single-plot views (Position Angle) have no
+`yaxis2`; the handle hides and the relayout is skipped. Same
+"call Plotly directly from an `assets/` script" approach as `resizable.js`.
+
 ### Plotting conventions (always apply to spatial / sky plots)
 
 - **+x to the left** (astronomical convention). Use explicit `range=[hi, lo]`

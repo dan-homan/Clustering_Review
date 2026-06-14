@@ -202,6 +202,7 @@ def build_overlay_figure(
     n_levels: int = 10,
     show_3sigma: bool = False,
     image_source_label: str = "",
+    source_label: str = "",
     uirevision: str = "overlay",
 ) -> go.Figure:
     """Build the FITS-overlay figure for one epoch.
@@ -458,16 +459,35 @@ def build_overlay_figure(
     fig.update_layout(
         template="plotly_white",
         height=720,
-        margin=dict(l=60, r=20, t=40, b=50),
-        title=dict(text=(f"{epoch_name} ({epoch_val:.4f})  ·  "
-                         f"cbase = {1000*cbase:.2f} mJy/beam"
-                         + (f"  ·  {image_source_label}"
-                            if image_source_label else "")
-                         + ("  ·  CC↔cluster mapping unavailable"
-                            if cc_labels is None else "")),
-                   font=dict(size=12), x=0.5, xanchor="center"),
+        margin=dict(l=60, r=20, t=52, b=50),  # room for the 3-line badge
         dragmode="zoom",
         uirevision=uirevision,
+    )
+
+    # Badge instead of a centered title, top-left, three lines:
+    #   1. source
+    #   2. epoch (val) · cbase  (+ mapping caveat)
+    #   3. what's actually plotted (Clean Component Convolution [-Stacked] /
+    #      FITS Image) — so the viewer always knows the image's provenance.
+    # Anchored to the axis DOMAIN, not paper: the y-axis uses scaleanchor +
+    # constrain="domain" (equal aspect), which shrinks the actual plot box
+    # inside the paper area. A paper-anchored badge floated well above the
+    # image; "y domain" / "x domain" pins it just above the real plot-box top.
+    # Rebuilt per epoch server-side, so it stays in sync.
+    detail = (f"{epoch_name} ({epoch_val:.4f})  ·  "
+              f"cbase = {1000*cbase:.2f} mJy/beam"
+              + ("  ·  CC↔cluster mapping unavailable"
+                 if cc_labels is None else ""))
+    lines = []
+    if source_label:
+        lines.append(f"<b>{source_label}</b>")
+    lines.append(detail)
+    if image_source_label:
+        lines.append(image_source_label)
+    fig.add_annotation(
+        text="<br>".join(lines), xref="x domain", yref="y domain",
+        x=0.0, y=1.0, xanchor="left", yanchor="bottom",
+        align="left", showarrow=False, font=dict(size=12, color="#333"),
     )
     return fig
 
@@ -510,6 +530,7 @@ def overlay_figure_for_epoch(
     image_source: ImageSource = "synthesize",
     stacked: bool = False,
     uirevision: str = "overlay",
+    source_label: str = "",
 ) -> tuple[go.Figure, dict | None]:
     """Higher-level wrapper: prepares the Stokes I image (either by
     synthesizing it from clean components or by fetching the CLEAN FITS),
@@ -582,8 +603,8 @@ def overlay_figure_for_epoch(
         epoch_axes, (beam_bmaj, beam_bmin, beam_bpa) = result
         # Median noise across epochs sets the contour base for the average.
         inoise_use = float(np.median(pd_.epoch_info["inoise"]))
-        image_source_label = (f"Stacked image · {len(pd_.epoch_info)} epochs "
-                              "· median beam")
+        image_source_label = (f"Clean Component Convolution -Stacked · "
+                              f"{len(pd_.epoch_info)} epochs · median beam")
     elif image_source == "fits":
         ref = FitsRef(
             source_no_band=source_no_band,
@@ -596,7 +617,7 @@ def overlay_figure_for_epoch(
         except Exception as e:
             return _empty_overlay(f"Could not fetch FITS:\n{e}"), None
         epoch_axes = _load_fits_image(fits_path, core_x=core_x, core_y=core_y)
-        image_source_label = "FITS image"
+        image_source_label = "FITS Image"
     else:
         # Lazy import to avoid pulling scipy at module load time.
         from .synthesize_fits import synthesize_stokes_i
@@ -610,7 +631,7 @@ def overlay_figure_for_epoch(
             bmin=float(info["bmin"]),
             bpa=float(info["bpa"]),
         )
-        image_source_label = ""
+        image_source_label = "Clean Component Convolution"
 
     fig = build_overlay_figure(
         epoch_axes=epoch_axes,
@@ -625,6 +646,7 @@ def overlay_figure_for_epoch(
         bpa=beam_bpa,
         show_3sigma=show_3sigma,
         image_source_label=image_source_label,
+        source_label=source_label,
         uirevision=uirevision,
     )
 
