@@ -117,7 +117,11 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     html.Span("View:", style={"margin": "0 0.5em 0 1.5em"}),
                     dcc.RadioItems(
                         id="view-picker",
-                        options=[{"label": v, "value": v}
+                        # label kept short ("PA") to save a line; the value
+                        # stays "Position Angle" (used throughout summary.py /
+                        # callbacks.py).
+                        options=[{"label": ("PA" if v == "Position Angle" else v),
+                                  "value": v}
                                  for v in ("Position", "Position Angle", "Flux",
                                            "Polarization", "Kinematics")],
                         value="Position",
