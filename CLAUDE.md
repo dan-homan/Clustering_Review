@@ -127,18 +127,18 @@ The web app fetches these on demand and caches under
 
 ## Web app: views and conventions
 
-`build_summary_figure(view=...)` produces a 2-row figure for the first four
-views, and a **single-plot** figure for `XY Position`:
+`build_summary_figure(view=...)` produces a 2-row figure for four views, and a
+**single-plot** figure for `Position Angle`:
 
 | View | Top | Bottom |
 |---|---|---|
-| Position | distance vs epoch (+ polyfit overlay), 1σ error bars | PA vs epoch, 1σ error bars |
-| XY Position | *(single plot)* per-cluster centroid track in (x,y) mas vs core, +x reversed, equal scale, 1σ x/y error bars | — |
+| Position | distance vs epoch (+ polyfit overlay), 1σ error bars | per-cluster centroid track in (x,y) mas vs core (`_draw_xy`, row 2), +x reversed, equal scale, 1σ x/y error bars |
+| Position Angle | *(single plot)* PA vs epoch, 1σ error bars | — |
 | Flux | I flux vs epoch (log y-axis, 10ˣ ticks) | Tb vs epoch (log y-axis, 10ˣ ticks; 15.4 GHz, z param) |
 | Polarization | P flux vs epoch (log y-axis, 10ˣ ticks) | EVPA vs epoch |
 | Kinematics | speed vs distance, 1σ speed error bars, axes anchored at 0 | X/Y velocity vectors w/ arrowheads, +x reversed, autoranged |
 
-The 1σ error bars on Position / XY Position come from
+The 1σ error bars on Position / Position Angle come from
 `plots/uncertainty.attach_position_uncertainties` (CC-derived `sig_dx/sig_dy/
 sig_dist/sig_pa` columns); see [`docs/uncertainty_estimates.md`](docs/uncertainty_estimates.md).
 The **Visualize recommendations** checkbox defaults ON. (The old "Show 3σ
@@ -146,18 +146,19 @@ outlines" checkbox was removed; the 3σ-drawing code remains in
 `overlay.build_overlay_figure` behind `show_3sigma=False`, just no UI toggle.)
 
 **Active-epoch marker.** The epoch currently shown in the overlay panel is drawn
-as a thin vertical line on the epoch-axis summary views (Position / Flux /
-Polarization — both subplots), so the left and right panels stay visually
-linked while scrubbing. The `_epoch_label` callback publishes the active
-*decimal* epoch (`epoch_info[idx]['epoch_val']`) to `dcc.Store(id="active-epoch")`;
-a **clientside** callback then sets the figure's `shapes` via `Plotly.relayout`
-(refs `x`/`y domain` and `x2`/`y2 domain`) — no trace rebuild, so it's cheap and
-preserves zoom (`uirevision` untouched). It also keys on `summary-graph.figure`
-so the line re-applies after any server-side rebuild, and resets `shapes` to
-`[]` on the non-epoch views (XY Position / Kinematics). Shapes are exclusively
-this callback's; no summary view uses layout shapes otherwise. Same
-"clientside `Plotly.relayout` + return `no_update`" discipline as the beam
-callback (see Don't/gotchas).
+as a thin vertical line on the epoch-axis summary subplots, so the left and
+right panels stay visually linked while scrubbing. The `_epoch_label` callback
+publishes the active *decimal* epoch (`epoch_info[idx]['epoch_val']`) to
+`dcc.Store(id="active-epoch")`; a **clientside** callback then sets the figure's
+`shapes` via `Plotly.relayout` — no trace rebuild, so it's cheap and preserves
+zoom (`uirevision` untouched). A per-view `epochAxes` map picks which subplots
+get the line: `Position → [x]` (its bottom `x2` is the XY mas plot, not epoch),
+`Position Angle → [x]` (single epoch panel), `Flux`/`Polarization → [x, x2]`
+(both epoch). It also keys on `summary-graph.figure` so the line re-applies
+after any server-side rebuild, and resets `shapes` to `[]` on the non-epoch
+views (Kinematics). Shapes are exclusively this callback's; no summary view uses
+layout shapes otherwise. Same "clientside `Plotly.relayout` + return
+`no_update`" discipline as the beam callback (see Don't/gotchas).
 
 ### Plotting conventions (always apply to spatial / sky plots)
 
@@ -418,9 +419,9 @@ gold-halo overlay. Two callbacks write to `dcc.Store(id="selection-store")`:
   silently no-op).
 - **selectedData** (box/lasso) → replace the store contents.
 
-Selection is only meaningful on Position / Flux / Polarization views; the
-event handlers no-op on Kinematics. The store clears automatically on
-source or model change.
+Selection is meaningful on the epoch/position views (Position, Position Angle,
+Flux, Polarization); the event handlers no-op only on Kinematics. The store
+clears automatically on source or model change.
 
 Highlight: the `cluster_df["select"]` column is set per row from the store
 before passing to `build_summary_figure`; the existing gold open-circle

@@ -1,11 +1,13 @@
 """Plotly port of cluster_code.make_summary_plots.
 
-Renders a top/bottom pair of per-cluster summary plots for one of four views:
+Renders per-cluster summary plots for one of five views (top/bottom pair,
+except "Position Angle" which is a single panel):
 
-    "Position"      -> distance vs epoch        |  PA vs epoch
-    "Flux"          -> I flux vs epoch          |  Tb obs vs epoch  (log y-axis)
-    "Polarization"  -> P flux vs epoch (log y)  |  EVPA vs epoch
-    "Kinematics"    -> speed vs distance        |  X/Y velocity vectors
+    "Position"       -> distance vs epoch        |  XY position track (mas)
+    "Position Angle" -> PA vs epoch              (single panel)
+    "Flux"           -> I flux vs epoch          |  Tb obs vs epoch  (log y-axis)
+    "Polarization"   -> P flux vs epoch (log y)  |  EVPA vs epoch
+    "Kinematics"     -> speed vs distance        |  X/Y velocity vectors
 
 The numerical behavior mirrors cluster_code.py's make_summary_plots:
 PA / EVPA de-wrapping, the shift_pa flag, the Tb formula, per-cluster
@@ -45,7 +47,7 @@ _CL_FILL = ["none", "full", "none", "none", "full", "none", "full", "none", "ful
 
 _FREQ_GHZ = 15.4  # U-band
 
-VIEWS = ("Position", "XY Position", "Flux", "Polarization", "Kinematics")
+VIEWS = ("Position", "Position Angle", "Flux", "Polarization", "Kinematics")
 
 
 def _cluster_style(cid: int, robust: bool) -> tuple[str, str, bool]:
@@ -303,9 +305,10 @@ def _add_cluster_traces(
 
 def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
                    show_legend: bool) -> None:
-    """XY Position view: one cluster's centroid track in (x, y) mas relative
-    to the core, with 1-sigma x/y error bars. Mirrors _add_cluster_traces'
-    legend / selection / use-in-fit conventions but plots xpos vs ypos."""
+    """One cluster's centroid track in (x, y) mas relative to the core, with
+    1-sigma x/y error bars (the XY panel — the bottom of the Position view).
+    Mirrors _add_cluster_traces' legend / selection / use-in-fit conventions
+    but plots xpos vs ypos."""
     color, symbol, filled = _cluster_style(s.cid, s.robust)
     marker = _marker_style(color, symbol, filled)
     in_legend = s.cid == -1 or 0 <= s.cid < 1000
@@ -353,6 +356,47 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
             ),
             row=row, col=col,
         )
+
+
+def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
+             show_legend: bool) -> None:
+    """Draw the XY centroid-track panel (per-cluster (x, y) mas vs core) on
+    subplot ``row``: +x reversed, equal mas/pixel (scaleanchor + constrain),
+    a black × at the core, and a 10%-padded range. Used as the bottom panel of
+    the Position view. ``row`` selects the axis pair (1 -> x/y, 2 -> x2/y2)."""
+    suf = "" if row == 1 else str(row)
+    xaxis = f"x{suf}"
+    all_x: list[float] = [0.0]
+    all_y: list[float] = [0.0]
+    for s in slices:
+        if s.cid < 1:                       # skip unassigned (-1) + the core
+            continue
+        _add_xy_traces(fig, s, row=row, col=1, show_legend=show_legend)
+        all_x.extend(float(v) for v in s.xpos if np.isfinite(v))
+        all_y.extend(float(v) for v in s.ypos if np.isfinite(v))
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0], y=[0.0], mode="markers",
+            marker={"color": "black", "symbol": "x-thin", "size": 14,
+                    "line": {"width": 2, "color": "black"}},
+            name="core", showlegend=False,
+            hovertemplate="core (0, 0)<extra></extra>",
+        ),
+        row=row, col=1,
+    )
+    ax = np.asarray(all_x, dtype=float)
+    ay = np.asarray(all_y, dtype=float)
+    x_span = float(ax.max() - ax.min()) or 1.0
+    y_span = float(ay.max() - ay.min()) or 1.0
+    fig.update_xaxes(title_text="X [mas]",
+                     range=[float(ax.max()) + 0.1 * x_span,
+                            float(ax.min()) - 0.1 * x_span],   # reversed
+                     constrain="domain", row=row, col=1)
+    fig.update_yaxes(title_text="Y [mas]",
+                     range=[float(ay.min()) - 0.1 * y_span,
+                            float(ay.max()) + 0.1 * y_span],
+                     scaleanchor=xaxis, scaleratio=1.0,
+                     constrain="domain", row=row, col=1)
 
 
 # ---------------------------------------------------------------------------
@@ -449,12 +493,12 @@ def build_summary_figure(
     if view not in VIEWS:
         view = "Position"
 
-    # XY Position is a single plot; the other four views are top/bottom pairs.
-    is_xy = view == "XY Position"
-    if is_xy:
+    # Position Angle is a single plot; the other four views are top/bottom pairs.
+    is_single = view == "Position Angle"
+    if is_single:
         fig = make_subplots(
             rows=1, cols=1,
-            subplot_titles=("XY position relative to core [mas]",),
+            subplot_titles=("Position angle vs epoch [deg]",),
         )
     else:
         # With a known z the Tb formula's (1+z) factor puts it in the host
@@ -462,7 +506,8 @@ def build_summary_figure(
         z_known = z is not None and z > 0
         tb_label = "Tb host-frame [K]" if z_known else "Tb obs [K]"
         titles = {
-            "Position":     ("Distance from origin [mas]", "Position angle [deg]"),
+            "Position":     ("Distance from origin [mas]",
+                             "XY position relative to core [mas]"),
             "Flux":         ("I flux density [Jy]", tb_label),
             "Polarization": ("Polarized flux [Jy]", "EVPA [deg]"),
             "Kinematics":   ("Apparent speed vs distance", "X/Y velocity vectors"),
@@ -496,6 +541,8 @@ def build_summary_figure(
     motion_fits = {s.cid: _motion_fit(s) for s in slices}
 
     if view == "Position":
+        # Top: distance vs epoch (+ motion-fit overlay). Bottom: the XY
+        # centroid track (equal-aspect spatial plot).
         for s in slices:
             mf = motion_fits.get(s.cid)
             show_fit = (mf.pred_dist
@@ -508,16 +555,23 @@ def build_summary_figure(
                     show_fit=show_fit,
                     ylabel_for_hover="dist", error_y_arr=s.sig_dist,
                 )
+        fig.update_xaxes(title_text="Epoch", row=1, col=1)
+        fig.update_yaxes(title_text="Distance from origin [mas]", row=1, col=1)
+        # Legend comes from the distance traces (row 1); XY (row 2) reuses the
+        # same legendgroups, so show_legend=False avoids duplicate entries.
+        _draw_xy(fig, slices, row=2, show_legend=False)
+
+    elif view == "Position Angle":
+        # PA vs epoch, on its own panel.
+        for s in slices:
             if s.cid > 0:
                 _add_cluster_traces(
-                    fig, s, row=2, col=1, ydata=s.pa,
-                    show_legend=False, ylabel_for_hover="PA",
+                    fig, s, row=1, col=1, ydata=s.pa,
+                    show_legend=True, ylabel_for_hover="PA",
                     error_y_arr=s.sig_pa,
                 )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
-        fig.update_xaxes(title_text="Epoch", row=2, col=1)
-        fig.update_yaxes(title_text="Distance from origin [mas]", row=1, col=1)
-        fig.update_yaxes(title_text="PA [deg]", row=2, col=1)
+        fig.update_yaxes(title_text="PA [deg]", row=1, col=1)
 
     elif view == "Flux":
         # Plot raw I flux / Tb on log-scaled axes (10^x ticks); hover shows
@@ -580,45 +634,6 @@ def build_summary_figure(
         fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
                          scaleanchor="x2", scaleratio=1.0,
                          constrain="domain")
-
-    elif view == "XY Position":
-        # Per-cluster centroid track in (x, y) mas relative to the core, with
-        # 1-sigma x/y error bars. Skip unassigned (-1, NaN positions) and the
-        # core (cid 0, the origin — marked by the × below).
-        all_x: list[float] = [0.0]
-        all_y: list[float] = [0.0]
-        for s in slices:
-            if s.cid < 1:
-                continue
-            _add_xy_traces(fig, s, row=1, col=1, show_legend=True)
-            all_x.extend(float(v) for v in s.xpos if np.isfinite(v))
-            all_y.extend(float(v) for v in s.ypos if np.isfinite(v))
-        # Black × at the core (0, 0).
-        fig.add_trace(
-            go.Scatter(
-                x=[0.0], y=[0.0], mode="markers",
-                marker={"color": "black", "symbol": "x-thin", "size": 14,
-                        "line": {"width": 2, "color": "black"}},
-                name="core", showlegend=False,
-                hovertemplate="core (0, 0)<extra></extra>",
-            ),
-            row=1, col=1,
-        )
-        ax = np.asarray(all_x, dtype=float)
-        ay = np.asarray(all_y, dtype=float)
-        x_span = float(ax.max() - ax.min()) or 1.0
-        y_span = float(ay.max() - ay.min()) or 1.0
-        x_lo = float(ax.min()) - 0.1 * x_span
-        x_hi = float(ax.max()) + 0.1 * x_span
-        y_lo = float(ay.min()) - 0.1 * y_span
-        y_hi = float(ay.max()) + 0.1 * y_span
-        # +x to the left (astro convention) + equal mas/pixel scale, matching
-        # the overlay panel.
-        fig.update_xaxes(title_text="X [mas]", range=[x_hi, x_lo],
-                         constrain="domain", row=1, col=1)
-        fig.update_yaxes(title_text="Y [mas]", range=[y_lo, y_hi],
-                         scaleanchor="x", scaleratio=1.0,
-                         constrain="domain", row=1, col=1)
 
     fig.update_layout(
         template="plotly_white",

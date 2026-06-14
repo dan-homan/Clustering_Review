@@ -118,7 +118,7 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     dcc.RadioItems(
                         id="view-picker",
                         options=[{"label": v, "value": v}
-                                 for v in ("Position", "XY Position", "Flux",
+                                 for v in ("Position", "Position Angle", "Flux",
                                            "Polarization", "Kinematics")],
                         value="Position",
                         inline=True,

@@ -658,11 +658,11 @@ def register_callbacks(
             edits=edits, no_changes_val=no_changes_val, agg_rec=agg_rec,
         )
         # 1-sigma centroid-position uncertainties from the clean components,
-        # for error bars on the Position / XY Position views (other views
-        # don't use them, so skip the work). Computed on the plotted
-        # (rec-applied) df so CC→cluster membership matches what's shown.
-        # Decoration only — never break the plot.
-        if view in ("Position", "XY Position"):
+        # for error bars on the Position view (distance + XY panels) and the
+        # Position Angle view (PA error bars). Other views don't use them, so
+        # skip the work. Computed on the plotted (rec-applied) df so CC→cluster
+        # membership matches what's shown. Decoration only — never break the plot.
+        if view in ("Position", "Position Angle"):
             try:
                 eff_bundle = load_bundle(
                     source_folder, _effective_model_for_load(model_key))
@@ -1036,14 +1036,15 @@ def register_callbacks(
     )
 
     # ---- clientside: vertical "active epoch" marker on the summary plots ---
-    # Draws a thin vertical line at the overlay's current epoch on the summary
-    # views whose x-axis is epoch (Position / Flux / Polarization). Runs in the
-    # browser via Plotly.relayout on the figure's `shapes` (no trace rebuild),
-    # so scrubbing epochs is cheap and the user's zoom is preserved
-    # (uirevision untouched). Re-fires on summary-figure rebuilds too, since a
-    # fresh figure comes back with no shapes. Shapes are exclusively ours —
-    # no summary view uses layout shapes otherwise — so a blanket reset to []
-    # on the non-epoch views (XY Position / Kinematics) is safe.
+    # Draws a thin vertical line at the overlay's current epoch on each subplot
+    # whose x-axis is epoch. Runs in the browser via Plotly.relayout on the
+    # figure's `shapes` (no trace rebuild), so scrubbing epochs is cheap and the
+    # user's zoom is preserved (uirevision untouched). Re-fires on summary-figure
+    # rebuilds too (a fresh figure comes back with no shapes). Shapes are
+    # exclusively ours, so a blanket reset to [] on the non-epoch views is safe.
+    # Per-view epoch axes: Position's bottom (x2) is the XY mas plot (NOT epoch),
+    # so only its top (x) gets the line; Position Angle is a single epoch panel
+    # (x); Flux/Polarization are both-epoch (x + x2).
     app.clientside_callback(
         """
         function(epoch, view, _figure) {
@@ -1052,23 +1053,24 @@ def register_callbacks(
             var gd = wrapper.querySelector('.js-plotly-plot');
             if (!gd || !window.Plotly) return window.dash_clientside.no_update;
 
-            var epochViews = {'Position': 1, 'Flux': 1, 'Polarization': 1};
-            if (!epochViews[view] || epoch === null || epoch === undefined) {
+            var epochAxes = {
+                'Position': ['x'],
+                'Position Angle': ['x'],
+                'Flux': ['x', 'x2'],
+                'Polarization': ['x', 'x2']
+            };
+            var axes = epochAxes[view];
+            if (!axes || epoch === null || epoch === undefined) {
                 window.Plotly.relayout(gd, {shapes: []});
                 return window.dash_clientside.no_update;
             }
-            // Position/Flux/Polarization are 2-row figures: top x-axis is "x"
-            // (paired with "y"), bottom is "x2" (paired with "y2"). One full-
-            // height vertical line per subplot, spanning the axis domain.
             var lineStyle = {color: 'rgba(90,90,90,0.65)', width: 1.5};
-            var shapes = [
-                {type: 'line', xref: 'x',  yref: 'y domain',
-                 x0: epoch, x1: epoch, y0: 0, y1: 1,
-                 line: lineStyle, layer: 'below'},
-                {type: 'line', xref: 'x2', yref: 'y2 domain',
-                 x0: epoch, x1: epoch, y0: 0, y1: 1,
-                 line: lineStyle, layer: 'below'}
-            ];
+            var shapes = axes.map(function(ax) {
+                var ysuf = ax === 'x' ? 'y' : ax.replace('x', 'y');
+                return {type: 'line', xref: ax, yref: ysuf + ' domain',
+                        x0: epoch, x1: epoch, y0: 0, y1: 1,
+                        line: lineStyle, layer: 'below'};
+            });
             window.Plotly.relayout(gd, {shapes: shapes});
             return window.dash_clientside.no_update;
         }
