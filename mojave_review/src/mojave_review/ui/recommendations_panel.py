@@ -473,6 +473,13 @@ def build_recommendations_panel(admin: bool = False) -> html.Div:
             # clicking Submit without leaving the cell silently loses the
             # text.
             dcc.Store(id="submit-trigger", data=0),
+            # Bumped by the server submit callback AFTER the submission JSON is
+            # written. submit-trigger fires the write *and* every reader of the
+            # submissions dir at once (a race — readers can run first and miss
+            # the new file); this post-write signal lets those readers (source
+            # badges, notes, the Stage-3 aggregate panel + reseed) re-run once
+            # the file is guaranteed on disk.
+            dcc.Store(id="submission-saved-counter", data=0),
             # Holds the renumber action that's waiting on the conflict
             # dialog's confirmation; cleared whenever the dialog resolves.
             dcc.Store(id="pending-conflict-action", data=None),

@@ -566,6 +566,20 @@ recommendation for the current source into one model. Pure logic lives in
   ↻ Reload. The `agg-apply-status` span reports the generated command (run N);
   it's separate from `agg-summary`, which `_compose_agg` owns.
 
+- **Finalize with no changes** — the **"Mark final — no changes"** button
+  (beside Apply, `agg-finalize-nochange-btn` → `_finalize_no_changes`) handles
+  the common case where the admin accepts the current model as-is. There is no
+  `mojave-apply` to run (nothing changes in `Results/`), so it is done
+  **fully in-app**, writing only under `recommendations/`: appends a
+  `stage3_no_change_ledger_entry` ("… run N … — no changes"), sets Status →
+  `Stage 3 done · finalized (no changes) <date>` (phase → `final`), and
+  archives the open `submitted/*.json` → `considered/<date>/` (same as a real
+  apply), then bumps `reload-counter`. It **refuses** when the composed
+  decisions are non-empty (steer real changes to the apply button) and no-ops
+  when the source is already `final` with no open submissions (avoids ledger
+  spam). The run heading matches the apply path so run numbering stays
+  consistent across both.
+
 - **Repeat applies (run N).** Stage 3 can be applied again after a source is
   finalized — a reviewer re-submits (badge → `[final − N]`), the panel
   repopulates, the admin re-decides and applies. Everything **appends**:
@@ -818,6 +832,18 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
   Backup CSVs and other-reviewer JSON views are read-only. The
   recommendation panel applies an opacity/pointer-events lock and the
   autosave skips when `model_key != "current"`.
+- **Don't read the `submitted/` dir off `submit-trigger` — use
+  `submission-saved-counter`.** `submit-trigger` (clientside-bumped on the
+  Submit button) fires BOTH `_do_submit` (which *writes*
+  `submitted/<slug>.json`) and every reader of the submissions dir (source
+  badges, notes, the Stage-3 aggregate panel + reseed) in the same update
+  batch — with no ordering guarantee, so a reader can run before the write and
+  miss the new file (symptom: the admin's *own* just-submitted rec not showing
+  up in the aggregate, even on reseed). `_do_submit` bumps
+  `submission-saved-counter` AFTER `save_submitted`; readers take it as an
+  extra Input so they re-run once the file is on disk. Add it to any new
+  callback that reads `submitted/` and should reflect the current user's own
+  fresh submission.
 
 ## Known issues
 

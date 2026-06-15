@@ -297,6 +297,40 @@ def _flag(b: bool) -> str:
     return "Robust" if b else "Non-robust"
 
 
+def stage3_no_change_ledger_entry(
+    view: AggregationView,
+    *,
+    finalized_by: str,
+    date: str,
+    run_index: int = 1,
+    comments: str = "",
+) -> str:
+    """Ledger entry for finalizing a source with **no changes** applied — the
+    admin reviewed the submissions (if any) and accepted the current model
+    as-is, so nothing in ``Results/`` is touched.
+
+    ``comments`` is the collated reviewer-comment seed (see
+    ``notes.render.pending_notes_seed``); when non-empty it is preserved into
+    the entry under a "Reviewer comments" block, so finalizing with no
+    actionable items still keeps the reviewers' remarks in the permanent
+    notes.md before their submission JSONs are archived.
+
+    The heading matches ``stage3_ledger_entry`` ("Stage 3 reconciliation
+    (run N …)") so run numbering stays consistent and the history reads
+    uniformly whether or not a run changed anything."""
+    considered = ", ".join(f"{rv} ({when})" for rv, when in view.submissions) or "—"
+    lines = [
+        f"### {date} — Stage 3 reconciliation (run {run_index}, "
+        f"finalized by {finalized_by}) — no changes",
+        f"Considered: {considered}",
+        "Current model accepted as final; no robustness changes or edits applied.",
+    ]
+    c = (comments or "").strip()
+    if c:
+        lines += ["", "Reviewer comments:", c]
+    return "\n".join(lines)
+
+
 def stage3_ledger_entry(
     view: AggregationView,
     *,

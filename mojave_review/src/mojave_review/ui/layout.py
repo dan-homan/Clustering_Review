@@ -530,6 +530,25 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                            "color": "white", "border": "none",
                                            "borderRadius": "4px", "cursor": "pointer"},
                                 ),
+                                # Finalize with nothing to apply: when the admin
+                                # accepts the current model as-is (no robustness
+                                # changes, no edits), there's no mojave-apply to
+                                # run — this sets Status → "Stage 3 done" and
+                                # archives the considered submissions in-app
+                                # (writes only under recommendations/, never
+                                # Results/). Refuses if there ARE pending
+                                # decisions (use the apply button for those).
+                                html.Button(
+                                    "Mark final — no changes",
+                                    id="agg-finalize-nochange-btn", n_clicks=0,
+                                    title="Finalize this source without applying "
+                                          "any changes (accept the current model "
+                                          "as-is). No mojave-apply needed.",
+                                    style={"marginLeft": "0.6em", "padding": "0.3em 0.9em",
+                                           "fontSize": "0.85em", "background": "#3a7",
+                                           "color": "white", "border": "none",
+                                           "borderRadius": "4px", "cursor": "pointer"},
+                                ),
                                 html.Span(
                                     id="agg-summary",
                                     style={"marginLeft": "1em", "fontSize": "0.8em",

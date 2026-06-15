@@ -27,6 +27,7 @@ from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation, robust_inconsistencies
 from ..recommendations.aggregate import (
     build_aggregation_view, compose_aggregated, stage3_ledger_entry,
+    stage3_no_change_ledger_entry,
 )
 from ..recommendations.notebook_format import (
     format_submission_text, strip_for_notes,
@@ -170,8 +171,9 @@ def register_callbacks(
         Output("source-picker", "options"),
         Input("reload-counter", "data"),
         Input("submit-trigger", "data"),
+        Input("submission-saved-counter", "data"),
     )
-    def _refresh_source_badges(_reload_counter, _submit_trigger):
+    def _refresh_source_badges(_reload_counter, _submit_trigger, _saved):
         return build_source_options(
             results_dir, recommendations_dir, current_reviewer(reviewer))
 
@@ -187,8 +189,10 @@ def register_callbacks(
         Input("reload-counter", "data"),
         Input("submit-trigger", "data"),
         Input("notes-saved-counter", "data"),
+        Input("submission-saved-counter", "data"),
     )
-    def _refresh_notes(source_folder, _reload_counter, _submit_trigger, _notes_saved):
+    def _refresh_notes(source_folder, _reload_counter, _submit_trigger,
+                       _notes_saved, _saved):
         src = _source_from_folder(source_folder) if source_folder else None
         if src is None:
             return ""
@@ -283,8 +287,9 @@ def register_callbacks(
             Input("source-picker", "value"),
             Input("reseed-stage3-note-btn", "n_clicks"),
             Input("submit-trigger", "data"),
+            Input("submission-saved-counter", "data"),
         )
-        def _seed_stage3_note(source_folder, _reseed_n, _submit_trigger):
+        def _seed_stage3_note(source_folder, _reseed_n, _submit_trigger, _saved):
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return ""
@@ -349,8 +354,10 @@ def register_callbacks(
             Input("source-picker", "value"),
             Input("reload-counter", "data"),
             Input("submit-trigger", "data"),
+            Input("submission-saved-counter", "data"),
         )
-        def _build_agg_panel(source_folder, _reload_counter, _submit_trigger):
+        def _build_agg_panel(source_folder, _reload_counter, _submit_trigger,
+                             _saved):
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return build_aggregation_children(
@@ -556,6 +563,103 @@ def register_callbacks(
                     f"sets Status. Then click ↻ Reload here.")
             return (hide, overlay, cmd, hint,
                     f"Command generated (run {run_index}) — copy it below, then Reload.")
+
+        # ---- Stage 3: finalize with no changes (fully in-app) -------------
+        # When the admin accepts the current model as-is, there is nothing to
+        # apply to Results/, so we skip mojave-apply entirely and do only the
+        # bookkeeping under recommendations/: archive the considered
+        # submissions, append a "no changes" ledger entry, and set Status →
+        # "Stage 3 done" (phase → final). Refuses when the composed decisions
+        # are non-empty — those are real changes and belong on the apply path
+        # (which regenerates Results/ + cuts a backup). Writes nothing under
+        # Results/. Bumps reload-counter so badges / panel / status refresh.
+        @app.callback(
+            Output("agg-apply-status", "children", allow_duplicate=True),
+            Output("reload-counter", "data", allow_duplicate=True),
+            Input("agg-finalize-nochange-btn", "n_clicks"),
+            State({"type": "agg-rob-final", "cid": ALL}, "value"),
+            State({"type": "agg-rob-final", "cid": ALL}, "id"),
+            State({"type": "agg-rob-reason", "cid": ALL}, "value"),
+            State({"type": "agg-rob-reason", "cid": ALL}, "id"),
+            State({"type": "agg-edit-accept", "key": ALL}, "value"),
+            State({"type": "agg-edit-accept", "key": ALL}, "id"),
+            State({"type": "agg-edit-reason", "key": ALL}, "value"),
+            State({"type": "agg-edit-reason", "key": ALL}, "id"),
+            State("source-picker", "value"),
+            State("reload-counter", "data"),
+            prevent_initial_call=True,
+        )
+        def _finalize_no_changes(_n, final_vals, final_ids, rob_reason_vals,
+                                 rob_reason_ids, accept_vals, accept_ids,
+                                 edit_reason_vals, edit_reason_ids,
+                                 source_folder, reload_ctr):
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return "No source selected.", no_update
+            finals, rob_reasons, accepted, edit_reasons = _collect_decisions(
+                final_ids, final_vals, rob_reason_ids, rob_reason_vals,
+                accept_ids, accept_vals, edit_reason_ids, edit_reason_vals)
+            recs = _submitted_recs(recommendations_dir, src.source)
+            # Already finalized and nothing new to consider: a second click
+            # would just append a redundant run to the ledger. No-op instead.
+            if (not recs
+                    and source_phase(recommendations_dir, src.source) == "final"):
+                return "Already finalized — nothing new to consider.", no_update
+            try:
+                current_df = load_bundle(source_folder, "current").cluster_df
+            except Exception as e:
+                return f"Could not load current model: {e}", no_update
+            view = build_aggregation_view(src.source, recs, current_df)
+            rec = compose_aggregated(
+                src.source, "aggregated",
+                robustness_finals=finals, robustness_reasons=rob_reasons,
+                accepted_edit_keys=accepted, edit_reasons=edit_reasons,
+                store_payload=view.store_payload())
+            if not rec.is_empty():
+                return ("There are decisions to apply — use “Apply aggregated "
+                        "decisions” instead.", no_update)
+
+            today = _date.today().isoformat()
+            try:
+                md = read_note(notes_dir, src.source)
+                if md is None:
+                    md = scaffold(src.source, src.epoch_min, src.epoch_max)
+                run_index = get_section(md, "ledger").count(
+                    "Stage 3 reconciliation") + 1
+                # Preserve reviewer comments into notes.md before the
+                # submissions are archived below (else they'd survive only in
+                # considered/<date>/*.json). Read while submitted/ is intact.
+                comments = pending_notes_seed(recommendations_dir, src.source)
+                entry = stage3_no_change_ledger_entry(
+                    view, finalized_by=current_reviewer(reviewer),
+                    date=today, run_index=run_index, comments=comments)
+                md = append_ledger(md, entry)
+                md = set_status(
+                    md, f"Stage 3 done · finalized (no changes) {today}")
+                write_note(notes_dir, src.source, md)
+                # Clear the folded submissions from "open" (same as a real
+                # Stage-3 apply), preserving them under considered/<date>/.
+                slugs = [reviewer_slug(r.reviewer) for r in recs]
+                archive_considered_submissions(
+                    recommendations_dir, src.source, slugs, date=today)
+            except Exception as e:
+                return f"Finalize failed: {e}", no_update
+            extra = f" ({len(recs)} submission(s) archived)" if recs else ""
+            return (f"Finalized (run {run_index}) — no changes applied{extra}.",
+                    int(reload_ctr or 0) + 1)
+
+        # The apply / finalize status message is about the source it ran on;
+        # clear it when the admin switches sources so a stale "Finalized…" or
+        # "Command generated…" note doesn't bleed onto the next source. Keyed
+        # on the picker only — NOT reload-counter, which _finalize_no_changes
+        # bumps in the same turn it sets the message.
+        @app.callback(
+            Output("agg-apply-status", "children", allow_duplicate=True),
+            Input("source-picker", "value"),
+            prevent_initial_call=True,
+        )
+        def _clear_agg_status(_source_folder):
+            return ""
 
     # ---- robust-consistency warning banner -------------------------------
     # Read-only: flag a source whose saved CSV has a per-epoch robust
