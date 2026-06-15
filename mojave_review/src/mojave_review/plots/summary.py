@@ -293,10 +293,13 @@ def _add_cluster_traces(
         )
 
     if show_fit is not None:
+        # Motion fit: SOLID (vs the thin dotted epoch-to-epoch connector line
+        # above) so it reads as the model/trend; same width and cluster colour,
+        # so solid-vs-dotted alone carries the distinction.
         fig.add_trace(
             go.Scatter(
                 x=s.time, y=show_fit, mode="lines",
-                line={"color": color, "width": 1, "dash": "dot"},
+                line={"color": color, "width": 1, "dash": "solid"},
                 showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
             ),
             row=row, col=col,
