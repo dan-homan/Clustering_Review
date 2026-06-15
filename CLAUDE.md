@@ -347,8 +347,11 @@ Each dropdown option is `<source>   <reviewer-status>   [badge]` — built by
 `build_source_options(results_dir, recommendations_dir, reviewer)` and refreshed
 live by `_refresh_source_badges` (on reload-counter / submit-trigger; the
 initial layout builds it too, so a returning reviewer sees their state on a
-fresh tab). Rich `html.Span` labels carry the italic/plain/bold; a `search`
-field (= source name) keeps type-to-filter working.
+fresh tab). Labels are **plain strings** (`<source>   <status>   [badge]`); a
+`search` field (= source name) keeps type-to-filter working. They are NOT rich
+`html.Span`s: this Dash version's `dcc.Dropdown` only accepts `string | number`
+for an option's `label` (see Don't/gotchas), and a component there throws React
+error #31 and blanks the surrounding render.
 
 - **Source name only** — the date range is dropped (same for every source in
   this review; revisit if mixed ranges ever appear).
@@ -832,18 +835,37 @@ point `--results-dir` at the local mirror path — no in-app Drive auth needed.
   Backup CSVs and other-reviewer JSON views are read-only. The
   recommendation panel applies an opacity/pointer-events lock and the
   autosave skips when `model_key != "current"`.
-- **Don't read the `submitted/` dir off `submit-trigger` — use
-  `submission-saved-counter`.** `submit-trigger` (clientside-bumped on the
-  Submit button) fires BOTH `_do_submit` (which *writes*
-  `submitted/<slug>.json`) and every reader of the submissions dir (source
-  badges, notes, the Stage-3 aggregate panel + reseed) in the same update
-  batch — with no ordering guarantee, so a reader can run before the write and
-  miss the new file (symptom: the admin's *own* just-submitted rec not showing
-  up in the aggregate, even on reseed). `_do_submit` bumps
-  `submission-saved-counter` AFTER `save_submitted`; readers take it as an
-  extra Input so they re-run once the file is on disk. Add it to any new
-  callback that reads `submitted/` and should reflect the current user's own
-  fresh submission.
+- **`dcc.Dropdown` option labels must be `string | number`, never a
+  component.** This Dash version (renderer v4_2_0) types `options` as
+  `{label: [string|number], value: [string|number]}`. Putting an `html.Span`
+  (or any component) in `label` emits a raw `{props,type,namespace}` dict that
+  react-select renders directly → **React error #31** ("Objects are not valid
+  as a React child"), which Dash's error boundary catches by **blanking the
+  surrounding render pass** — so an unrelated panel (e.g. the Stage-3
+  aggregate body) silently shows nothing. `build_source_options` was the
+  offender; labels are now plain strings. Symptom is admin-flavoured only
+  because the crash tends to take down whatever else re-renders in the same
+  pass. Use the `search` field for type-to-filter; convey styling/status in
+  the label text, not fonts.
+- **Multi-output callbacks need `allow_duplicate=True` on EVERY duplicated
+  output, not just one.** `nwin_callbacks._nwin_command` set it on
+  `nwin-cmd-text.value` but not `nwin-cmd-row.style` (also output by
+  `_nwin_load_source`). Server registration tolerated it, but the browser's
+  `computeGraphs`/`validateDependencies` rejects it with **"Duplicate callback
+  outputs"**, which kills the ENTIRE client-side callback graph for that mode
+  (here: `--admin`) — every callback silently stops dispatching, so panels
+  never populate. Invisible to curl/`test_client` smoke tests (they invoke
+  callbacks server-side, bypassing the client graph). When two callbacks share
+  an output, the later/duplicate one needs `allow_duplicate=True` on *that
+  exact* output.
+- **Readers of `submitted/` (badges, notes, Stage-3 aggregate + reseed) fire
+  off `submit-trigger`.** There's a latent race: `submit-trigger`
+  (clientside-bumped on Submit) fires BOTH `_do_submit` (which *writes*
+  `submitted/<slug>.json`) and those readers in the same batch with no ordering
+  guarantee, so a reader can run before the write and miss the current user's
+  *own* just-submitted rec until the next ↻ Reload. A post-write signal store
+  was tried to close this but introduced worse problems and was reverted — if
+  you re-attempt it, verify it doesn't break the admin callback graph.
 
 ## Known issues
 

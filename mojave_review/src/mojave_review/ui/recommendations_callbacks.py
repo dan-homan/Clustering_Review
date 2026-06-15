@@ -1074,7 +1074,6 @@ def register(
     @app.callback(
         Output("submission-modal", "style"),
         Output("submission-text", "value"),
-        Output("submission-saved-counter", "data"),
         Input("submit-trigger", "data"),
         State("source-picker", "value"),
         State("model-picker", "value"),
@@ -1089,24 +1088,22 @@ def register(
         State({"type": "epoch-comment", "epoch": ALL}, "id"),
         State("edits-store", "data"),
         State("no-changes-checkbox", "value"),
-        State("submission-saved-counter", "data"),
         prevent_initial_call=True,
     )
     def _do_submit(_trigger, source_folder, model_key, source_comment,
-                   cluster_rows, epoch_vals, epoch_ids, edits, no_changes_val,
-                   saved_ctr):
+                   cluster_rows, epoch_vals, epoch_ids, edits, no_changes_val):
         epoch_rows = [{"epoch": i["epoch"], "comment": (v or "")}
                       for i, v in zip(epoch_ids or [], epoch_vals or [])]
         # Defensive: don't fire on non-current models (button is hidden but
         # could still be triggered by stale state).
         if not source_folder or model_key != "current":
-            return no_update, no_update, no_update
+            return no_update, no_update
         source_name = _source_name_from_folder(source_folder)
         if source_name is None:
-            return no_update, no_update, no_update
+            return no_update, no_update
         if recommendations_locked(recommendations_dir, source_name, admin=admin):
             # Stage 1 / Stage 2 source, non-admin: not open for submission.
-            return no_update, no_update, no_update
+            return no_update, no_update
         bundle = load_bundle(source_folder, "current")
         # In token-auth mode, ``current_reviewer(reviewer)`` is the
         # logged-in user's name; in single-user mode it's the CLI value.
@@ -1131,10 +1128,7 @@ def register(
             "background": "rgba(0,0,0,0.4)", "zIndex": 1000,
             "overflow": "auto",
         }
-        # Bump the post-write signal AFTER save_submitted, so readers of the
-        # submissions dir (badges / notes / Stage-3 aggregate) re-run against
-        # the file now on disk rather than racing the write.
-        return overlay_style, text, int(saved_ctr or 0) + 1
+        return overlay_style, text
 
     # Close button (header X or footer "Close") — both hide the modal.
     @app.callback(

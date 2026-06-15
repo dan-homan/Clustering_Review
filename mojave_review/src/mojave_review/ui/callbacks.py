@@ -171,9 +171,8 @@ def register_callbacks(
         Output("source-picker", "options"),
         Input("reload-counter", "data"),
         Input("submit-trigger", "data"),
-        Input("submission-saved-counter", "data"),
     )
-    def _refresh_source_badges(_reload_counter, _submit_trigger, _saved):
+    def _refresh_source_badges(_reload_counter, _submit_trigger):
         return build_source_options(
             results_dir, recommendations_dir, current_reviewer(reviewer))
 
@@ -189,10 +188,9 @@ def register_callbacks(
         Input("reload-counter", "data"),
         Input("submit-trigger", "data"),
         Input("notes-saved-counter", "data"),
-        Input("submission-saved-counter", "data"),
     )
     def _refresh_notes(source_folder, _reload_counter, _submit_trigger,
-                       _notes_saved, _saved):
+                       _notes_saved):
         src = _source_from_folder(source_folder) if source_folder else None
         if src is None:
             return ""
@@ -287,9 +285,8 @@ def register_callbacks(
             Input("source-picker", "value"),
             Input("reseed-stage3-note-btn", "n_clicks"),
             Input("submit-trigger", "data"),
-            Input("submission-saved-counter", "data"),
         )
-        def _seed_stage3_note(source_folder, _reseed_n, _submit_trigger, _saved):
+        def _seed_stage3_note(source_folder, _reseed_n, _submit_trigger):
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return ""
@@ -354,10 +351,8 @@ def register_callbacks(
             Input("source-picker", "value"),
             Input("reload-counter", "data"),
             Input("submit-trigger", "data"),
-            Input("submission-saved-counter", "data"),
         )
-        def _build_agg_panel(source_folder, _reload_counter, _submit_trigger,
-                             _saved):
+        def _build_agg_panel(source_folder, _reload_counter, _submit_trigger):
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return build_aggregation_children(
@@ -375,12 +370,17 @@ def register_callbacks(
             if not recs and source_phase(recommendations_dir, src.source) == "final":
                 md = read_note(notes_dir, src.source)
                 status = get_status(md) if md else ""
+                # Prepend the hint, flattened — `[hint, children]` would nest the
+                # children list, and a nested list inside a `children` array is a
+                # raw component-dict React can't render (error #31, "use an array
+                # instead"). Since the first source on load can be `final`, that
+                # crashed the whole admin render on startup.
                 children = [html.Div(
                     f"✓ {status or 'Finalized'}. New reviewer submissions will "
                     f"appear here for a follow-up Stage 3 run.",
                     style={"fontSize": "0.85em", "color": "#777",
                            "padding": "0.5em 0"},
-                ), children]
+                ), *children]
             return children, view.store_payload()
 
         # ---- Stage 3 aggregation: compose decisions -> preview rec --------

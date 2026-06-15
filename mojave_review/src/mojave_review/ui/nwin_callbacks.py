@@ -543,7 +543,7 @@ def register(
     # ---- generate the rerun command ----------------------------------------------
     @app.callback(
         Output("nwin-cmd-text", "value", allow_duplicate=True),
-        Output("nwin-cmd-row", "style"),
+        Output("nwin-cmd-row", "style", allow_duplicate=True),
         Input("nwin-cmd-btn", "n_clicks"),
         State("nwin-meta", "data"),
         State("nwin-choices-store", "data"),

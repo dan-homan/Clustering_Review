@@ -73,6 +73,9 @@ def test_label_drops_date_range(tmp_path):
     (res / "0003-066u.1994.00-2026.00.merged_win_results.csv").write_text(
         "clusterID,epoch,robust\n0,2000.0,True\n")
     opts = build_source_options(tmp_path / "Results", None)
-    # label is a Span; first child is the bare source name (no date range)
-    assert opts[0]["label"].children[0].children == "0003-066u"
+    # label is a plain string (dcc.Dropdown only accepts string|number labels
+    # in this Dash version — a component there throws React error #31). With
+    # recommendations_dir=None there's no status/badge, so it's the bare source
+    # name with the date range dropped.
+    assert opts[0]["label"] == "0003-066u"
     assert opts[0]["search"] == "0003-066u"

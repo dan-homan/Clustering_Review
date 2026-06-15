@@ -50,21 +50,24 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
     - the bracket badge from ``store.source_badge`` (``[N]`` / ``[final]`` /
       ``[stage 1]`` …), kept as-is.
 
-    Labels are rich (html.Span) for the italic/plain/bold note; a ``search``
-    field keeps type-to-filter working. Shared by the initial layout and the
-    live-refresh callback. With ``recommendations_dir=None`` (introspection) the
-    note + badge are omitted."""
+    Labels are **plain strings** (``<source>   <status>   [badge]``). The
+    dcc.Dropdown in this Dash version only accepts ``string | number`` for an
+    option's ``label`` — a component (html.Span) there emits a raw
+    ``{props,type,namespace}`` dict that react-select renders directly, which
+    throws React error #31 ("Objects are not valid as a React child") and the
+    error boundary blanks the surrounding render. So the rich italic/bold note
+    is folded into the text instead. A ``search`` field keeps type-to-filter
+    working. With ``recommendations_dir=None`` (introspection) the note + badge
+    are omitted."""
     out: list[dict] = []
     for s in list_sources(results_dir):
-        children: list = [html.Span(s.source)]
-        text, style = _reviewer_status(recommendations_dir, s.source, reviewer)
+        parts: list[str] = [s.source]
+        text, _style = _reviewer_status(recommendations_dir, s.source, reviewer)
         if text:
-            children.append(html.Span(f"   {text}", style=style))
+            parts.append(text)
         if recommendations_dir is not None:
-            children.append(html.Span(
-                f"   {source_badge(recommendations_dir, s.source)}",
-                style={"color": "#888"}))
-        out.append({"label": html.Span(children), "value": str(s.folder),
+            parts.append(source_badge(recommendations_dir, s.source))
+        out.append({"label": "   ".join(parts), "value": str(s.folder),
                     "search": s.source})
     return out
 
@@ -564,9 +567,20 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                    "display": "flex", "alignItems": "center",
                                    "flexWrap": "wrap"},
                         ),
+                        # The decisions (submissions list, robustness table,
+                        # cross-ID / use-in-fit Accept checkboxes, reviewer
+                        # comments) come FIRST — they're the actionable content,
+                        # so they sit directly under the buttons rather than
+                        # below the dated-note box (which buried them).
+                        html.Div(
+                            id="agg-panel-body",
+                            style={"padding": "0.1em 1.25em 1em",
+                                   "maxHeight": "46vh", "overflowY": "auto"},
+                        ),
                         # Add a dated note to the source log (section 3 ledger).
                         # Seeded with pending reviewer comments; editable; the
                         # admin trims and clicks "Add" to append a dated entry.
+                        # Secondary to the decisions above, so it lives below them.
                         html.Div(
                             [
                                 html.Div(
@@ -615,11 +629,6 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                             ],
                             style={"padding": "0.4em 1.25em 0.6em",
                                    "borderTop": "1px dashed #ddd"},
-                        ),
-                        html.Div(
-                            id="agg-panel-body",
-                            style={"padding": "0.1em 1.25em 1em",
-                                   "maxHeight": "46vh", "overflowY": "auto"},
                         ),
                     ],
                     id="agg-details",
