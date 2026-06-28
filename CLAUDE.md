@@ -545,43 +545,57 @@ recommendation for the current source into one model. Pure logic lives in
   store is always present (non-admin leaves it `None`).
 
 - **Apply** — the **"Apply aggregated decisions (Stage 3)"** button opens a
-  confirm modal whose action **generates a copy-paste `mojave-apply` command**
-  (NOT an in-app subprocess — that inherited the app's env and hit the
-  `MOJAVE_CODE` pitfall; same cut-n-paste model as the Stage-2 baseline apply).
-  `ui/callbacks._apply_aggregated` composes the rec → writes
-  `recommendations/<source>/stage3/aggregated.json` + a **sidecar**
-  `aggregated.stage3.json` (`considered_slugs`, the pre-rendered
-  `stage3_ledger_entry` with a `{{BACKUP_REF}}` placeholder + run N counted from
-  the ledger, and the target `status`), then shows the command in the shared
-  Stage-2 `apply-cmd-modal`. The command is
-  `mojave-apply --recommendation …/aggregated.json --stage3-meta …/aggregated.stage3.json`
-  (+ `--results-dir/--source/--recommendations-dir/--production-code-dir`, no
-  `--no-confirm` so the terminal prompts). The app writes only under
-  `recommendations/`, never `Results/`. **`mojave-apply --stage3-meta`**
-  (`cli/apply._apply_stage3_meta`) does the bookkeeping atomically after the
-  apply: backs up + regenerates `Results/` (PDF/MP4 only when the source
-  carries them — plots are opt-in via `find_clusters --make_plots` now, and
-  `--skip-plots` force-skips; skipped plots are MOVED into the backup),
-  archives the JSON to `applied/`,
-  moves the folded `submitted/*.json` → `considered/<date>/`, appends the
-  ledger entry (resolving `{{BACKUP_REF}}` to the backup it cut), and sets
-  Status → `Stage 3 done · applied <date>`. After running it, the admin clicks
-  ↻ Reload. The `agg-apply-status` span reports the generated command (run N);
-  it's separate from `agg-summary`, which `_compose_agg` owns.
+  confirm modal whose action forks on whether the composed rec carries any
+  decisions (`Recommendation.is_empty()`):
+  - **Pending decisions** → **generates a copy-paste `mojave-apply` command**
+    (NOT an in-app subprocess — that inherited the app's env and hit the
+    `MOJAVE_CODE` pitfall; same cut-n-paste model as the Stage-2 baseline
+    apply). `ui/callbacks._apply_aggregated` composes the rec → writes
+    `recommendations/<source>/stage3/aggregated.json` + a **sidecar**
+    `aggregated.stage3.json` (`considered_slugs`, the pre-rendered
+    `stage3_ledger_entry` with a `{{BACKUP_REF}}` placeholder + run N counted
+    from the ledger, and the target `status`), then shows the command in the
+    shared Stage-2 `apply-cmd-modal`. The command is
+    `mojave-apply --recommendation …/aggregated.json --stage3-meta …/aggregated.stage3.json`
+    (+ `--results-dir/--source/--recommendations-dir/--production-code-dir`,
+    no `--no-confirm` so the terminal prompts). The app writes only under
+    `recommendations/`, never `Results/`. **`mojave-apply --stage3-meta`**
+    (`cli/apply._apply_stage3_meta`) does the bookkeeping atomically after
+    the apply: backs up + regenerates `Results/` (PDF/MP4 are opt-in via
+    `mojave-apply --make-plots`, mirroring `find_clusters --make_plots`; the
+    default is to SKIP regeneration and MOVE any prior plots into the
+    backup), archives the JSON to `applied/`, moves the folded
+    `submitted/*.json` → `considered/<date>/`, appends the ledger entry
+    (resolving `{{BACKUP_REF}}` to the backup it cut), and sets Status →
+    `Stage 3 done · applied <date>`. After running it, the admin clicks ↻
+    Reload.
+  - **No decisions** → does the Stage-3 bookkeeping **fully in-app** (there's
+    no `Results/` mutation, so no `mojave-apply` to run): appends a
+    `stage3_no_change_ledger_entry` (folds in `pending_notes_seed` so reviewer
+    comments survive into `notes.md`), sets Status → `Stage 3 done · finalized
+    (no changes) <date>`, archives the open `submitted/*.json` →
+    `considered/<date>/` (same as a real apply), and bumps `reload-counter`.
+    No command modal is shown; `agg-apply-status` reports the finalize.
+  The `agg-apply-status` span reports the generated command or the in-app
+  finalize (run N); it's separate from `agg-summary`, which `_compose_agg`
+  owns.
 
-- **Finalize with no changes** — the **"Mark final — no changes"** button
-  (beside Apply, `agg-finalize-nochange-btn` → `_finalize_no_changes`) handles
-  the common case where the admin accepts the current model as-is. There is no
-  `mojave-apply` to run (nothing changes in `Results/`), so it is done
-  **fully in-app**, writing only under `recommendations/`: appends a
-  `stage3_no_change_ledger_entry` ("… run N … — no changes"), sets Status →
-  `Stage 3 done · finalized (no changes) <date>` (phase → `final`), and
-  archives the open `submitted/*.json` → `considered/<date>/` (same as a real
-  apply), then bumps `reload-counter`. It **refuses** when the composed
-  decisions are non-empty (steer real changes to the apply button) and no-ops
-  when the source is already `final` with no open submissions (avoids ledger
-  spam). The run heading matches the apply path so run numbering stays
-  consistent across both.
+- **Needs Discussion** — the **"Needs Discussion"** button
+  (beside Apply, `agg-needs-discussion-btn` → `_mark_needs_discussion`) flags
+  the source for further reviewer discussion without finalizing it. The source
+  **stays in Stage 2** (phase `open`, submissions stay open — nothing is
+  archived, `Results/` is untouched). The notes Status gets a
+  `· needs discussion <date>` suffix (idempotent: re-clicking just refreshes
+  the date via a regex strip-and-reappend) and a dated `### <date> — Flagged:
+  needs discussion (by <admin>)` ledger entry is appended, folding in any
+  pending reviewer comments (`pending_notes_seed`) so they survive into
+  `notes.md` regardless of how the discussion shakes out. The flag is detected
+  by `store.source_needs_discussion` (substring check on the Status line),
+  which `_reviewer_status` (`ui/layout.py`) checks **before** the per-reviewer
+  branches — so every reviewer sees a single bold-orange `needs discussion`
+  tag in the picker (overrides their personal submitted/in-progress/needs-
+  review status, source-level flag). The button refuses when the phase is not
+  `open`. Cleared by a subsequent Stage 3 apply (status → `Stage 3 done`).
 
 - **Repeat applies (run N).** Stage 3 can be applied again after a source is
   finalized — a reviewer re-submits (badge → `[final − N]`), the panel

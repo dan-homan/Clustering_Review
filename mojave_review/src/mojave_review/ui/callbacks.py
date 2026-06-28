@@ -471,6 +471,7 @@ def register_callbacks(
             Output("apply-cmd-text", "value", allow_duplicate=True),
             Output("apply-cmd-hint", "children", allow_duplicate=True),
             Output("agg-apply-status", "children"),
+            Output("reload-counter", "data", allow_duplicate=True),
             Input("agg-apply-confirm", "n_clicks"),
             State({"type": "agg-rob-final", "cid": ALL}, "value"),
             State({"type": "agg-rob-final", "cid": ALL}, "id"),
@@ -481,16 +482,17 @@ def register_callbacks(
             State({"type": "agg-edit-reason", "key": ALL}, "value"),
             State({"type": "agg-edit-reason", "key": ALL}, "id"),
             State("source-picker", "value"),
+            State("reload-counter", "data"),
             prevent_initial_call=True,
         )
         def _apply_aggregated(_n, final_vals, final_ids, rob_reason_vals,
                               rob_reason_ids, accept_vals, accept_ids,
                               edit_reason_vals, edit_reason_ids,
-                              source_folder):
+                              source_folder, reload_ctr):
             hide = {"display": "none"}
 
             def fail(msg):
-                return (hide, no_update, no_update, no_update, msg)
+                return (hide, no_update, no_update, no_update, msg, no_update)
 
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
@@ -511,11 +513,43 @@ def register_callbacks(
                 robustness_finals=finals, robustness_reasons=rob_reasons,
                 accepted_edit_keys=accepted, edit_reasons=edit_reasons,
                 store_payload=view.store_payload())
-            if rec.is_empty():
-                return fail("No decisions to apply (set a Final or accept an "
-                            "edit first).")
 
             today = _date.today().isoformat()
+            md = read_note(notes_dir, src.source)
+            ledger_text = get_section(md, "ledger") if md else ""
+            run_index = ledger_text.count("Stage 3 reconciliation") + 1
+
+            # ---- Empty-rec finalize: do the Stage-3 bookkeeping in-app ----
+            # No aggregated decisions to apply means there is no Results/
+            # mutation, hence no mojave-apply to run. Still do the
+            # bookkeeping the user expects from a Stage 3 conclusion:
+            # archive considered submissions, append a "no changes" ledger
+            # entry that folds in pending reviewer comments, set Status.
+            # Writes nothing under Results/. Bumps reload-counter so
+            # badges / picker labels / panel refresh.
+            if rec.is_empty():
+                try:
+                    if md is None:
+                        md = scaffold(src.source, src.epoch_min, src.epoch_max)
+                    comments = pending_notes_seed(recommendations_dir, src.source)
+                    entry = stage3_no_change_ledger_entry(
+                        view, finalized_by=current_reviewer(reviewer),
+                        date=today, run_index=run_index, comments=comments)
+                    md = append_ledger(md, entry)
+                    md = set_status(
+                        md, f"Stage 3 done · finalized (no changes) {today}")
+                    write_note(notes_dir, src.source, md)
+                    slugs = [reviewer_slug(r.reviewer) for r in recs]
+                    archive_considered_submissions(
+                        recommendations_dir, src.source, slugs, date=today)
+                except Exception as e:
+                    return fail(f"Finalize failed: {e}")
+                return (hide, no_update, no_update, no_update,
+                        f"Finalized (run {run_index}) — no changes applied "
+                        f"({len(recs)} submission(s) archived).",
+                        int(reload_ctr or 0) + 1)
+
+            # ---- Decisions to apply: generate the cut-n-paste command -----
             stage3_dir = recommendations_dir / src.source / "stage3"
             stage3_dir.mkdir(parents=True, exist_ok=True)
             # mojave-apply archives this to applied/<date>__aggregated.json.
@@ -526,9 +560,6 @@ def register_callbacks(
             # command's --stage3-meta consumes. ``{{BACKUP_REF}}`` is a
             # placeholder mojave-apply fills with the backup it actually cuts;
             # the run number is counted from the ledger now.
-            md = read_note(notes_dir, src.source)
-            ledger_text = get_section(md, "ledger") if md else ""
-            run_index = ledger_text.count("Stage 3 reconciliation") + 1
             entry = stage3_ledger_entry(
                 view, finals=finals, rob_reasons=rob_reasons,
                 accepted_keys=accepted, edit_reasons=edit_reasons,
@@ -562,96 +593,65 @@ def register_callbacks(
                     f"submission(s), writes the run-{run_index} ledger entry, and "
                     f"sets Status. Then click ↻ Reload here.")
             return (hide, overlay, cmd, hint,
-                    f"Command generated (run {run_index}) — copy it below, then Reload.")
+                    f"Command generated (run {run_index}) — copy it below, then Reload.",
+                    no_update)
 
-        # ---- Stage 3: finalize with no changes (fully in-app) -------------
-        # When the admin accepts the current model as-is, there is nothing to
-        # apply to Results/, so we skip mojave-apply entirely and do only the
-        # bookkeeping under recommendations/: archive the considered
-        # submissions, append a "no changes" ledger entry, and set Status →
-        # "Stage 3 done" (phase → final). Refuses when the composed decisions
-        # are non-empty — those are real changes and belong on the apply path
-        # (which regenerates Results/ + cuts a backup). Writes nothing under
-        # Results/. Bumps reload-counter so badges / panel / status refresh.
+        # ---- Stage 3: flag the source as "needs discussion" (in-app) -------
+        # Leaves the source in Stage 2 (phase ``open`` — submissions stay open,
+        # nothing is archived, Results/ is untouched). The notes Status gets a
+        # ``needs discussion`` suffix so every reviewer sees a global tag in the
+        # source picker (see layout._reviewer_status). A dated ledger entry
+        # records the action and folds in any pending reviewer comments so they
+        # land in notes.md regardless of how the discussion shakes out. Bumps
+        # reload-counter so the picker labels refresh.
         @app.callback(
             Output("agg-apply-status", "children", allow_duplicate=True),
             Output("reload-counter", "data", allow_duplicate=True),
-            Input("agg-finalize-nochange-btn", "n_clicks"),
-            State({"type": "agg-rob-final", "cid": ALL}, "value"),
-            State({"type": "agg-rob-final", "cid": ALL}, "id"),
-            State({"type": "agg-rob-reason", "cid": ALL}, "value"),
-            State({"type": "agg-rob-reason", "cid": ALL}, "id"),
-            State({"type": "agg-edit-accept", "key": ALL}, "value"),
-            State({"type": "agg-edit-accept", "key": ALL}, "id"),
-            State({"type": "agg-edit-reason", "key": ALL}, "value"),
-            State({"type": "agg-edit-reason", "key": ALL}, "id"),
+            Input("agg-needs-discussion-btn", "n_clicks"),
             State("source-picker", "value"),
             State("reload-counter", "data"),
             prevent_initial_call=True,
         )
-        def _finalize_no_changes(_n, final_vals, final_ids, rob_reason_vals,
-                                 rob_reason_ids, accept_vals, accept_ids,
-                                 edit_reason_vals, edit_reason_ids,
-                                 source_folder, reload_ctr):
+        def _mark_needs_discussion(_n, source_folder, reload_ctr):
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return "No source selected.", no_update
-            finals, rob_reasons, accepted, edit_reasons = _collect_decisions(
-                final_ids, final_vals, rob_reason_ids, rob_reason_vals,
-                accept_ids, accept_vals, edit_reason_ids, edit_reason_vals)
-            recs = _submitted_recs(recommendations_dir, src.source)
-            # Already finalized and nothing new to consider: a second click
-            # would just append a redundant run to the ledger. No-op instead.
-            if (not recs
-                    and source_phase(recommendations_dir, src.source) == "final"):
-                return "Already finalized — nothing new to consider.", no_update
-            try:
-                current_df = load_bundle(source_folder, "current").cluster_df
-            except Exception as e:
-                return f"Could not load current model: {e}", no_update
-            view = build_aggregation_view(src.source, recs, current_df)
-            rec = compose_aggregated(
-                src.source, "aggregated",
-                robustness_finals=finals, robustness_reasons=rob_reasons,
-                accepted_edit_keys=accepted, edit_reasons=edit_reasons,
-                store_payload=view.store_payload())
-            if not rec.is_empty():
-                return ("There are decisions to apply — use “Apply aggregated "
-                        "decisions” instead.", no_update)
-
+            if source_phase(recommendations_dir, src.source) != "open":
+                return ("Needs Discussion only applies to sources in Stage 2 "
+                        "(open phase).", no_update)
             today = _date.today().isoformat()
             try:
                 md = read_note(notes_dir, src.source)
                 if md is None:
                     md = scaffold(src.source, src.epoch_min, src.epoch_max)
-                run_index = get_section(md, "ledger").count(
-                    "Stage 3 reconciliation") + 1
-                # Preserve reviewer comments into notes.md before the
-                # submissions are archived below (else they'd survive only in
-                # considered/<date>/*.json). Read while submitted/ is intact.
+                # Preserve any pending reviewer comments into the ledger so
+                # they live in notes.md even if the submissions are later
+                # archived (Stage 3 apply / a future finalize path).
                 comments = pending_notes_seed(recommendations_dir, src.source)
-                entry = stage3_no_change_ledger_entry(
-                    view, finalized_by=current_reviewer(reviewer),
-                    date=today, run_index=run_index, comments=comments)
-                md = append_ledger(md, entry)
-                md = set_status(
-                    md, f"Stage 3 done · finalized (no changes) {today}")
+                by = current_reviewer(reviewer)
+                heading = (f"### {today} — Flagged: needs discussion "
+                           f"(by {by})")
+                body_lines = [heading]
+                if comments.strip():
+                    body_lines += ["", "Reviewer comments:", comments.strip()]
+                md = append_ledger(md, "\n".join(body_lines))
+                # Strip any prior ``· needs discussion …`` segment so repeated
+                # clicks just refresh the date rather than appending.
+                current = get_status(md) or "Stage 2 done"
+                base = re.sub(r"\s*·\s*needs discussion[^·]*\s*", " ",
+                              current, flags=re.IGNORECASE)
+                base = re.sub(r"\s+·\s+", " · ", base).strip()
+                md = set_status(md, f"{base} · needs discussion {today}")
                 write_note(notes_dir, src.source, md)
-                # Clear the folded submissions from "open" (same as a real
-                # Stage-3 apply), preserving them under considered/<date>/.
-                slugs = [reviewer_slug(r.reviewer) for r in recs]
-                archive_considered_submissions(
-                    recommendations_dir, src.source, slugs, date=today)
             except Exception as e:
-                return f"Finalize failed: {e}", no_update
-            extra = f" ({len(recs)} submission(s) archived)" if recs else ""
-            return (f"Finalized (run {run_index}) — no changes applied{extra}.",
+                return f"Flag failed: {e}", no_update
+            return (f"Flagged as needs discussion ({today}).",
                     int(reload_ctr or 0) + 1)
 
-        # The apply / finalize status message is about the source it ran on;
-        # clear it when the admin switches sources so a stale "Finalized…" or
+        # The apply / discussion-flag status message is about the source it ran
+        # on; clear it when the admin switches sources so a stale "Flagged…" or
         # "Command generated…" note doesn't bleed onto the next source. Keyed
-        # on the picker only — NOT reload-counter, which _finalize_no_changes
+        # on the picker only — NOT reload-counter, which _mark_needs_discussion
         # bumps in the same turn it sets the message.
         @app.callback(
             Output("agg-apply-status", "children", allow_duplicate=True),

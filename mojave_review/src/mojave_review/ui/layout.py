@@ -8,7 +8,8 @@ from dash import dcc, html
 
 from ..data.loader import list_sources
 from ..recommendations.store import (
-    source_badge, source_phase, is_submitted, load_recommendation)
+    source_badge, source_phase, source_needs_discussion,
+    is_submitted, load_recommendation)
 from .nwin_panel import build_nwin_panel
 from .recommendations_panel import build_recommendations_panel
 
@@ -19,6 +20,9 @@ def _reviewer_status(recommendations_dir: Path, source: str,
     THIS source, so they can see what they've done and resume. Returns
     ``(text, style)`` or ``(None, {})``:
 
+    - **needs discussion** (bold) — admin has flagged the source via the
+      Stage-3 panel. Source-level override: shown for every reviewer
+      regardless of their personal state, so the flag is unmissable.
     - **submitted** (bold) — the reviewer has a submitted review.
     - **review in progress** (plain) — a non-empty ``current/`` draft, not yet
       submitted. (An empty draft does NOT count.)
@@ -29,6 +33,8 @@ def _reviewer_status(recommendations_dir: Path, source: str,
     """
     if recommendations_dir is None or not reviewer:
         return None, {}
+    if source_needs_discussion(recommendations_dir, source):
+        return "needs discussion", {"fontWeight": 700, "color": "#d68a00"}
     if is_submitted(recommendations_dir, source, reviewer):
         return "submitted", {"fontWeight": 700, "color": "#1a7a1a"}
     if source_phase(recommendations_dir, source) != "open":
@@ -533,22 +539,24 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                            "color": "white", "border": "none",
                                            "borderRadius": "4px", "cursor": "pointer"},
                                 ),
-                                # Finalize with nothing to apply: when the admin
-                                # accepts the current model as-is (no robustness
-                                # changes, no edits), there's no mojave-apply to
-                                # run — this sets Status → "Stage 3 done" and
-                                # archives the considered submissions in-app
-                                # (writes only under recommendations/, never
-                                # Results/). Refuses if there ARE pending
-                                # decisions (use the apply button for those).
+                                # Flag the source as needing more discussion:
+                                # leaves it in Stage 2 (phase ``open``) with the
+                                # open submissions intact, but stamps a
+                                # ``needs discussion`` suffix on the notes
+                                # Status. Every reviewer sees a global
+                                # "needs discussion" tag in the source picker
+                                # (overrides their personal status — see
+                                # ``_reviewer_status``). Writes only under
+                                # recommendations/, never Results/.
                                 html.Button(
-                                    "Mark final — no changes",
-                                    id="agg-finalize-nochange-btn", n_clicks=0,
-                                    title="Finalize this source without applying "
-                                          "any changes (accept the current model "
-                                          "as-is). No mojave-apply needed.",
+                                    "Needs Discussion",
+                                    id="agg-needs-discussion-btn", n_clicks=0,
+                                    title="Flag this source for more discussion. "
+                                          "Source stays in Stage 2 (submissions "
+                                          "stay open); reviewers see a "
+                                          "'needs discussion' tag in the picker.",
                                     style={"marginLeft": "0.6em", "padding": "0.3em 0.9em",
-                                           "fontSize": "0.85em", "background": "#3a7",
+                                           "fontSize": "0.85em", "background": "#d68a00",
                                            "color": "white", "border": "none",
                                            "borderRadius": "4px", "cursor": "pointer"},
                                 ),
@@ -660,14 +668,22 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                            "marginBottom": "0.4em"},
                                 ),
                                 html.P(
-                                    "This generates a copy-paste mojave-apply "
-                                    "command (it does NOT modify anything from the "
-                                    "app). Running that command in a terminal backs "
-                                    "up + regenerates Results/ (CSV, plus PDF + MP4 "
-                                    "when the source carries them — plots are "
-                                    "opt-in now), archives the considered "
-                                    "submissions, and writes the Stage-3 ledger + "
-                                    "Status — all in one step.",
+                                    "If decisions are pending: generates a "
+                                    "copy-paste mojave-apply command (the app "
+                                    "does NOT modify Results/). Running that "
+                                    "command in a terminal backs up + "
+                                    "regenerates Results/ (CSV; plus PDF + MP4 "
+                                    "when --make-plots is given and the source "
+                                    "carries them), archives the considered "
+                                    "submissions, and writes the Stage-3 ledger "
+                                    "+ Status — all in one step. "
+                                    "If there are NO decisions: finalizes the "
+                                    "source in-app — archives the considered "
+                                    "submissions, appends a Stage-3 ledger "
+                                    "entry (preserving reviewer comments), and "
+                                    "sets Status to \"Stage 3 done · finalized "
+                                    "(no changes)\". Nothing in Results/ is "
+                                    "touched.",
                                     style={"color": "#666", "fontSize": "0.88em",
                                            "margin": "0 0 0.5em"},
                                 ),

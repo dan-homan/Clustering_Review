@@ -7,11 +7,12 @@ append `history.txt`, archive the recommendation JSON, and print a
 copy-pasteable notebook-summary block.
 
 Plot files are opt-in in the pipeline now (``find_clusters.py
---make_plots``), so regeneration is conditional: it runs only when the
-source actually carries a PDF/MP4 and ``--skip-plots`` wasn't given. When
-regeneration is skipped, any existing plot files are MOVED into the backup
-(not copied) so a stale render never sits next to the new CSV — and a
-plot-less apply doesn't need the production code or matplotlib at all.
+--make_plots``), and mojave-apply mirrors that: regeneration is itself
+opt-in via ``--make-plots`` and runs only when the source actually carries
+a PDF/MP4. By default (no ``--make-plots``), any existing plot files are
+MOVED into the backup (not copied) so a stale render never sits next to
+the new CSV — and a plot-less apply doesn't need the production code or
+matplotlib at all.
 
 Important data-model assumptions (per the project author):
 
@@ -454,13 +455,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "Defaults to <results-dir>/..")
     p.add_argument("--no-confirm", action="store_true",
                    help="Skip the interactive confirmation prompt.")
-    p.add_argument("--skip-plots", action="store_true",
-                   help="Don't regenerate the summary PDF / epoch MP4 even "
-                        "when the source carries them (they are moved into "
-                        "the backup instead). When the source has no plot "
-                        "files — the default now that find_clusters.py only "
-                        "makes them with --make_plots — regeneration is "
-                        "skipped automatically.")
+    p.add_argument("--make-plots", action="store_true",
+                   help="Regenerate the summary PDF / epoch MP4 when the "
+                        "source carries them. Default is to SKIP regeneration "
+                        "(matching find_clusters.py, where plots are opt-in "
+                        "via --make_plots) — prior PDF/MP4 are moved into the "
+                        "backup instead of being copied. When the source has "
+                        "no plot files, this flag is a no-op.")
     p.add_argument("--stage3-meta", type=Path, default=None,
                    help="Stage-3 sidecar JSON (considered_slugs / ledger_entry "
                         "/ status). After applying the aggregated recommendation "
@@ -604,17 +605,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # ---- Changes to apply -------------------------------------------------
-    # Plot regeneration is conditional now that the pipeline only makes the
-    # PDF/MP4 with --make_plots: regenerate only when the source actually
-    # carries them AND --skip-plots wasn't given. When skipping, the backup
-    # below MOVES any existing plot files so a stale render can't sit next
-    # to the new CSV. Confirm save_summary_plots is importable BEFORE we
-    # touch any files (only needed when regenerating).
+    # Plot regeneration is opt-in (the pipeline already moved to opt-in plots
+    # via find_clusters.py --make_plots): regenerate only when the source
+    # actually carries a PDF/MP4 AND --make-plots was given. When skipping,
+    # the backup below MOVES any existing plot files so a stale render can't
+    # sit next to the new CSV. Confirm save_summary_plots is importable BEFORE
+    # we touch any files (only needed when regenerating).
     plots_present = (
         (existing.folder / f"{existing.prefix}.summary_plots.pdf").is_file()
         or (existing.folder / f"{existing.prefix}.epoch_overplots.mp4").is_file()
     )
-    regen_plots = plots_present and not args.skip_plots
+    regen_plots = plots_present and args.make_plots
     save_summary_plots = (_import_save_summary_plots(production_code_dir)
                           if regen_plots else None)
     backup_idx = _next_backup_index(existing.folder / "backups")
@@ -646,8 +647,8 @@ def main(argv: list[str] | None = None) -> int:
                      new_df, save_summary_plots)
         print("  done.")
     elif plots_present:
-        print("Skipped plot regeneration (--skip-plots); prior PDF/MP4 moved "
-              "into the backup.")
+        print("Skipped plot regeneration (default; pass --make-plots to "
+              "regenerate); prior PDF/MP4 moved into the backup.")
     else:
         print("No PDF/MP4 to regenerate (plots are opt-in via "
               "find_clusters.py --make_plots).")

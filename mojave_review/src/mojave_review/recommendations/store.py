@@ -313,6 +313,18 @@ def is_finalized(recommendations_dir: Path, source: str) -> bool:
     return source_phase(recommendations_dir, source) == "final"
 
 
+def source_needs_discussion(recommendations_dir: Path, source: str) -> bool:
+    """True when the admin has flagged this source for further discussion (the
+    Stage-3 ``Needs Discussion`` button). Detected as a ``needs discussion``
+    suffix on the notes ``Status:`` line — the source stays in Stage 2
+    (phase ``open``) but the picker shows a global ``needs discussion`` tag
+    so every reviewer sees the flag."""
+    from ..notes.store import notes_dir_for, read_note, get_status
+    md = read_note(notes_dir_for(recommendations_dir), source)
+    status = (get_status(md) if md else "").strip().lower()
+    return "needs discussion" in status
+
+
 def recommendations_locked(
     recommendations_dir: Path, source: str, *, admin: bool,
 ) -> bool:
