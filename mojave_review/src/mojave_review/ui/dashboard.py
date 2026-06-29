@@ -40,7 +40,8 @@ from ..recommendations.store import (
     reviewer_slug,
 )
 from ..data.assignments import (
-    AssignmentStore, assignment_status, is_stale, load_store, needs_for,
+    AssignmentStore, assignment_status, is_paused, is_stale, load_store,
+    needs_for,
 )
 
 
@@ -190,13 +191,20 @@ def _team_table(
             and assignment_status(
                 recommendations_dir, r.source, reviewer) == "in_progress")
         n_stale = sum(1 for r in assigned if is_stale(r, today=today))
+        paused = is_paused(store, reviewer)
         rows.append({
-            "reviewer": reviewer,
+            # Visual marker for paused; the DataTable column is text only
+            # (this Dash version doesn't accept rich cell content in
+            # standard columns) so the badge goes inline.
+            "reviewer": f"{reviewer}  ⏸ paused" if paused else reviewer,
             "assigned": n_assigned,
             "submitted": n_submitted,
             "in_progress": n_progress,
             "stale": n_stale,
+            "_paused": paused,           # internal — drives row styling
         })
+    # Stable order: active first (alphabetical), paused after.
+    rows.sort(key=lambda r: (r["_paused"], r["reviewer"]))
     return html.Div(
         [
             html.H3("The team", style={"margin": "0 0 0.5em"}),
@@ -216,6 +224,9 @@ def _team_table(
                     {"if": {"filter_query": "{stale} > 0",
                             "column_id": "stale"},
                      "color": "#c62828", "fontWeight": 700},
+                    {"if": {"filter_query": "{_paused} = true"},
+                     "color": "#888", "fontStyle": "italic",
+                     "background": "#fafafa"},
                 ],
                 style_header={"fontWeight": 700, "background": "#f5f5f5"},
                 page_size=50,
@@ -278,20 +289,60 @@ def _submissions_table(
     )
 
 
-def _admin_controls_panel(reviewers: list[str]) -> html.Div:
-    """Top-of-dashboard admin section (auto-balance + reassign-queue
-    buttons + their modals + a status line). Hidden when admin=False."""
+def _admin_controls_panel(
+    reviewers: list[str], paused_set: set[str],
+) -> html.Div:
+    """Top-of-dashboard admin section: Manage team + Auto-balance +
+    Reassign-queue buttons, their modals, and a status line. Hidden
+    when admin=False."""
     reviewer_opts = [{"label": r, "value": r} for r in reviewers]
+    # Team-management rows: one per reviewer with a pause/active select.
+    team_rows = []
+    for r in reviewers:
+        active = r not in paused_set
+        team_rows.append(html.Tr([
+            html.Td(r, style={"padding": "4px 8px",
+                              "fontWeight": 600,
+                              "color": "#666" if not active else "#222",
+                              "fontStyle": "italic" if not active else "normal"}),
+            html.Td(
+                dcc.RadioItems(
+                    id={"type": "dashboard-tm-status",
+                        "reviewer": r},
+                    options=[
+                        {"label": " active",  "value": "active"},
+                        {"label": " paused",  "value": "paused"},
+                    ],
+                    value="active" if active else "paused",
+                    inline=True,
+                    inputStyle={"marginRight": "0.25em",
+                                "marginLeft": "0.5em"},
+                ),
+                style={"padding": "4px 8px"},
+            ),
+        ]))
     return html.Div(
         [
             html.Div(
                 [
                     html.Button(
+                        "👥 Manage team…",
+                        id="dashboard-team-btn", n_clicks=0,
+                        title="Toggle individual reviewers between active "
+                              "(in the auto-balance pool) and paused "
+                              "(excluded from new assignments).",
+                        style={"padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Button(
                         "🔀 Auto-balance assignments…",
                         id="dashboard-auto-balance-btn", n_clicks=0,
                         title="Preview a balanced assignment using LPT + the "
                               "difficulty score, then choose to apply.",
-                        style={"padding": "0.4em 1em", "fontSize": "0.9em",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
                                "background": "#1f77b4", "color": "white",
                                "border": "none", "borderRadius": "4px",
                                "cursor": "pointer"},
@@ -315,6 +366,77 @@ def _admin_controls_panel(reviewers: list[str]) -> html.Div:
                 ],
                 style={"display": "flex", "alignItems": "center",
                        "flexWrap": "wrap"},
+            ),
+            # Team-management modal -------------------------------------
+            html.Div(
+                id="dashboard-tm-modal", style={"display": "none"},
+                children=[html.Div([
+                    html.Div(
+                        [
+                            html.H4("Manage team", style={"margin": 0}),
+                            html.Button(
+                                "×", id="dashboard-tm-close", n_clicks=0,
+                                style={"border": "none", "background": "transparent",
+                                       "fontSize": "1.5em", "lineHeight": 1,
+                                       "cursor": "pointer", "color": "#888"},
+                            ),
+                        ],
+                        style={"display": "flex",
+                               "justifyContent": "space-between",
+                               "alignItems": "center",
+                               "marginBottom": "0.4em"},
+                    ),
+                    html.Div(
+                        "Paused reviewers stay visible on the dashboard "
+                        "but are excluded from auto-balance. Existing "
+                        "assignments are preserved either way — to move "
+                        "them, use Reassign queue.",
+                        style={"color": "#666", "fontSize": "0.85em",
+                               "marginBottom": "0.5em"},
+                    ),
+                    html.Table(
+                        [html.Thead(html.Tr([
+                            html.Th("Reviewer",
+                                    style={"padding": "4px 8px",
+                                           "textAlign": "left"}),
+                            html.Th("Status",
+                                    style={"padding": "4px 8px",
+                                           "textAlign": "left"}),
+                        ]))] + [html.Tbody(team_rows)],
+                        style={"width": "100%",
+                               "borderCollapse": "collapse",
+                               "fontFamily": "system-ui, sans-serif",
+                               "fontSize": "0.88em"},
+                    ),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Save", id="dashboard-tm-save", n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "#1f77b4",
+                                       "color": "white", "border": "none",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                            html.Button(
+                                "Cancel", id="dashboard-tm-cancel",
+                                n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "white",
+                                       "color": "#555",
+                                       "border": "1px solid #bbb",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                        ],
+                        style={"display": "flex", "gap": "0.5em",
+                               "justifyContent": "flex-end",
+                               "marginTop": "0.6em"},
+                    ),
+                ], style={"background": "white", "padding": "1.5em",
+                          "borderRadius": "6px", "maxWidth": "520px",
+                          "margin": "6% auto",
+                          "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"})],
             ),
             # Auto-balance preview modal --------------------------------
             html.Div(
@@ -528,7 +650,8 @@ def build_dashboard_page(
 
     page_children = [header, banner]
     if admin:
-        page_children.append(_admin_controls_panel(reviewers))
+        page_children.append(_admin_controls_panel(
+            reviewers, set(store.paused_reviewers)))
     page_children.append(body)
 
     return html.Div(

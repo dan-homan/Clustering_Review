@@ -53,7 +53,7 @@ from ..recommendations.store import (
 from .difficulty import SourceDifficulty
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2          # v2: adds paused_reviewers
 DEFAULT_REVIEW_TARGET = 2
 STALE_DAYS = 7
 
@@ -89,9 +89,16 @@ class AssignmentStore:
     deadline: str | None = None                                       # Phase 4
     default_review_target: int = DEFAULT_REVIEW_TARGET
     assignments: dict[str, list[AssignmentRecord]] = field(default_factory=dict)
+    # Reviewer names the admin has temporarily excluded from
+    # auto-balance. Their existing assignments are preserved and shown
+    # on the dashboard (with a "paused" badge); they are simply not
+    # eligible to receive *new* assignments. See ``active_reviewers``.
+    paused_reviewers: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> "AssignmentStore":
+        # Schema v1 → v2 compat: v1 stores have no paused_reviewers
+        # field, which decodes naturally as the default empty list.
         return cls(
             version=int(d.get("version", SCHEMA_VERSION)),
             updated_at=d.get("updated_at", ""),
@@ -103,6 +110,7 @@ class AssignmentStore:
                 reviewer: [AssignmentRecord.from_dict(r) for r in records]
                 for reviewer, records in d.get("assignments", {}).items()
             },
+            paused_reviewers=list(d.get("paused_reviewers", []) or []),
         )
 
     def to_dict(self) -> dict:
@@ -115,6 +123,7 @@ class AssignmentStore:
                 reviewer: [asdict(r) for r in records]
                 for reviewer, records in self.assignments.items()
             },
+            "paused_reviewers": list(self.paused_reviewers),
         }
 
     def touch(self) -> None:
@@ -261,6 +270,123 @@ def submitted_by_map(
             continue
         out[src] = {f.stem for f in sub_dir.glob("*.json") if f.stem}
     return out
+
+
+def all_submitting_reviewers(
+    recommendations_dir: Path, sources: list[str],
+) -> dict[str, set[str]]:
+    """Like :func:`submitted_by_map`, but for **all submissions ever**:
+    the union of currently-open submissions (``submitted/``) and those
+    already folded into a Stage-3 apply (``considered/<date>/``).
+    Returns ``{source: {reviewer_slug, ...}}``.
+
+    Used by :func:`credit_prior_submissions` so the first-round
+    auto-balance gives credit for reviewer work even on sources that
+    have since been finalized — those submissions live under
+    ``considered/`` after Stage 3 (see
+    :func:`recommendations.store.archive_considered_submissions`)
+    and would otherwise look "unsubmitted" to the load balancer.
+    """
+    out: dict[str, set[str]] = {}
+    for src in sources:
+        src_dir = Path(recommendations_dir) / src
+        slugs: set[str] = set()
+        if (src_dir / "submitted").is_dir():
+            slugs.update(
+                f.stem for f in (src_dir / "submitted").glob("*.json")
+                if f.stem
+            )
+        considered = src_dir / "considered"
+        if considered.is_dir():
+            for date_dir in considered.iterdir():
+                if not date_dir.is_dir():
+                    continue
+                slugs.update(
+                    f.stem for f in date_dir.glob("*.json") if f.stem
+                )
+        out[src] = slugs
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Team-pause helpers
+# ---------------------------------------------------------------------------
+
+
+def is_paused(store: AssignmentStore, reviewer: str) -> bool:
+    return reviewer in store.paused_reviewers
+
+
+def set_paused(
+    store: AssignmentStore, reviewer: str, paused: bool,
+) -> None:
+    """Mark the reviewer as paused / active. Idempotent. Paused
+    reviewers stay in ``store.assignments`` (and on the dashboard with
+    a "paused" badge); they are simply excluded from
+    :func:`auto_balance`'s eligibility set."""
+    if paused:
+        if reviewer not in store.paused_reviewers:
+            store.paused_reviewers.append(reviewer)
+    else:
+        store.paused_reviewers = [
+            r for r in store.paused_reviewers if r != reviewer
+        ]
+
+
+def active_reviewers(
+    store: AssignmentStore, all_reviewers: list[str],
+) -> list[str]:
+    """The subset of ``all_reviewers`` not currently paused. Order is
+    preserved."""
+    paused = set(store.paused_reviewers)
+    return [r for r in all_reviewers if r not in paused]
+
+
+# ---------------------------------------------------------------------------
+# Credit prior submissions (first-round bookkeeping)
+# ---------------------------------------------------------------------------
+
+
+def credit_prior_submissions(
+    store: AssignmentStore,
+    *,
+    recommendations_dir: Path,
+    sources: list[str],
+    name_for_slug: dict[str, str],
+    assigned_by: str = "credit",
+) -> int:
+    """Pre-populate ``store`` with assignment records for every existing
+    reviewer submission (open OR considered/archived). Returns the
+    number of records added.
+
+    Designed for the **first-round** auto-balance: it gives reviewers
+    credit for work they completed before the assignments system
+    existed, so :func:`auto_balance` sees their prior work as load and
+    distributes new sources accordingly. Idempotent — sources already
+    in the reviewer's queue are silently skipped.
+
+    Identity translation: submission files are keyed by slug
+    (``reviewer_slug(name)``); the store keys on full reviewer names.
+    ``name_for_slug`` is the lookup the caller is expected to build
+    from tokens.yaml + any known names. Slugs without a matching name
+    fall through to ``slug`` itself — better to credit a slug-keyed
+    reviewer than to lose the record entirely.
+    """
+    submitting = all_submitting_reviewers(
+        recommendations_dir, sources)
+    n_added = 0
+    for src, slugs in submitting.items():
+        for slug in slugs:
+            name = name_for_slug.get(slug, slug)
+            bucket = store.assignments.setdefault(name, [])
+            if any(r.source == src for r in bucket):
+                continue
+            bucket.append(AssignmentRecord(
+                source=src, assigned_at=_utcnow_iso(),
+                target_date=None, assigned_by=assigned_by,
+            ))
+            n_added += 1
+    return n_added
 
 
 def auto_balance(

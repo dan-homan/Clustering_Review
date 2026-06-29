@@ -11,17 +11,41 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dash import Input, Output, State, html, no_update
+from dash import ALL, Input, Output, State, html, no_update
 
 from ..auth.runtime import current_reviewer
-from ..recommendations.store import reviewer_slug
+from ..auth.tokens import load_store as load_token_store
+from ..recommendations.store import reviewer_slug, source_phase
 from ..data.assignments import (
-    apply_additions, auto_balance, load_store, reassign_queue,
-    save_store, submitted_by_map,
+    active_reviewers, apply_additions, auto_balance,
+    credit_prior_submissions, load_store, reassign_queue,
+    save_store, set_paused, submitted_by_map,
 )
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
 from .dashboard import known_reviewers
+
+
+def _name_for_slug(
+    tokens_path, recommendations_dir, fallback_reviewer,
+) -> dict:
+    """Map every known slug → full reviewer name. Used by credit-prior
+    so submission files (keyed by slug) get recorded under the same
+    name the rest of the app uses."""
+    out: dict[str, str] = {}
+    if fallback_reviewer:
+        out[reviewer_slug(fallback_reviewer)] = fallback_reviewer
+    if tokens_path is not None and tokens_path.is_file():
+        try:
+            ts = load_token_store(tokens_path)
+            for u in ts:
+                out[reviewer_slug(u.name)] = u.name
+        except Exception:
+            pass
+    # Fall-through entries (slug-only) come from known_reviewers itself,
+    # which already inserts the slug as the name when no upstream
+    # identity is known. So we don't need to scan submissions here.
+    return out
 
 
 def register_dashboard_callbacks(
@@ -57,17 +81,43 @@ def register_dashboard_callbacks(
         if not ctx.triggered_id or ctx.triggered_id != "dashboard-auto-balance-btn":
             return {"display": "none"}, no_update, None
 
-        sources = list_sources(results_dir)
-        scored = score_all(sources)
-        reviewers = known_reviewers(
-            tokens_path, recommendations_dir, reviewer)
+        all_sources = list_sources(results_dir)
+        # Pre-credit pass first: every source the team has ever
+        # submitted (including those folded into Stage 3 / archived to
+        # considered/) counts as completed work. This must include
+        # finalized sources, so use the full source list — not the
+        # phase-open subset.
         store = load_store(recommendations_dir)
+        nfs = _name_for_slug(
+            tokens_path, recommendations_dir,
+            current_reviewer(reviewer))
+        n_credited = credit_prior_submissions(
+            store,
+            recommendations_dir=recommendations_dir,
+            sources=[s.source for s in all_sources],
+            name_for_slug=nfs,
+        )
+
+        # Auto-balance candidates: only sources that are open for
+        # reviewer recommendations (Stage 2 done). Stage 1/2-in-progress
+        # sources aren't ready; finalized sources already had their
+        # full review cycle.
+        open_sources = [
+            s for s in all_sources
+            if source_phase(recommendations_dir, s.source) == "open"
+        ]
+        scored = score_all(open_sources)
+
+        known = known_reviewers(
+            tokens_path, recommendations_dir, reviewer)
+        reviewers = active_reviewers(store, known)
+
         current_map = {
             r: [rec.source for rec in records]
             for r, records in store.assignments.items()
         }
         sub_map = submitted_by_map(
-            recommendations_dir, [s.source for s in sources])
+            recommendations_dir, [s.source for s in open_sources])
         additions = auto_balance(
             scored_sources=scored,
             reviewers=reviewers,
@@ -75,12 +125,34 @@ def register_dashboard_callbacks(
             submitted_by=sub_map,
         )
 
-        total = sum(len(v) for v in additions.values())
-        if total == 0:
-            body = html.Div(
-                "Nothing to do — every source already has enough "
-                "reviewers (assigned or submitted).",
-                style={"color": "#666", "padding": "0.5em"},
+        total_new = sum(len(v) for v in additions.values())
+        header_lines = [
+            html.Div(
+                f"Open sources considered: {len(open_sources)} of "
+                f"{len(all_sources)} total (only \"Stage 2 done\" "
+                f"sources are eligible).",
+                style={"color": "#555", "fontSize": "0.85em"},
+            ),
+            html.Div(
+                f"Active reviewers: {len(reviewers)} of {len(known)} "
+                f"({len(known) - len(reviewers)} paused).",
+                style={"color": "#555", "fontSize": "0.85em",
+                       "marginBottom": "0.3em"},
+            ),
+            html.Div(
+                f"Credited {n_credited} prior submission(s) as "
+                f"completed assignments — these will be saved when "
+                f"you Apply.",
+                style={"color": "#1a7" if n_credited else "#888",
+                       "fontSize": "0.85em", "marginBottom": "0.5em"},
+            ),
+        ]
+
+        if total_new == 0:
+            body_inner = html.Div(
+                "No new assignments needed — every open source already "
+                "has enough committed reviewers.",
+                style={"color": "#666", "padding": "0.4em"},
             )
         else:
             rows = []
@@ -99,10 +171,10 @@ def register_dashboard_callbacks(
                                "fontSize": "0.85em"},
                     ),
                 ]))
-            body = html.Div([
-                html.Div(f"{total} new assignments across "
+            body_inner = html.Div([
+                html.Div(f"{total_new} new assignment(s) across "
                          f"{sum(1 for v in additions.values() if v)} "
-                         f"reviewer(s).",
+                         f"reviewer(s):",
                          style={"marginBottom": "0.4em",
                                 "fontWeight": 600}),
                 html.Table(
@@ -119,10 +191,19 @@ def register_dashboard_callbacks(
                            "fontFamily": "system-ui, sans-serif"},
                 ),
             ])
+        body = html.Div(header_lines + [body_inner])
+        # Apply needs both the credited-store state (so we don't
+        # re-credit on apply — that's now a State input) and the
+        # additions to merge. Bundle them.
+        preview_store = {
+            "additions": additions,
+            "credited_store": store.to_dict(),
+            "n_credited": n_credited,
+        }
         return {"display": "block",
                 "position": "fixed", "top": 0, "left": 0,
                 "right": 0, "bottom": 0,
-                "background": "rgba(0,0,0,0.35)", "zIndex": 1000}, body, additions
+                "background": "rgba(0,0,0,0.35)", "zIndex": 1000}, body, preview_store
 
     @app.callback(
         Output("url", "href", allow_duplicate=True),
@@ -132,14 +213,81 @@ def register_dashboard_callbacks(
         State("dashboard-ab-preview-store", "data"),
         prevent_initial_call=True,
     )
-    def _ab_apply(_n, additions):
-        if not additions:
+    def _ab_apply(_n, preview):
+        if not preview or preview.get("additions") is None:
             return no_update, "no preview to apply"
+        # Re-load from disk and re-credit so the apply is correct even
+        # if another admin tab made changes between preview and apply.
+        # (We could just commit the preview's "credited_store" verbatim
+        # but a fresh credit pass is idempotent and avoids stale-state
+        # surprises.)
         store = load_store(recommendations_dir)
-        n = apply_additions(
-            store, additions, assigned_by=current_reviewer(reviewer))
+        all_sources = list_sources(results_dir)
+        nfs = _name_for_slug(
+            tokens_path, recommendations_dir,
+            current_reviewer(reviewer))
+        n_credited = credit_prior_submissions(
+            store,
+            recommendations_dir=recommendations_dir,
+            sources=[s.source for s in all_sources],
+            name_for_slug=nfs,
+        )
+        n_added = apply_additions(
+            store, preview["additions"],
+            assigned_by=current_reviewer(reviewer))
         save_store(recommendations_dir, store)
-        return "/dashboard", f"auto-balance: added {n} assignments"
+        parts = []
+        if n_credited:
+            parts.append(f"credited {n_credited}")
+        parts.append(f"added {n_added}")
+        return "/dashboard", "auto-balance: " + ", ".join(parts)
+
+    # -------------------------------------------------------------------
+    # Manage team — pause / activate individual reviewers
+    # -------------------------------------------------------------------
+
+    @app.callback(
+        Output("dashboard-tm-modal", "style"),
+        Input("dashboard-team-btn", "n_clicks"),
+        Input("dashboard-tm-close", "n_clicks"),
+        Input("dashboard-tm-cancel", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _tm_open_or_close(open_n, close_n, cancel_n):
+        from dash import ctx
+        if ctx.triggered_id == "dashboard-team-btn":
+            return {"display": "block",
+                    "position": "fixed", "top": 0, "left": 0,
+                    "right": 0, "bottom": 0,
+                    "background": "rgba(0,0,0,0.35)", "zIndex": 1000}
+        return {"display": "none"}
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children",
+               allow_duplicate=True),
+        Input("dashboard-tm-save", "n_clicks"),
+        State({"type": "dashboard-tm-status", "reviewer": ALL}, "value"),
+        State({"type": "dashboard-tm-status", "reviewer": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def _tm_save(_n, statuses, ids):
+        # Same i["..."] dict-indexing convention as the aggregation
+        # callback in ui/callbacks.py — real browser dispatch hands
+        # pattern-matching IDs through as dicts; test_client doesn't,
+        # but that's a test-harness limitation we don't try to paper
+        # over here.
+        store = load_store(recommendations_dir)
+        previous_paused = set(store.paused_reviewers)
+        for status, ident in zip(statuses, ids):
+            set_paused(store, ident["reviewer"], status == "paused")
+        save_store(recommendations_dir, store)
+        new_paused = set(store.paused_reviewers)
+        delta = (
+            f"+{len(new_paused - previous_paused)} paused / "
+            f"-{len(previous_paused - new_paused)} resumed"
+        )
+        return "/dashboard", f"team updated: {delta}"
 
     # -------------------------------------------------------------------
     # Reassign queue

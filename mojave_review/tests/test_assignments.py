@@ -6,11 +6,12 @@ import datetime as dt
 import json
 
 from mojave_review.data.assignments import (
-    AssignmentRecord, AssignmentStore, STALE_DAYS, all_assigned_sources,
+    AssignmentRecord, AssignmentStore, SCHEMA_VERSION, STALE_DAYS,
+    active_reviewers, all_assigned_sources, all_submitting_reviewers,
     apply_additions, assignment_status, assignments_for, assignments_path,
-    auto_balance, is_stale, load_store, needs_for,
-    reassign_queue, remove_assignment, reviewer_load, save_store,
-    submitted_by_map,
+    auto_balance, credit_prior_submissions, is_paused, is_stale, load_store,
+    needs_for, reassign_queue, remove_assignment, reviewer_load, save_store,
+    set_paused, submitted_by_map,
 )
 from mojave_review.data.difficulty import SourceDifficulty
 from mojave_review.recommendations.schema import Recommendation
@@ -39,9 +40,10 @@ def _sd(name: str, score: float) -> SourceDifficulty:
 
 def test_load_store_returns_empty_when_file_missing(tmp_path):
     store = load_store(tmp_path)
-    assert store.version == 1
+    assert store.version == SCHEMA_VERSION
     assert store.assignments == {}
     assert store.deadline is None
+    assert store.paused_reviewers == []
 
 
 def test_save_load_round_trip(tmp_path):
@@ -83,8 +85,9 @@ def test_save_writes_under_admin_subdir(tmp_path):
     # Schema fields are preserved verbatim.
     with expected.open() as f:
         on_disk = json.load(f)
-    assert on_disk["version"] == 1
+    assert on_disk["version"] == SCHEMA_VERSION
     assert on_disk["default_review_target"] == 2
+    assert on_disk["paused_reviewers"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -371,3 +374,141 @@ def test_submitted_by_map_from_disk(tmp_path):
     m = submitted_by_map(tmp_path, ["0003-066u", "0415+379u"])
     assert m["0003-066u"] == {"alice", "bob_smith"}
     assert m["0415+379u"] == set()
+
+
+# ---------------------------------------------------------------------------
+# Schema v1 → v2 compat
+# ---------------------------------------------------------------------------
+
+
+def test_load_store_v1_compat(tmp_path):
+    # Hand-write a v1 store (no paused_reviewers field) and verify load.
+    p = tmp_path / "_admin"
+    p.mkdir()
+    (p / "assignments.json").write_text(json.dumps({
+        "version": 1, "updated_at": "t0", "deadline": None,
+        "default_review_target": 2,
+        "assignments": {
+            "alice": [{"source": "A", "assigned_at": "t0"}],
+        },
+    }))
+    store = load_store(tmp_path)
+    # Field defaults applied; assignments preserved.
+    assert store.paused_reviewers == []
+    assert [r.source for r in store.assignments["alice"]] == ["A"]
+
+
+# ---------------------------------------------------------------------------
+# Team-pause
+# ---------------------------------------------------------------------------
+
+
+def test_set_paused_is_idempotent():
+    store = AssignmentStore()
+    set_paused(store, "alice", True)
+    set_paused(store, "alice", True)
+    assert store.paused_reviewers == ["alice"]
+    assert is_paused(store, "alice") is True
+    set_paused(store, "alice", False)
+    assert store.paused_reviewers == []
+    assert is_paused(store, "alice") is False
+    # Resuming a non-paused reviewer is a no-op.
+    set_paused(store, "bob", False)
+    assert store.paused_reviewers == []
+
+
+def test_active_reviewers_filters_paused_and_preserves_order():
+    store = AssignmentStore(paused_reviewers=["bob"])
+    assert active_reviewers(store, ["alice", "bob", "chris"]) \
+        == ["alice", "chris"]
+
+
+def test_auto_balance_with_paused_excluded_externally():
+    # auto_balance itself doesn't know about pausing — the caller is
+    # expected to pre-filter via active_reviewers. This double-checks
+    # that filtering at the call site works as a one-liner.
+    srcs = [_sd("X", 100.0)]
+    store = AssignmentStore(paused_reviewers=["bob"])
+    additions = auto_balance(
+        scored_sources=srcs,
+        reviewers=active_reviewers(store, ["alice", "bob", "chris"]),
+        current_assignments={}, submitted_by={},
+    )
+    # Bob must not receive X.
+    assert "X" not in additions.get("bob", [])
+    chosen = [r for r, srcs in additions.items() if "X" in srcs]
+    assert set(chosen) <= {"alice", "chris"}
+
+
+# ---------------------------------------------------------------------------
+# Submissions discovery — including considered/ (post Stage-3 apply)
+# ---------------------------------------------------------------------------
+
+
+def test_all_submitting_reviewers_includes_considered(tmp_path):
+    # One source has a live submission + a considered (Stage-3-applied)
+    # one from a different reviewer.
+    save_submitted(tmp_path, Recommendation(
+        source="X", model="current", reviewer="alice",
+        source_comment="x"))
+    cdir = tmp_path / "X" / "considered" / "2026-06-15"
+    cdir.mkdir(parents=True)
+    (cdir / "bob.json").write_text("{}")
+    m = all_submitting_reviewers(tmp_path, ["X"])
+    assert m["X"] == {"alice", "bob"}
+
+
+def test_credit_prior_submissions_idempotent(tmp_path):
+    save_submitted(tmp_path, Recommendation(
+        source="A", model="current", reviewer="alice",
+        source_comment="x"))
+    save_submitted(tmp_path, Recommendation(
+        source="A", model="current", reviewer="bob",
+        source_comment="x"))
+    save_submitted(tmp_path, Recommendation(
+        source="B", model="current", reviewer="alice",
+        source_comment="x"))
+    store = AssignmentStore()
+    # First credit pass: 3 records.
+    n = credit_prior_submissions(
+        store,
+        recommendations_dir=tmp_path,
+        sources=["A", "B"],
+        name_for_slug={"alice": "alice", "bob": "bob"},
+    )
+    assert n == 3
+    assert {r.source for r in store.assignments["alice"]} == {"A", "B"}
+    assert {r.source for r in store.assignments["bob"]} == {"A"}
+    # Second pass: must be a no-op (no duplicates).
+    assert credit_prior_submissions(
+        store,
+        recommendations_dir=tmp_path,
+        sources=["A", "B"],
+        name_for_slug={"alice": "alice", "bob": "bob"},
+    ) == 0
+
+
+def test_credit_prior_submissions_translates_slug_to_name(tmp_path):
+    # "Bob Smith" slugifies to "bob_smith"; credit must record under the
+    # full name (matching what auto_balance / dashboard use as the key).
+    save_submitted(tmp_path, Recommendation(
+        source="A", model="current", reviewer="Bob Smith",
+        source_comment="x"))
+    store = AssignmentStore()
+    credit_prior_submissions(
+        store,
+        recommendations_dir=tmp_path,
+        sources=["A"],
+        name_for_slug={"bob_smith": "Bob Smith"},
+    )
+    assert "Bob Smith" in store.assignments
+    # Slug-only fallback when the lookup is missing the slug: record
+    # goes under the slug rather than being silently dropped.
+    store2 = AssignmentStore()
+    credit_prior_submissions(
+        store2,
+        recommendations_dir=tmp_path,
+        sources=["A"],
+        name_for_slug={},
+    )
+    assert "bob_smith" in store2.assignments
