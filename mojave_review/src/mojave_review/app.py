@@ -5,10 +5,11 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from dash import Dash
+from dash import Dash, Input, Output, dcc, html
 
 from .auth.middleware import install_token_middleware
 from .auth.runtime import current_reviewer
+from .ui.dashboard import build_dashboard_page
 from .ui.layout import build_layout
 from .ui.callbacks import register_callbacks
 
@@ -75,14 +76,43 @@ def create_app(
     # reads ``flask.g.reviewer`` via current_reviewer(); outside one
     # (e.g. during a unit-test introspection of app.layout) it falls
     # back to the CLI-supplied ``reviewer`` value captured here.
+    #
+    # Multi-page wrapper: dcc.Location + page-content. The router callback
+    # below picks between the review page (path "/") and the dashboard
+    # page (path "/dashboard"). Each visit re-renders the chosen page
+    # fresh from disk — no in-page refresh callback needed, the
+    # dashboard tables are recomputed on every navigation. State does
+    # not survive across same-tab navigation; the dashboard link in the
+    # review header uses target="_blank" so reviewers can keep both
+    # views open in separate tabs.
     def _layout():
+        return html.Div([
+            dcc.Location(id="url", refresh=False),
+            html.Div(id="page-content"),
+        ])
+    app.layout = _layout
+
+    @app.callback(Output("page-content", "children"),
+                  Input("url", "pathname"))
+    def _route(pathname):
+        rev = current_reviewer(reviewer)
+        # rstrip("/") handles both /dashboard and /dashboard/ ; endswith
+        # composes cleanly with a future url_base_pathname prefix
+        # (e.g. /mojave-review/dashboard).
+        if pathname and pathname.rstrip("/").endswith("/dashboard"):
+            return build_dashboard_page(
+                results_dir=results_dir,
+                recommendations_dir=recommendations_dir,
+                reviewer=rev,
+                admin=admin,
+                tokens_path=tokens_path,
+            )
         return build_layout(
             results_dir=results_dir,
-            reviewer=current_reviewer(reviewer),
+            reviewer=rev,
             admin=admin,
             recommendations_dir=recommendations_dir,
         )
-    app.layout = _layout
 
     register_callbacks(
         app,

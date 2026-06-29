@@ -86,7 +86,27 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
 
     header = html.Div(
         [
-            html.H2("MOJAVE Cluster Review", style={"margin": "0"}),
+            html.Div(
+                [
+                    html.H2("MOJAVE Cluster Review",
+                            style={"margin": "0", "display": "inline-block"}),
+                    # New tab on purpose — dashboard and review are separate
+                    # pages with separate state, and we want reviewers to be
+                    # able to keep both open while they work. Direct URL
+                    # access at /dashboard also works (router callback in
+                    # app.py).
+                    html.A(
+                        "📋 Dashboard",
+                        href="/dashboard", target="_blank",
+                        style={"marginLeft": "1.5em", "color": "#1f77b4",
+                               "textDecoration": "none", "fontSize": "0.9em",
+                               "verticalAlign": "middle"},
+                        title="Open the assignments & progress dashboard "
+                              "(new tab)",
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "baseline"},
+            ),
             html.Div(
                 [
                     html.Span(f"Reviewer: {reviewer}",
