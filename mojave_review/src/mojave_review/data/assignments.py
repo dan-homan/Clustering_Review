@@ -50,6 +50,7 @@ from pathlib import Path
 from ..recommendations.store import (
     count_submissions, is_submitted, load_recommendation,
 )
+from .difficulty import SourceDifficulty
 
 
 SCHEMA_VERSION = 1
@@ -238,3 +239,185 @@ def all_assigned_sources(store: AssignmentStore) -> set[str]:
         for records in store.assignments.values()
         for rec in records
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto-balance (LPT) and store mutations
+# ---------------------------------------------------------------------------
+
+
+def submitted_by_map(
+    recommendations_dir: Path, sources: list[str],
+) -> dict[str, set[str]]:
+    """Return {source: {reviewer_slug, ...}} from the submitted JSONs on
+    disk. The slugs are the filename stems, the same identity that the
+    auto-balancer's ``reviewers`` argument must use to match correctly
+    (``auth.tokens.reviewer_slug(name)``)."""
+    out: dict[str, set[str]] = {}
+    for src in sources:
+        sub_dir = Path(recommendations_dir) / src / "submitted"
+        if not sub_dir.is_dir():
+            out[src] = set()
+            continue
+        out[src] = {f.stem for f in sub_dir.glob("*.json") if f.stem}
+    return out
+
+
+def auto_balance(
+    *,
+    scored_sources: list[SourceDifficulty],
+    reviewers: list[str],
+    current_assignments: dict[str, list[str]],
+    submitted_by: dict[str, set[str]],
+    review_target: int = DEFAULT_REVIEW_TARGET,
+) -> dict[str, list[str]]:
+    """Greedy longest-processing-time-first (LPT) load balancer.
+
+    Returns ``{reviewer: [source, ...]}`` ADDITIONS to append to the
+    existing assignments — existing records are never removed or moved
+    by this function. (Bulk reassignment is a separate explicit
+    operation; see :func:`reassign_queue`.)
+
+    Rules (in order):
+
+    1. A source is processed only if ``review_target - len(committed) > 0``,
+       where ``committed`` is the set of reviewers either currently
+       assigned the source or who have already submitted it.
+    2. Sources are processed by ``balance_weight`` desc (LPT) — the
+       heaviest first. Ties tie-break on ``source`` name (stable).
+    3. For each slot to fill, pick the eligible reviewer with the
+       smallest current weight; ties break alphabetically on the
+       reviewer's name (so the result is reproducible across runs).
+    4. A reviewer is **eligible** if they're not already committed to
+       that source.
+
+    ``balance_weight`` (``sqrt(score)``) is the scheduling weight —
+    raw scores have an 18× tail (one BL Lac vs. one median source),
+    which would let one outlier consume a whole quota.
+    """
+    loads: dict[str, float] = {r: 0.0 for r in reviewers}
+    committed_per_source: dict[str, set[str]] = {
+        sd.source: set(submitted_by.get(sd.source, set()))
+        for sd in scored_sources
+    }
+    weight_by_source = {sd.source: sd.balance_weight for sd in scored_sources}
+
+    # Seed current load and "committed" sets from existing assignments.
+    for reviewer in reviewers:
+        for src in current_assignments.get(reviewer, []):
+            if src in weight_by_source:
+                loads[reviewer] += weight_by_source[src]
+            committed_per_source.setdefault(src, set()).add(reviewer)
+
+    additions: dict[str, list[str]] = {r: [] for r in reviewers}
+
+    sources_sorted = sorted(
+        scored_sources,
+        key=lambda d: (-d.balance_weight, d.source),
+    )
+    for sd in sources_sorted:
+        committed = committed_per_source.get(sd.source, set())
+        slots = review_target - len(committed)
+        if slots <= 0:
+            continue
+        eligible = [r for r in reviewers if r not in committed]
+        # Stable tie-break on name keeps successive runs reproducible.
+        eligible.sort(key=lambda r: (loads[r], r))
+        for r in eligible[:slots]:
+            additions[r].append(sd.source)
+            loads[r] += sd.balance_weight
+            committed.add(r)
+
+    return additions
+
+
+def apply_additions(
+    store: AssignmentStore,
+    additions: dict[str, list[str]],
+    *,
+    assigned_by: str = "",
+    target_date: str | None = None,
+) -> int:
+    """Merge ``auto_balance`` output into the store. Returns the number
+    of records added. Sources already in the reviewer's queue are
+    silently skipped (idempotent re-runs are safe)."""
+    now = _utcnow_iso()
+    n_added = 0
+    for reviewer, sources in additions.items():
+        if not sources:
+            continue
+        bucket = store.assignments.setdefault(reviewer, [])
+        existing = {r.source for r in bucket}
+        for src in sources:
+            if src in existing:
+                continue
+            bucket.append(AssignmentRecord(
+                source=src, assigned_at=now,
+                target_date=target_date, assigned_by=assigned_by,
+            ))
+            existing.add(src)
+            n_added += 1
+    return n_added
+
+
+def remove_assignment(
+    store: AssignmentStore, reviewer: str, source: str,
+) -> bool:
+    """Drop the named source from ``reviewer``'s queue. Returns True if
+    a record was removed, False if there was nothing to remove. The
+    reviewer's entry is left in the store (possibly empty) so they
+    still appear on the dashboard's "The team" table."""
+    bucket = store.assignments.get(reviewer)
+    if not bucket:
+        return False
+    for i, rec in enumerate(bucket):
+        if rec.source == source:
+            del bucket[i]
+            return True
+    return False
+
+
+def reassign_queue(
+    store: AssignmentStore,
+    *,
+    from_reviewer: str, to_reviewer: str,
+    submitted_by: dict[str, set[str]] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Move all of ``from_reviewer``'s assignments to ``to_reviewer``.
+
+    Returns ``(moved, skipped)`` source-name lists. A source is
+    SKIPPED (not moved) when:
+
+      * the target already has that source assigned, OR
+      * the target has already submitted that source
+        (per ``submitted_by``, when supplied).
+
+    Skipped sources stay on the source reviewer — the admin can
+    follow up with a manual fix. The ``assigned_at`` / ``assigned_by``
+    timestamps on moved records are refreshed.
+    """
+    src_bucket = store.assignments.get(from_reviewer, [])
+    if not src_bucket:
+        return [], []
+    tgt_bucket = store.assignments.setdefault(to_reviewer, [])
+    tgt_sources = {r.source for r in tgt_bucket}
+    submitted_by = submitted_by or {}
+    moved: list[str] = []
+    skipped: list[str] = []
+    remaining: list[AssignmentRecord] = []
+    now = _utcnow_iso()
+    for rec in src_bucket:
+        s = rec.source
+        if s in tgt_sources or to_reviewer in submitted_by.get(s, set()):
+            skipped.append(s)
+            remaining.append(rec)
+            continue
+        tgt_bucket.append(AssignmentRecord(
+            source=s, assigned_at=now,
+            target_date=rec.target_date,
+            assigned_by=from_reviewer,         # provenance: came from A
+        ))
+        tgt_sources.add(s)
+        moved.append(s)
+    store.assignments[from_reviewer] = remaining
+    return moved, skipped

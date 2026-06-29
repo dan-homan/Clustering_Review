@@ -1,21 +1,30 @@
-"""Read-only assignment & progress dashboard.
+"""Assignment & progress dashboard.
 
 A separate page at ``/dashboard``, linked from the review page header.
-Phase 2 is intentionally read-only — admin edit controls land in
-Phase 3. The page renders three tables from data already on disk:
+Reviewers see three read-only tables (My queue, The team, All
+submitted reviews); admins additionally get an admin-controls block at
+the top with two buttons:
 
-* **My queue** — the current reviewer's assignments, with per-source
-  status (pending / in_progress / submitted) and target date.
-* **The team** — every known reviewer, with assigned / submitted /
-  in-progress / stale counts.
-* **All submitted reviews** — every source that has any submission,
-  with reviewer slugs (a click-through link to the review page's
-  ``Rec: <slug>`` view is a Phase 2 follow-up — for now the slugs are
-  shown as plain text so the page is still informational).
+* **🔀 Auto-balance assignments** — runs the LPT load-balancer
+  (``data/assignments.auto_balance``) using the current difficulty
+  scores (``data/difficulty.score_all``) and the team roster. Opens a
+  preview modal showing the proposed additions per reviewer before
+  anything is written to disk. Apply on the modal commits to
+  ``assignments.json`` and refreshes the page.
+* **↪ Reassign queue** — bulk-move one reviewer's entire queue to
+  another. Used when someone drops out. Skips sources the target has
+  already submitted or already been assigned (those stay on the
+  original reviewer for manual follow-up).
+
+Per-row remove is intentionally deferred (Phase 3.5) — auto-balance
+plus bulk-reassign covers the workflows the user described, and
+adding per-row controls means converting the queue tables to a custom
+html.Table with pattern-matching ids, which is a bigger lift than the
+two buttons here.
 
 Page state does not persist across navigation in either direction. The
-header link uses ``target="_blank"`` so reviewers can keep the dashboard
-open in its own tab while they work in the main review tab.
+header link uses ``target="_blank"`` so reviewers can keep the
+dashboard open in its own tab while they work in the main review tab.
 """
 
 from __future__ import annotations
@@ -269,6 +278,198 @@ def _submissions_table(
     )
 
 
+def _admin_controls_panel(reviewers: list[str]) -> html.Div:
+    """Top-of-dashboard admin section (auto-balance + reassign-queue
+    buttons + their modals + a status line). Hidden when admin=False."""
+    reviewer_opts = [{"label": r, "value": r} for r in reviewers]
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Button(
+                        "🔀 Auto-balance assignments…",
+                        id="dashboard-auto-balance-btn", n_clicks=0,
+                        title="Preview a balanced assignment using LPT + the "
+                              "difficulty score, then choose to apply.",
+                        style={"padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "#1f77b4", "color": "white",
+                               "border": "none", "borderRadius": "4px",
+                               "cursor": "pointer"},
+                    ),
+                    html.Button(
+                        "↪ Reassign queue…",
+                        id="dashboard-reassign-btn", n_clicks=0,
+                        title="Bulk-move one reviewer's queue to another. "
+                              "Used when someone drops out mid-review.",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Span(
+                        id="dashboard-admin-status",
+                        style={"marginLeft": "1em", "fontSize": "0.85em",
+                               "color": "#1a7", "fontWeight": 600},
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center",
+                       "flexWrap": "wrap"},
+            ),
+            # Auto-balance preview modal --------------------------------
+            html.Div(
+                id="dashboard-ab-modal", style={"display": "none"},
+                children=[html.Div([
+                    html.Div(
+                        [
+                            html.H4("Auto-balance preview",
+                                    style={"margin": 0}),
+                            html.Button(
+                                "×", id="dashboard-ab-close", n_clicks=0,
+                                style={"border": "none", "background": "transparent",
+                                       "fontSize": "1.5em", "lineHeight": 1,
+                                       "cursor": "pointer", "color": "#888"},
+                            ),
+                        ],
+                        style={"display": "flex",
+                               "justifyContent": "space-between",
+                               "alignItems": "center",
+                               "marginBottom": "0.4em"},
+                    ),
+                    html.Div(
+                        "Proposed additions (existing assignments are "
+                        "preserved). Apply commits to assignments.json and "
+                        "refreshes the dashboard.",
+                        style={"color": "#666", "fontSize": "0.85em",
+                               "marginBottom": "0.4em"},
+                    ),
+                    html.Div(
+                        id="dashboard-ab-preview-body",
+                        style={"maxHeight": "44vh", "overflowY": "auto",
+                               "fontSize": "0.88em"},
+                    ),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Apply", id="dashboard-ab-apply", n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "#1f77b4",
+                                       "color": "white", "border": "none",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                            html.Button(
+                                "Cancel", id="dashboard-ab-cancel",
+                                n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "white",
+                                       "color": "#555",
+                                       "border": "1px solid #bbb",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                        ],
+                        style={"display": "flex", "gap": "0.5em",
+                               "justifyContent": "flex-end",
+                               "marginTop": "0.6em"},
+                    ),
+                ], style={"background": "white", "padding": "1.5em",
+                          "borderRadius": "6px", "maxWidth": "640px",
+                          "margin": "6% auto",
+                          "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"})],
+            ),
+            # Reassign-queue modal --------------------------------------
+            html.Div(
+                id="dashboard-rq-modal", style={"display": "none"},
+                children=[html.Div([
+                    html.Div(
+                        [
+                            html.H4("Reassign queue", style={"margin": 0}),
+                            html.Button(
+                                "×", id="dashboard-rq-close", n_clicks=0,
+                                style={"border": "none", "background": "transparent",
+                                       "fontSize": "1.5em", "lineHeight": 1,
+                                       "cursor": "pointer", "color": "#888"},
+                            ),
+                        ],
+                        style={"display": "flex",
+                               "justifyContent": "space-between",
+                               "alignItems": "center",
+                               "marginBottom": "0.4em"},
+                    ),
+                    html.Div(
+                        "Bulk-move all assignments from one reviewer to "
+                        "another. Sources the target already submitted or "
+                        "already holds will stay on the source reviewer.",
+                        style={"color": "#666", "fontSize": "0.85em",
+                               "marginBottom": "0.6em"},
+                    ),
+                    html.Div(
+                        [
+                            html.Label("From:",
+                                       style={"marginRight": "0.5em"}),
+                            dcc.Dropdown(
+                                id="dashboard-rq-from",
+                                options=reviewer_opts,
+                                clearable=False,
+                                style={"width": "200px",
+                                       "display": "inline-block",
+                                       "marginRight": "1em"},
+                            ),
+                            html.Label("To:",
+                                       style={"marginRight": "0.5em"}),
+                            dcc.Dropdown(
+                                id="dashboard-rq-to",
+                                options=reviewer_opts,
+                                clearable=False,
+                                style={"width": "200px",
+                                       "display": "inline-block"},
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center",
+                               "flexWrap": "wrap", "gap": "0.5em",
+                               "marginBottom": "0.6em"},
+                    ),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Apply", id="dashboard-rq-apply", n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "#1f77b4",
+                                       "color": "white", "border": "none",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                            html.Button(
+                                "Cancel", id="dashboard-rq-cancel",
+                                n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "white",
+                                       "color": "#555",
+                                       "border": "1px solid #bbb",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                        ],
+                        style={"display": "flex", "gap": "0.5em",
+                               "justifyContent": "flex-end",
+                               "marginTop": "0.6em"},
+                    ),
+                ], style={"background": "white", "padding": "1.5em",
+                          "borderRadius": "6px", "maxWidth": "560px",
+                          "margin": "6% auto",
+                          "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"})],
+            ),
+            # State shared between preview and apply: the proposed additions
+            # dict ({reviewer: [src, ...]}) from auto_balance. Holds nothing
+            # until the admin clicks "Auto-balance"; cleared on Apply/Cancel.
+            dcc.Store(id="dashboard-ab-preview-store", data=None),
+        ],
+        style={"padding": "0.6em 1em", "background": "#fffaf0",
+               "borderBottom": "1px solid #f0e0bf"},
+    )
+
+
 def build_dashboard_page(
     results_dir: Path,
     recommendations_dir: Path,
@@ -280,14 +481,10 @@ def build_dashboard_page(
     store = load_store(recommendations_dir)
     reviewers = known_reviewers(tokens_path, recommendations_dir, reviewer)
 
-    # Overall progress: count (source, reviewer) pairs that need a review
-    # and how many have one. Drives the top-of-page banner.
-    total_open_slots = 0
+    # Overall progress banner: count total submissions across sources.
     total_submissions = 0
     for src in list_sources(results_dir):
-        sub = count_submissions(recommendations_dir, src.source)
-        total_submissions += sub
-        total_open_slots += store.default_review_target  # naive total target
+        total_submissions += count_submissions(recommendations_dir, src.source)
 
     header = html.Div(
         [
@@ -329,7 +526,12 @@ def build_dashboard_page(
         style={"padding": "1em", "maxWidth": "1100px", "margin": "0 auto"},
     )
 
+    page_children = [header, banner]
+    if admin:
+        page_children.append(_admin_controls_panel(reviewers))
+    page_children.append(body)
+
     return html.Div(
-        [header, banner, body],
+        page_children,
         style={"fontFamily": "system-ui, sans-serif", "minHeight": "100vh"},
     )

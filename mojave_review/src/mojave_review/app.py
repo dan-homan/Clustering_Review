@@ -10,6 +10,7 @@ from dash import Dash, Input, Output, dcc, html
 from .auth.middleware import install_token_middleware
 from .auth.runtime import current_reviewer
 from .ui.dashboard import build_dashboard_page
+from .ui.dashboard_callbacks import register_dashboard_callbacks
 from .ui.layout import build_layout
 from .ui.callbacks import register_callbacks
 
@@ -122,6 +123,23 @@ def create_app(
         reviewer=reviewer,        # closure default — overridden per-request
         admin=admin,
         fits_data_dir=fits_data_dir,
+    )
+
+    # Admin-only dashboard callbacks (auto-balance + reassign-queue).
+    # Registered unconditionally — the components they bind to are only
+    # rendered when admin=True, so the callbacks are inert for reviewers.
+    # Registering only-when-admin would mean the callbacks aren't in the
+    # callback map for a deployment that toggles between modes without
+    # a restart, but more importantly Dash's allow_duplicate output
+    # checks happen at registration time, so unregistered callbacks
+    # would mean the dashboard layout is broken if admin re-enables
+    # mid-process. Inert is safer.
+    register_dashboard_callbacks(
+        app,
+        results_dir=results_dir,
+        recommendations_dir=recommendations_dir,
+        tokens_path=tokens_path,
+        reviewer=reviewer,
     )
 
     # Prevent the browser from caching the index HTML.
