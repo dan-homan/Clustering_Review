@@ -53,7 +53,7 @@ from ..recommendations.store import (
 from .difficulty import SourceDifficulty
 
 
-SCHEMA_VERSION = 2          # v2: adds paused_reviewers
+SCHEMA_VERSION = 3          # v3: adds source_target_dates (was per-record)
 DEFAULT_REVIEW_TARGET = 2
 STALE_DAYS = 7
 
@@ -69,7 +69,13 @@ _ASSIGNMENTS_REL = Path("_admin") / "assignments.json"
 class AssignmentRecord:
     source: str
     assigned_at: str                       # ISO-8601 UTC
-    target_date: str | None = None         # ISO date (YYYY-MM-DD), Phase 4
+    # Per-record target_date is retained for backward compat with v1/v2
+    # stores but is NOT the authoritative target. The current source of
+    # truth is the v3 source-level ``AssignmentStore.source_target_dates``
+    # map (every reviewer assigned to a source shares the same target).
+    # Helpers like :func:`get_source_target_date` always consult the
+    # source-level map.
+    target_date: str | None = None
     assigned_by: str = ""                  # admin reviewer slug
 
     @classmethod
@@ -94,11 +100,22 @@ class AssignmentStore:
     # on the dashboard (with a "paused" badge); they are simply not
     # eligible to receive *new* assignments. See ``active_reviewers``.
     paused_reviewers: list[str] = field(default_factory=list)
+    # Source-level target dates (v3). One target per source — every
+    # reviewer assigned to a source shares the same target. Sources
+    # absent from this map have no target (the dashboard shows "—"
+    # and :func:`is_stale` returns False).
+    source_target_dates: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "AssignmentStore":
-        # Schema v1 → v2 compat: v1 stores have no paused_reviewers
-        # field, which decodes naturally as the default empty list.
+        # Schema compat (read path is monotonic):
+        # * v1 stores: no paused_reviewers, no source_target_dates
+        # * v2 stores: no source_target_dates
+        # * v3 (current): everything present
+        # Defaults make older versions load cleanly. Per-record
+        # target_date (v1/v2) is preserved as a hint but the source
+        # map wins everywhere — to migrate explicitly, callers can
+        # call :func:`migrate_per_record_targets_to_source` once.
         return cls(
             version=int(d.get("version", SCHEMA_VERSION)),
             updated_at=d.get("updated_at", ""),
@@ -111,6 +128,11 @@ class AssignmentStore:
                 for reviewer, records in d.get("assignments", {}).items()
             },
             paused_reviewers=list(d.get("paused_reviewers", []) or []),
+            source_target_dates={
+                k: v for k, v in
+                (d.get("source_target_dates", {}) or {}).items()
+                if v                                # drop blanks/nulls on read
+            },
         )
 
     def to_dict(self) -> dict:
@@ -124,6 +146,7 @@ class AssignmentStore:
                 for reviewer, records in self.assignments.items()
             },
             "paused_reviewers": list(self.paused_reviewers),
+            "source_target_dates": dict(self.source_target_dates),
         }
 
     def touch(self) -> None:
@@ -213,17 +236,109 @@ def assignment_status(
 
 
 def is_stale(
-    record: AssignmentRecord, *, today: _dt.date | None = None,
+    store: AssignmentStore, source: str,
+    *, today: _dt.date | None = None,
 ) -> bool:
-    """True when ``today > target_date + STALE_DAYS`` AND the assignment
-    has a ``target_date`` set. No target ⇒ never stale (the global
-    deadline banner is the only signal in that case).
+    """True when ``today > target_date + STALE_DAYS`` AND the source
+    has a target date set in ``store.source_target_dates``. No target
+    ⇒ never stale (the global deadline banner is the only signal in
+    that case).
+
+    Signature changed in schema v3: stale is now per-SOURCE, not
+    per-AssignmentRecord (since target dates moved to the source
+    level). Callers should be ``is_stale(store, src)`` — the old
+    ``is_stale(record)`` form was removed.
     """
-    if not record.target_date:
+    raw = store.source_target_dates.get(source)
+    if not raw:
         return False
-    target = _dt.date.fromisoformat(record.target_date)
+    target = _dt.date.fromisoformat(raw)
     today = today or _dt.date.today()
     return today > target + _dt.timedelta(days=STALE_DAYS)
+
+
+# ---------------------------------------------------------------------------
+# Source-level target dates (v3)
+# ---------------------------------------------------------------------------
+
+
+def get_source_target_date(
+    store: AssignmentStore, source: str,
+) -> str | None:
+    """Return the source's target date (``YYYY-MM-DD``) or ``None``."""
+    return store.source_target_dates.get(source) or None
+
+
+def set_source_target_date(
+    store: AssignmentStore, source: str, target_date: str | None,
+) -> None:
+    """Set or clear a source's target date. Passing ``None`` or an
+    empty string removes the entry."""
+    if not target_date:
+        store.source_target_dates.pop(source, None)
+        return
+    # Light validation — full date parse so a typo doesn't silently
+    # corrupt the store.
+    _dt.date.fromisoformat(target_date)
+    store.source_target_dates[source] = target_date
+
+
+def set_source_target_dates_bulk(
+    store: AssignmentStore, sources: list[str], target_date: str | None,
+) -> int:
+    """Apply the same target date to a list of sources. Pass
+    ``target_date=None`` to clear them. Returns the number of sources
+    actually mutated (i.e. whose value changed)."""
+    n = 0
+    for src in sources:
+        prev = store.source_target_dates.get(src)
+        if target_date:
+            _dt.date.fromisoformat(target_date)        # validate once
+            if prev != target_date:
+                store.source_target_dates[src] = target_date
+                n += 1
+        else:
+            if prev is not None:
+                store.source_target_dates.pop(src, None)
+                n += 1
+    return n
+
+
+def sources_in_range(
+    all_sources: list[str], from_src: str, to_src: str,
+) -> list[str]:
+    """Lexicographic inclusive range from ``from_src`` to ``to_src``
+    over ``all_sources`` (the canonical alphabetical order shown in
+    the picker). If ``from_src`` > ``to_src`` lexicographically the
+    bounds are swapped silently — the admin shouldn't have to care
+    which dropdown they touched first."""
+    if from_src > to_src:
+        from_src, to_src = to_src, from_src
+    return [s for s in all_sources if from_src <= s <= to_src]
+
+
+def migrate_per_record_targets_to_source(
+    store: AssignmentStore,
+) -> int:
+    """One-shot upgrade: copy any per-record ``target_date`` from v1/v2
+    stores into the source-level map (only when the source has no
+    target yet). Idempotent. Returns the number of sources upgraded.
+
+    Intended to be called once on a freshly-loaded older store before
+    saving it back as v3. Not auto-invoked by ``load_store`` so the
+    decision to migrate stays with the caller.
+    """
+    n = 0
+    for records in store.assignments.values():
+        for r in records:
+            if r.target_date and r.source not in store.source_target_dates:
+                try:
+                    _dt.date.fromisoformat(r.target_date)
+                except ValueError:
+                    continue                                # skip bad data
+                store.source_target_dates[r.source] = r.target_date
+                n += 1
+    return n
 
 
 def assignments_for(

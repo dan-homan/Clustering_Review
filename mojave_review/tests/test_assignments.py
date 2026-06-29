@@ -9,9 +9,11 @@ from mojave_review.data.assignments import (
     AssignmentRecord, AssignmentStore, SCHEMA_VERSION, STALE_DAYS,
     active_reviewers, all_assigned_sources, all_submitting_reviewers,
     apply_additions, assignment_status, assignments_for, assignments_path,
-    auto_balance, credit_prior_submissions, is_paused, is_stale, load_store,
+    auto_balance, credit_prior_submissions, get_source_target_date,
+    is_paused, is_stale, load_store, migrate_per_record_targets_to_source,
     needs_for, reassign_queue, remove_assignment, reviewer_load, save_store,
-    set_paused, submitted_by_map,
+    set_paused, set_source_target_date, set_source_target_dates_bulk,
+    sources_in_range, submitted_by_map,
 )
 from mojave_review.data.difficulty import SourceDifficulty
 from mojave_review.recommendations.schema import Recommendation
@@ -150,18 +152,21 @@ def test_assignment_status_nonempty_draft_is_in_progress(tmp_path):
 
 
 def test_is_stale_requires_target_date():
-    no_target = AssignmentRecord(
-        source="0003-066u", assigned_at="2026-01-01T00:00:00+00:00")
-    assert is_stale(no_target, today=dt.date(2099, 1, 1)) is False
+    # v3: target dates live on the store keyed by source.
+    store = AssignmentStore()
+    assert is_stale(store, "0003-066u",
+                    today=dt.date(2099, 1, 1)) is False
 
 
 def test_is_stale_at_boundary():
-    rec = AssignmentRecord(
-        source="0003-066u", assigned_at="2026-06-01T00:00:00+00:00",
-        target_date="2026-06-10")
+    store = AssignmentStore(source_target_dates={"0003-066u": "2026-06-10"})
     boundary = dt.date(2026, 6, 10) + dt.timedelta(days=STALE_DAYS)
-    assert is_stale(rec, today=boundary) is False           # equal → not stale
-    assert is_stale(rec, today=boundary + dt.timedelta(days=1)) is True
+    assert is_stale(store, "0003-066u", today=boundary) is False
+    assert is_stale(store, "0003-066u",
+                    today=boundary + dt.timedelta(days=1)) is True
+    # Source without a target ⇒ never stale.
+    assert is_stale(store, "0415+379u",
+                    today=dt.date(2099, 1, 1)) is False
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +491,99 @@ def test_credit_prior_submissions_idempotent(tmp_path):
         sources=["A", "B"],
         name_for_slug={"alice": "alice", "bob": "bob"},
     ) == 0
+
+
+def test_load_store_v2_compat(tmp_path):
+    # v2 (no source_target_dates) loads cleanly with empty map.
+    p = tmp_path / "_admin"
+    p.mkdir()
+    (p / "assignments.json").write_text(json.dumps({
+        "version": 2, "updated_at": "t0", "deadline": None,
+        "default_review_target": 2,
+        "assignments": {
+            "alice": [{"source": "A", "assigned_at": "t0",
+                       "target_date": "2026-07-05"}],
+        },
+        "paused_reviewers": [],
+    }))
+    store = load_store(tmp_path)
+    assert store.source_target_dates == {}
+    # The per-record target survives load (we keep the field) but is
+    # NOT promoted automatically; callers can run the explicit
+    # migration helper if they want.
+    assert store.assignments["alice"][0].target_date == "2026-07-05"
+
+
+# ---------------------------------------------------------------------------
+# Source-level target dates (v3 helpers)
+# ---------------------------------------------------------------------------
+
+
+def test_set_get_clear_source_target_date():
+    store = AssignmentStore()
+    set_source_target_date(store, "A", "2026-07-05")
+    assert get_source_target_date(store, "A") == "2026-07-05"
+    # Setting to None clears.
+    set_source_target_date(store, "A", None)
+    assert get_source_target_date(store, "A") is None
+    # Empty string also clears.
+    set_source_target_date(store, "A", "2026-07-05")
+    set_source_target_date(store, "A", "")
+    assert get_source_target_date(store, "A") is None
+
+
+def test_set_source_target_date_validates_format():
+    import pytest
+    store = AssignmentStore()
+    with pytest.raises(ValueError):
+        set_source_target_date(store, "A", "not-a-date")
+    assert get_source_target_date(store, "A") is None
+
+
+def test_bulk_set_returns_changed_count():
+    store = AssignmentStore(source_target_dates={"A": "2026-07-05"})
+    # A unchanged, B + C newly set ⇒ 2 changes.
+    n = set_source_target_dates_bulk(
+        store, ["A", "B", "C"], "2026-07-05")
+    assert n == 2
+    assert store.source_target_dates == {
+        "A": "2026-07-05", "B": "2026-07-05", "C": "2026-07-05"}
+    # Setting all to None clears them all (3 changes).
+    n = set_source_target_dates_bulk(
+        store, ["A", "B", "C"], None)
+    assert n == 3
+    assert store.source_target_dates == {}
+
+
+def test_sources_in_range_lexicographic_with_swap():
+    all_sources = ["0003-066u", "0003+380u", "0415+379u", "0851+202u",
+                   "1226+023u", "2200+420u"]
+    # Inclusive range. Note the lexicographic order — '-' < '+' < digits,
+    # so 0003-066u sorts BEFORE 0003+380u in ASCII; the test just
+    # verifies the inclusive-range mechanic, not MOJAVE's source order.
+    assert sources_in_range(all_sources, "0415+379u", "1226+023u") == [
+        "0415+379u", "0851+202u", "1226+023u"]
+    # Bounds reversed ⇒ silent swap.
+    assert sources_in_range(all_sources, "2200+420u", "0851+202u") == [
+        "0851+202u", "1226+023u", "2200+420u"]
+
+
+def test_migrate_per_record_targets_idempotent():
+    store = AssignmentStore(assignments={
+        "alice": [AssignmentRecord(source="A", assigned_at="t0",
+                                   target_date="2026-07-05")],
+        "bob": [AssignmentRecord(source="A", assigned_at="t0")],
+    })
+    # First migration: A picks up its target date from alice's record.
+    assert migrate_per_record_targets_to_source(store) == 1
+    assert store.source_target_dates == {"A": "2026-07-05"}
+    # Idempotent — second call doesn't double-promote.
+    assert migrate_per_record_targets_to_source(store) == 0
+    # An explicit source-level entry wins over a stray per-record one.
+    store.source_target_dates["A"] = "2026-08-01"
+    store.assignments["alice"][0].target_date = "2026-07-05"
+    assert migrate_per_record_targets_to_source(store) == 0
+    assert store.source_target_dates["A"] == "2026-08-01"
 
 
 def test_credit_prior_submissions_translates_slug_to_name(tmp_path):

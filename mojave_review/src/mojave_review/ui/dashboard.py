@@ -34,15 +34,36 @@ from pathlib import Path
 from dash import dash_table, dcc, html
 
 from ..auth.tokens import load_store as load_token_store
+from ..data.difficulty import score_all
 from ..data.loader import list_sources
 from ..recommendations.store import (
     count_submissions, is_submitted, list_other_reviewer_slugs,
-    reviewer_slug,
+    reviewer_slug, source_phase,
 )
 from ..data.assignments import (
-    AssignmentStore, assignment_status, is_paused, is_stale, load_store,
-    needs_for,
+    AssignmentStore, all_assigned_sources, assignment_status,
+    get_source_target_date, is_paused, is_stale, load_store, needs_for,
 )
+
+
+# Source-progress table filter — values map to source_phase() outputs.
+_FILTER_OPTIONS = [
+    {"label": "In Progress (Stage 2 done)", "value": "in_progress"},
+    {"label": "Finalized (Stage 3 done)",   "value": "final"},
+    {"label": "Stage 1 / Stage 2",          "value": "preopen"},
+]
+DEFAULT_FILTER = "in_progress"
+
+
+def _phase_for_filter(value: str) -> set[str]:
+    """Map a filter value to the set of source_phase() strings it covers."""
+    if value == "in_progress":
+        return {"open"}
+    if value == "final":
+        return {"final"}
+    if value == "preopen":
+        return {"stage1", "stage2"}
+    return {"open", "final", "stage1", "stage2"}
 
 
 # ---------------------------------------------------------------------------
@@ -128,12 +149,14 @@ def _my_queue_table(
         )
     rows = []
     for rec in sorted(records, key=lambda r: (
-            r.target_date or "9999-12-31", r.source)):
+            get_source_target_date(store, r.source) or "9999-12-31",
+            r.source)):
         status = assignment_status(
             recommendations_dir, rec.source, reviewer)
+        tgt = get_source_target_date(store, rec.source) or "—"
         rows.append({
             "source": rec.source,
-            "target_date": rec.target_date or "—",
+            "target_date": tgt,
             "status": status,
             "assigned_at": (rec.assigned_at or "")[:10],
         })
@@ -190,7 +213,8 @@ def _team_table(
             if not is_submitted(recommendations_dir, r.source, reviewer)
             and assignment_status(
                 recommendations_dir, r.source, reviewer) == "in_progress")
-        n_stale = sum(1 for r in assigned if is_stale(r, today=today))
+        n_stale = sum(
+            1 for r in assigned if is_stale(store, r.source, today=today))
         paused = is_paused(store, reviewer)
         rows.append({
             # Visual marker for paused; the DataTable column is text only
@@ -236,42 +260,112 @@ def _team_table(
     )
 
 
-def _submissions_table(
-    results_dir: Path, recommendations_dir: Path,
-) -> html.Div:
+def _source_progress_rows(
+    *, results_dir: Path, recommendations_dir: Path,
+    store: AssignmentStore, filter_value: str,
+) -> list[dict]:
+    """Build the rows for the source-progress table under one filter.
+
+    Filter semantics (see ``_FILTER_OPTIONS``):
+      * ``in_progress`` → phase == "open"
+      * ``final``       → phase == "final"
+      * ``preopen``     → phase in {"stage1", "stage2"}
+    """
+    phases = _phase_for_filter(filter_value)
+    all_srcs = list_sources(results_dir)
+
+    # Difficulty scores power the Rating column. score_all reads each
+    # source's CSV — cheap (~1 ms / source) and fresh per render.
+    by_folder: dict[str, object] = {}
+    for d in score_all(all_srcs):
+        by_folder[d.folder] = d
+
+    # Who's assigned where? Walk the store once.
+    assigned_by_source: dict[str, list[str]] = {}
+    for reviewer, recs in store.assignments.items():
+        for r in recs:
+            assigned_by_source.setdefault(r.source, []).append(reviewer)
+
     rows = []
-    for src in list_sources(results_dir):
-        n = count_submissions(recommendations_dir, src.source)
-        if n == 0:
+    for src in all_srcs:
+        if source_phase(recommendations_dir, src.source) not in phases:
             continue
+        n_sub = count_submissions(recommendations_dir, src.source)
         slugs = list_other_reviewer_slugs(
             recommendations_dir, src.source, exclude_slug="")
+        diff = by_folder.get(src.folder.name)
+        rating = (
+            ("★" * diff.stars + ("  ⚠" if diff.outlier else ""))
+            if diff is not None else "—"
+        )
+        # Target date is only meaningful for in-progress sources;
+        # finalized + stage1/2 get a "—" per the user's spec.
+        if filter_value == "in_progress":
+            tgt = get_source_target_date(store, src.source) or ""
+        else:
+            tgt = "—"
         rows.append({
             "source": src.source,
-            "n_submitted": n,
+            "rating": rating,
+            "n_submitted": n_sub,
             "needs_more": needs_for(recommendations_dir, src.source),
             "reviewers": ", ".join(slugs) if slugs else "",
+            "target_date": tgt,
+            "assigned_to": ", ".join(
+                sorted(assigned_by_source.get(src.source, []))),
         })
-    rows.sort(key=lambda r: (-r["n_submitted"], r["source"]))
+    rows.sort(key=lambda r: r["source"])
+    return rows
+
+
+def _source_progress_table(
+    *, results_dir: Path, recommendations_dir: Path,
+    store: AssignmentStore, initial_filter: str = DEFAULT_FILTER,
+) -> html.Div:
+    """Source-progress table. The dropdown above it filters by review
+    phase; default = In Progress (Stage 2 done). All sources are shown
+    even with zero submissions — the table is now a complete source
+    progress view, not just "those with submissions"."""
+    rows = _source_progress_rows(
+        results_dir=results_dir,
+        recommendations_dir=recommendations_dir,
+        store=store, filter_value=initial_filter,
+    )
     return html.Div(
         [
-            html.H3("All submitted reviews",
-                    style={"margin": "0 0 0.25em"}),
             html.Div(
-                "Click-through to a reviewer's submitted JSON is a "
-                "Phase 2 follow-up — for now the names list the "
-                "reviewers who submitted.",
-                style={"color": "#666", "fontSize": "0.82em",
-                       "marginBottom": "0.5em"},
+                [
+                    html.H3("Source progress",
+                            style={"margin": "0",
+                                   "display": "inline-block"}),
+                    html.Span("Show:",
+                              style={"marginLeft": "1em",
+                                     "marginRight": "0.5em",
+                                     "color": "#555"}),
+                    dcc.Dropdown(
+                        id="dashboard-src-filter",
+                        options=_FILTER_OPTIONS,
+                        value=initial_filter,
+                        clearable=False,
+                        style={"width": "260px",
+                               "display": "inline-block",
+                               "verticalAlign": "middle"},
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center",
+                       "flexWrap": "wrap", "marginBottom": "0.4em"},
             ),
             dash_table.DataTable(
-                id="dashboard-submissions",
+                id="dashboard-sources",
                 data=rows,
                 columns=[
                     {"name": "Source", "id": "source"},
+                    {"name": "Rating", "id": "rating"},
                     {"name": "Submitted", "id": "n_submitted"},
                     {"name": "Still needed", "id": "needs_more"},
                     {"name": "Reviewers", "id": "reviewers"},
+                    {"name": "Target", "id": "target_date"},
+                    {"name": "Assigned to", "id": "assigned_to"},
                 ],
                 style_table=_TABLE_STYLE,
                 style_cell={**_CELL_STYLE, "maxWidth": "320px",
@@ -289,12 +383,104 @@ def _submissions_table(
     )
 
 
+def _target_dates_modal_body(
+    open_sources: list[str],
+    current_targets: dict[str, str],
+) -> list:
+    """The per-source list + bulk-by-range form, both inside the modal.
+    Pulled out of ``_admin_controls_panel`` so the latter stays
+    readable."""
+    src_opts = [{"label": s, "value": s} for s in open_sources]
+    rows = []
+    for s in open_sources:
+        rows.append(html.Tr([
+            html.Td(s, style={"padding": "4px 8px"}),
+            html.Td(
+                dcc.Input(
+                    id={"type": "dashboard-td-input", "source": s},
+                    type="date",
+                    value=current_targets.get(s, "") or "",
+                    style={"width": "150px", "fontSize": "0.85em"},
+                ),
+                style={"padding": "4px 8px"},
+            ),
+        ]))
+    bulk_form = html.Div(
+        [
+            html.Span("Bulk: set date for range",
+                      style={"marginRight": "0.5em",
+                             "fontWeight": 600,
+                             "fontSize": "0.85em"}),
+            html.Span("From:", style={"marginRight": "0.25em"}),
+            dcc.Dropdown(
+                id="dashboard-td-from",
+                options=src_opts, clearable=True,
+                placeholder="(first)",
+                style={"width": "140px",
+                       "display": "inline-block",
+                       "marginRight": "0.5em",
+                       "verticalAlign": "middle"},
+            ),
+            html.Span("To:", style={"marginRight": "0.25em"}),
+            dcc.Dropdown(
+                id="dashboard-td-to",
+                options=src_opts, clearable=True,
+                placeholder="(last)",
+                style={"width": "140px",
+                       "display": "inline-block",
+                       "marginRight": "0.5em",
+                       "verticalAlign": "middle"},
+            ),
+            html.Span("Date:", style={"marginRight": "0.25em"}),
+            dcc.Input(
+                id="dashboard-td-bulk-date", type="date", value="",
+                style={"marginRight": "0.5em",
+                       "verticalAlign": "middle"},
+            ),
+            html.Button(
+                "Apply to range",
+                id="dashboard-td-apply-range", n_clicks=0,
+                title="Fill the date inputs for every source in the "
+                      "lexicographic range [From, To]. Tweak individual "
+                      "rows after, then Save.",
+                style={"padding": "0.3em 0.8em", "fontSize": "0.85em",
+                       "verticalAlign": "middle"},
+            ),
+        ],
+        style={"padding": "0.5em", "background": "#f7f9fb",
+               "border": "1px solid #e0e0e0", "borderRadius": "4px",
+               "marginBottom": "0.6em",
+               "display": "flex", "alignItems": "center",
+               "flexWrap": "wrap", "gap": "0.25em"},
+    )
+    per_source = html.Div(
+        html.Table(
+            [html.Thead(html.Tr([
+                html.Th("Source",
+                        style={"padding": "4px 8px",
+                               "textAlign": "left"}),
+                html.Th("Target date",
+                        style={"padding": "4px 8px",
+                               "textAlign": "left"}),
+            ]))] + [html.Tbody(rows)],
+            style={"width": "100%", "borderCollapse": "collapse",
+                   "fontFamily": "system-ui, sans-serif",
+                   "fontSize": "0.88em"},
+        ),
+        style={"maxHeight": "40vh", "overflowY": "auto",
+               "border": "1px solid #e0e0e0", "borderRadius": "4px"},
+    )
+    return [bulk_form, per_source]
+
+
 def _admin_controls_panel(
     reviewers: list[str], paused_set: set[str],
+    open_sources: list[str],
+    current_targets: dict[str, str],
 ) -> html.Div:
     """Top-of-dashboard admin section: Manage team + Auto-balance +
-    Reassign-queue buttons, their modals, and a status line. Hidden
-    when admin=False."""
+    Reassign-queue + Set-target-dates buttons, their modals, and a
+    status line. Hidden when admin=False."""
     reviewer_opts = [{"label": r, "value": r} for r in reviewers]
     # Team-management rows: one per reviewer with a pause/active select.
     team_rows = []
@@ -352,6 +538,18 @@ def _admin_controls_panel(
                         id="dashboard-reassign-btn", n_clicks=0,
                         title="Bulk-move one reviewer's queue to another. "
                               "Used when someone drops out mid-review.",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Button(
+                        "📅 Set target dates…",
+                        id="dashboard-td-btn", n_clicks=0,
+                        title="Set per-source target dates. Bulk-set a "
+                              "lexicographic range with one action, then "
+                              "tweak individual rows before saving.",
                         style={"marginLeft": "0.6em",
                                "padding": "0.4em 1em", "fontSize": "0.9em",
                                "background": "white", "color": "#555",
@@ -586,6 +784,70 @@ def _admin_controls_panel(
             # dict ({reviewer: [src, ...]}) from auto_balance. Holds nothing
             # until the admin clicks "Auto-balance"; cleared on Apply/Cancel.
             dcc.Store(id="dashboard-ab-preview-store", data=None),
+            # Target-dates modal ----------------------------------------
+            html.Div(
+                id="dashboard-td-modal", style={"display": "none"},
+                children=[html.Div([
+                    html.Div(
+                        [
+                            html.H4("Set target dates",
+                                    style={"margin": 0}),
+                            html.Button(
+                                "×", id="dashboard-td-close", n_clicks=0,
+                                style={"border": "none",
+                                       "background": "transparent",
+                                       "fontSize": "1.5em",
+                                       "lineHeight": 1,
+                                       "cursor": "pointer",
+                                       "color": "#888"},
+                            ),
+                        ],
+                        style={"display": "flex",
+                               "justifyContent": "space-between",
+                               "alignItems": "center",
+                               "marginBottom": "0.4em"},
+                    ),
+                    html.Div(
+                        "Only Stage-2-done sources are shown — "
+                        "finalized and Stage 1/2 sources don't carry "
+                        "target dates. Bulk-set a range, then tweak "
+                        "individual rows. Save commits everything.",
+                        style={"color": "#666", "fontSize": "0.85em",
+                               "marginBottom": "0.5em"},
+                    ),
+                    *_target_dates_modal_body(
+                        open_sources, current_targets),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Save", id="dashboard-td-save",
+                                n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "#1f77b4",
+                                       "color": "white", "border": "none",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                            html.Button(
+                                "Cancel", id="dashboard-td-cancel",
+                                n_clicks=0,
+                                style={"padding": "0.45em 1em",
+                                       "background": "white",
+                                       "color": "#555",
+                                       "border": "1px solid #bbb",
+                                       "borderRadius": "4px",
+                                       "cursor": "pointer"},
+                            ),
+                        ],
+                        style={"display": "flex", "gap": "0.5em",
+                               "justifyContent": "flex-end",
+                               "marginTop": "0.6em"},
+                    ),
+                ], style={"background": "white", "padding": "1.5em",
+                          "borderRadius": "6px", "maxWidth": "640px",
+                          "margin": "4% auto",
+                          "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"})],
+            ),
         ],
         style={"padding": "0.6em 1em", "background": "#fffaf0",
                "borderBottom": "1px solid #f0e0bf"},
@@ -643,15 +905,29 @@ def build_dashboard_page(
         [
             _my_queue_table(store, recommendations_dir, reviewer),
             _team_table(store, recommendations_dir, reviewers),
-            _submissions_table(results_dir, recommendations_dir),
+            _source_progress_table(
+                results_dir=results_dir,
+                recommendations_dir=recommendations_dir,
+                store=store,
+            ),
         ],
         style={"padding": "1em", "maxWidth": "1100px", "margin": "0 auto"},
     )
 
     page_children = [header, banner]
     if admin:
+        # Open-source list + current targets feed the Target-dates
+        # modal — both small enough to compute at render time.
+        open_src_names = sorted({
+            s.source for s in list_sources(results_dir)
+            if source_phase(recommendations_dir, s.source) == "open"
+        })
         page_children.append(_admin_controls_panel(
-            reviewers, set(store.paused_reviewers)))
+            reviewers, set(store.paused_reviewers),
+            open_src_names,
+            {s: get_source_target_date(store, s) or ""
+             for s in open_src_names},
+        ))
     page_children.append(body)
 
     return html.Div(

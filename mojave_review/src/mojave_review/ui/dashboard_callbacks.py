@@ -19,11 +19,12 @@ from ..recommendations.store import reviewer_slug, source_phase
 from ..data.assignments import (
     active_reviewers, apply_additions, auto_balance,
     credit_prior_submissions, load_store, reassign_queue,
-    save_store, set_paused, submitted_by_map,
+    save_store, set_paused, set_source_target_date,
+    sources_in_range, submitted_by_map,
 )
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
-from .dashboard import known_reviewers
+from .dashboard import known_reviewers, _source_progress_rows
 
 
 def _name_for_slug(
@@ -56,12 +57,32 @@ def register_dashboard_callbacks(
     tokens_path: Path | None,
     reviewer: str,
 ) -> None:
-    """Register the admin-only auto-balance and reassign-queue callbacks.
+    """Register the dashboard callbacks: source-progress filter +
+    admin-only auto-balance / reassign-queue / team-management /
+    target-dates.
 
     Reviewer / source roster are re-read on every callback invocation
     so the live state of the team file + recommendations tree is
     always used — no stale closures.
     """
+
+    # -------------------------------------------------------------------
+    # Source-progress filter (everyone sees this)
+    # -------------------------------------------------------------------
+
+    @app.callback(
+        Output("dashboard-sources", "data"),
+        Input("dashboard-src-filter", "value"),
+        prevent_initial_call=False,
+    )
+    def _src_filter(value):
+        store = load_store(recommendations_dir)
+        return _source_progress_rows(
+            results_dir=results_dir,
+            recommendations_dir=recommendations_dir,
+            store=store,
+            filter_value=value or "in_progress",
+        )
 
     # -------------------------------------------------------------------
     # Auto-balance: preview-then-apply
@@ -241,6 +262,82 @@ def register_dashboard_callbacks(
             parts.append(f"credited {n_credited}")
         parts.append(f"added {n_added}")
         return "/dashboard", "auto-balance: " + ", ".join(parts)
+
+    # -------------------------------------------------------------------
+    # Target dates: bulk-by-range + per-source save
+    # -------------------------------------------------------------------
+
+    @app.callback(
+        Output("dashboard-td-modal", "style"),
+        Input("dashboard-td-btn", "n_clicks"),
+        Input("dashboard-td-close", "n_clicks"),
+        Input("dashboard-td-cancel", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _td_open_or_close(open_n, close_n, cancel_n):
+        from dash import ctx
+        if ctx.triggered_id == "dashboard-td-btn":
+            return {"display": "block",
+                    "position": "fixed", "top": 0, "left": 0,
+                    "right": 0, "bottom": 0,
+                    "background": "rgba(0,0,0,0.35)", "zIndex": 1000}
+        return {"display": "none"}
+
+    @app.callback(
+        Output({"type": "dashboard-td-input", "source": ALL}, "value"),
+        Input("dashboard-td-apply-range", "n_clicks"),
+        State("dashboard-td-from", "value"),
+        State("dashboard-td-to", "value"),
+        State("dashboard-td-bulk-date", "value"),
+        State({"type": "dashboard-td-input", "source": ALL}, "id"),
+        State({"type": "dashboard-td-input", "source": ALL}, "value"),
+        prevent_initial_call=True,
+    )
+    def _td_apply_range(_n, from_src, to_src, bulk_date,
+                        ids, current_vals):
+        # No bulk date set ⇒ leave everything alone.
+        if not bulk_date:
+            return current_vals
+        # Resolve the source set: empty From/To means "from the
+        # beginning / to the end" of the displayed list, matching what
+        # the placeholder strings suggest.
+        all_srcs = sorted({i["source"] for i in ids
+                           if isinstance(i, dict)})
+        lo = from_src or (all_srcs[0] if all_srcs else "")
+        hi = to_src or (all_srcs[-1] if all_srcs else "")
+        in_range = set(sources_in_range(all_srcs, lo, hi))
+        return [
+            bulk_date if (
+                isinstance(i, dict) and i["source"] in in_range
+            ) else cur
+            for i, cur in zip(ids, current_vals)
+        ]
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children",
+               allow_duplicate=True),
+        Input("dashboard-td-save", "n_clicks"),
+        State({"type": "dashboard-td-input", "source": ALL}, "id"),
+        State({"type": "dashboard-td-input", "source": ALL}, "value"),
+        prevent_initial_call=True,
+    )
+    def _td_save(_n, ids, values):
+        store = load_store(recommendations_dir)
+        n_changed = 0
+        for ident, val in zip(ids, values):
+            # Match the same pattern-matching convention as the rest of
+            # the callbacks — see _tm_save's note.
+            src = ident["source"] if isinstance(ident, dict) else None
+            if not src:
+                continue
+            new = (val or "").strip() or None
+            cur = store.source_target_dates.get(src)
+            if new != cur:
+                set_source_target_date(store, src, new)
+                n_changed += 1
+        save_store(recommendations_dir, store)
+        return "/dashboard", f"target dates: {n_changed} updated"
 
     # -------------------------------------------------------------------
     # Manage team — pause / activate individual reviewers
