@@ -32,6 +32,7 @@ mojave-review-tokens      = "mojave_review.cli.tokens:main"
 mojave-review-notes       = "mojave_review.cli.notes:main"
 mojave-review-prune-drafts = "mojave_review.cli.prune:main"
 mojave-review-audit-robust = "mojave_review.cli.audit_robust:main"
+mojave-review-difficulty   = "mojave_review.cli.difficulty:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
