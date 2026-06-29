@@ -443,9 +443,12 @@ def save_nwin_choices(path: Path, source: str, choices: dict[str, dict],
 # throw away exactly the cached fits / N values the fast rerun relies on; and
 # an older --N_win_file (with its value) is superseded by ours. --recalc_IDs
 # is stripped here too but then ADDED back unconditionally below, so the
-# drafted command always carries exactly one.
+# drafted command always carries exactly one. --dont_confirm / --make_plots
+# are stripped as a matter of policy — the drafted command should always
+# prompt the user and skip plot regeneration unless they re-add the flag.
 _DROP_BARE_FLAGS = {"--editN", "--show_results", "--recalc_all",
-                    "--recalc_fits", "--recalc_N", "--recalc_IDs"}
+                    "--recalc_fits", "--recalc_N", "--recalc_IDs",
+                    "--dont_confirm", "--make_plots"}
 _DROP_VALUE_FLAGS = {"--N_win_file"}
 
 
