@@ -97,6 +97,15 @@ def create_app(
     def _layout():
         return html.Div([
             dcc.Location(id="url", refresh=False),
+            # Admin write-then-navigate actions (dashboard balancing /
+            # target dates / team edits) target THIS location, which
+            # reloads the document. The shared refresh=False "url" can't
+            # refresh the dashboard after an apply: it's a same-path
+            # ("/dashboard"→"/dashboard") navigation, so no pathname
+            # change fires and the page (with its open modal) shows stale
+            # data — the write succeeded on disk but looked like a no-op.
+            # A dedicated refresh=True location forces a real reload.
+            dcc.Location(id="dashboard-redirect", refresh=True),
             html.Div(id="page-content"),
         ])
     app.layout = _layout

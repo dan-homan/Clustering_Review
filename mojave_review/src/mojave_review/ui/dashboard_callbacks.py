@@ -248,7 +248,7 @@ def register_dashboard_callbacks(
                 "background": "rgba(0,0,0,0.35)", "zIndex": 1000}, body, preview_store
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-ab-apply", "n_clicks"),
@@ -335,7 +335,7 @@ def register_dashboard_callbacks(
         ]
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-td-save", "n_clicks"),
@@ -365,7 +365,7 @@ def register_dashboard_callbacks(
     # -------------------------------------------------------------------
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-credit-btn", "n_clicks"),
@@ -411,7 +411,7 @@ def register_dashboard_callbacks(
         return {"display": "none"}
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-tm-save", "n_clicks"),
@@ -438,7 +438,7 @@ def register_dashboard_callbacks(
         return rel("/dashboard"), f"team updated: {delta}"
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-tm-add-btn", "n_clicks"),
@@ -456,7 +456,7 @@ def register_dashboard_callbacks(
         return no_update, f"{name} is already on the roster"
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input({"type": "dashboard-tm-remove", "reviewer": ALL}, "n_clicks"),
@@ -498,7 +498,7 @@ def register_dashboard_callbacks(
         return {"display": "none"}
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-rq-apply", "n_clicks"),
@@ -614,7 +614,7 @@ def register_dashboard_callbacks(
             moves, empty_msg="Load is already balanced — no moves needed.")
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-rb-apply", "n_clicks"),
         State("dashboard-rb-consider-completed", "value"),
@@ -670,7 +670,7 @@ def register_dashboard_callbacks(
             moves, empty_msg="Nothing pending to redistribute.")
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-rd-apply", "n_clicks"),
         State("dashboard-rd-from", "value"),
@@ -709,7 +709,7 @@ def register_dashboard_callbacks(
                 else {"display": "none"})
 
     @app.callback(
-        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-redirect", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-ms-apply", "n_clicks"),
         State("dashboard-ms-source", "value"),
