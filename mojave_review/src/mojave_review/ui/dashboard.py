@@ -52,6 +52,7 @@ from ..data.assignments import (
     AssignmentStore, assignment_status, get_source_target_date,
     load_store, manual_review_slugs_by_source, needs_for,
 )
+from .urls import rel
 
 
 # Source-progress table filter — values map to source_phase() outputs.
@@ -345,9 +346,10 @@ _PAGE_SIZE = 10
 
 def _source_link(name: str) -> str:
     """Markdown link from a source name to its review page
-    (``/?source=<name>``), so dashboard tables let a reviewer jump
-    straight in. The name is URL-encoded (source names contain ``+``)."""
-    return f"[{name}](/?source={quote(name, safe='')})"
+    (``<prefix>/?source=<name>``), so dashboard tables let a reviewer jump
+    straight in. The name is URL-encoded (source names contain ``+``); the
+    path is prefix-aware via ``rel`` for reverse-proxy deployments."""
+    return f"[{name}]({rel('/')}?source={quote(name, safe='')})"
 
 
 def _status_chip(text: str, color: str) -> dict:
@@ -1498,8 +1500,12 @@ def build_dashboard_page(
     reviewer: str,
     admin: bool,
     tokens_path: Path | None,
-    back_href: str = "/",
+    back_href: str | None = None,
 ) -> html.Div:
+    # Default the back-link to the (prefix-aware) app root. Resolved here,
+    # not as a default arg, so it picks up the request pathname prefix.
+    if back_href is None:
+        back_href = rel("/")
     store = load_store(recommendations_dir)
     reviewers = known_reviewers(tokens_path, recommendations_dir, reviewer)
     name_for_slug = slug_name_map(

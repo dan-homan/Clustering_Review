@@ -46,12 +46,19 @@ Clustering_Review/
         │   ├── schema.py                # dataclasses for the JSON shape
         │   ├── store.py                 # read/write/list reviewer JSON files
         │   └── apply.py                 # apply a Recommendation to a cluster_df
+        ├── data/
+        │   ├── difficulty.py            # per-source difficulty score + stars (assignments)
+        │   └── assignments.py           # _admin/assignments.json store + balancer (assignments)
         ├── assets/                      # Dash auto-loads .js/.css from here
         │   ├── resizable.js             # draggable splitter between panels
-        │   └── resizable.css
+        │   ├── resizable.css
+        │   └── dashboard.css            # uniform table font for the dashboard
         └── ui/
             ├── layout.py                # header + body + recommendations panel
             ├── callbacks.py             # source/model/view + selection + summary/overlay
+            ├── urls.py                  # rel(): prefix-aware in-app links (reverse proxy)
+            ├── dashboard.py             # Assignment Dashboard page (assignments)
+            ├── dashboard_callbacks.py   # ... its callbacks (admin balancing actions)
             ├── nwin_panel.py            # admin Window-N review panel (--editN replacement)
             ├── nwin_callbacks.py        # ... and its callbacks (admin-only)
             ├── recommendations_panel.py # the 4-tab bottom panel
@@ -754,6 +761,123 @@ no clustering runs in the app.
   The beam-repositioning clientside callback is a copy of the main
   overlay's (same restyle-and-`no_update` discipline, different ids).
 
+## Assignment Dashboard (`/dashboard`)
+
+A second page (header link "📋 Assignment Dashboard", `target="_blank"`)
+that tracks who reviews what. Built by
+[`ui/dashboard.py`](mojave_review/src/mojave_review/ui/dashboard.py);
+admin actions live in
+[`ui/dashboard_callbacks.py`](mojave_review/src/mojave_review/ui/dashboard_callbacks.py)
+(registered unconditionally but bound to admin-only components). The
+router in `app.py` picks the page on `url.pathname.endswith("/dashboard")`.
+
+### Storage — `recommendations/_admin/assignments.json`
+
+One JSON store ([`data/assignments.py`](mojave_review/src/mojave_review/data/assignments.py)),
+**under `recommendations/`** so the normal recommendations sync carries it
+to the deployed server (that's the whole laptop→server workflow — the
+admin curates assignments locally where there's no `tokens.yaml`, then
+syncs). Atomic write + a rotating snapshot to `_admin/backups/`
+(last 10) on every save, so a bad rebalance is recoverable. Schema is
+versioned (currently **v5**); `to_dict` always emits the full shape and
+`touch()` bumps the on-disk `version`, so any load→save upgrades an older
+file. Fields:
+
+- `assignments: {reviewer_name: [AssignmentRecord]}` — keyed by full
+  reviewer **name** (the identity from `tokens.yaml` `name:`); a
+  reviewer's queue is looked up by that name, so names must match the
+  deployed tokens for the queue to resolve.
+- `source_target_dates: {source: "YYYY-MM-DD"}` — one target per source.
+- `team_members: [name]` (v4) — manual roster so the admin can add
+  teammates who haven't submitted yet (the auto-discovered roster only
+  sees on-disk submitters + tokens). `prune_collision_reviewers` strips
+  phantom `<base>_<N>` keys.
+- `manual_reviews: {reviewer_name: [source]}` (v5) — explicit
+  "I reviewed this" credit for sources the admin advanced past Stage 2
+  **without** leaving an artifact (the "✓ Credit my Stage-2 reviews"
+  backfill). Counted as completed; never as in-progress.
+- `paused_reviewers: [name]` — excluded from auto-balance, queue kept.
+
+### Difficulty score (drives Rating + the balancer weight)
+
+[`data/difficulty.py`](mojave_review/src/mojave_review/data/difficulty.py):
+`score = N_epochs × mean(features_per_epoch)`, mapped to absolute
+star cutoffs (★…★★★★★) with a ⚠ outlier flag. `balance_weight =
+sqrt(score)` compresses the tail so one BL Lac can't eat a whole quota;
+the load balancer schedules on `balance_weight`, not raw score.
+
+### Roster identity — names vs. slugs (the recurring gotcha)
+
+The store keys on reviewer **names**; on-disk recommendation files key on
+**slugs** (`reviewer_slug(name)`). Anything that bridges the two
+translates explicitly. **Collision artifacts**: a re-archived submission
+becomes `considered/<date>/<slug>_2.json`; the `_N` suffix is folded back
+to the base slug everywhere identity comes from a filename
+(`all_submitting_reviewers`, `all_review_submitters`,
+`reviewer_submitted_sources`, and `dashboard.known_reviewers`'
+`_fold_collision_names`). Forgetting the fold mints a phantom
+"`homand_2`" reviewer — that bug is why the folds exist.
+
+### Page anatomy
+
+- **Two stat-tile banners** at the top: **Team** (Total / Finalized /
+  Ready for Completion / Ready for Review / Stage 1/2) and **My** (Sources
+  Reviewed / Pending Assignments / In Progress). "Ready for Completion" =
+  open with ≥ `target` reviews **beyond the viewer's own** (so it's
+  viewer-relative); "Ready for Review" = open but short.
+- **My queue** — the reviewer's assigned sources (for the admin: every
+  Stage 1/2 source, the baseline work only they drive). Source / Rating /
+  Status / Target. Paginates at 10.
+- **Sample Status** — every source under a phase filter: Source / Rating /
+  Reviews needed / Reviews (everyone who ever reviewed it, incl. archived)
+  / Pending Reviews (assigned-but-unsubmitted) / Target. Paginates at 10.
+- **Reviewer summary** (admin) — expandable per-reviewer row: current-queue
+  breakdown + lifetime **Completed** (incl. finalized / no-longer-assigned,
+  so `Completed ≥ Submitted`), with off-queue drafts flagged `✎N`.
+
+Source names in both tables are markdown deep-links to `<root>/?source=
+<name>`; the review page's `_deeplink_source` callback selects the
+matching picker option. The picker also lists a reviewer's outstanding
+assignments first, `★`-prefixed (dropdown labels must be plain strings in
+this Dash version — see Don't/gotchas — so `★` stands in for bold).
+
+### `assignment_status(recs, source, reviewer)`
+
+`submitted` / `in_progress` / `pending`. **`submitted` means submitted at
+any time** — open `submitted/` OR Stage-3 `considered/` OR Stage-2
+`applied/<date>__<slug>.json` — so a finalized review with a stale
+`current/` draft reads as done, not in-progress. Only `pending` (not
+started) assignments are eligible to move in a rebalance.
+
+### Admin balancing actions (all preview-then-apply, move PENDING only)
+
+In `dashboard_callbacks.py`; each writes only `store.assignments` and
+navigates back via `url.href` (prefix-aware, see below):
+
+- **🔀 Auto-balance** — fill open review slots (LPT on `balance_weight`);
+  additions only. `credit_prior_submissions` pre-seeds completed work as
+  load. The admin is excluded from the Stage-3 pool.
+- **⚖ Top-up rebalance** — *move* pending assignments to even out load
+  (so a reviewer added after seeding gets a fair share). A "Consider
+  completed reviews" checkbox passes each reviewer's completed weight as
+  `rebalance_pending(base_load=)` — first-round lighter load for past
+  contributors.
+- **🏖 Redistribute (break)** — spread one reviewer's pending queue across
+  the pool (not 1→1), optional cap + auto-pause.
+- **↔ Move a source**, **↪ Reassign queue** (bulk 1→1), **📅 Set target
+  dates**, **👥 Manage team** (add/remove/pause), **✓ Credit my Stage-2
+  reviews**.
+
+### Reverse-proxy path prefix
+
+`--url-base-prefix /mojave-review/` (or `MOJAVE_REVIEW_URL_BASE_PREFIX`)
+makes Dash serve under the prefix; every in-app link/navigation routes
+through [`ui/urls.py`](mojave_review/src/mojave_review/ui/urls.py) `rel()`
+(= `dash.get_relative_path`, no-op at root) so they match. **The proxy
+must preserve the prefix** (`proxy_pass …:<port>;` with NO trailing
+slash). Root-path hosting (a subdomain) needs none of this. See
+[`docs/deployment_phase2.md`](docs/deployment_phase2.md).
+
 ## Running the web app
 
 ```bash
@@ -762,7 +886,9 @@ mojave-review --results-dir ../Results        # opens http://127.0.0.1:8050
 ```
 
 Useful flags: `--reviewer "Name"`, `--port 8050`, `--no-browser`,
-`--cache-dir`, `--recommendations-dir`.
+`--cache-dir`, `--recommendations-dir`, `--admin` (enables the
+Assignment Dashboard balancing actions + Stage-3 aggregation),
+`--url-base-prefix /mojave-review/` (reverse-proxy hosting).
 
 For Drive-mirrored data, reviewers should use Google Drive for Desktop and
 point `--results-dir` at the local mirror path — no in-app Drive auth needed.
@@ -923,6 +1049,10 @@ commit was reverted. **Do not add `uid`s to the contour trace.**
 # Audit (and repair) per-epoch robust inconsistencies in saved CSVs
 mojave-review-audit-robust --results-dir ./Results            # dry-run report
 mojave-review-audit-robust --results-dir ./Results --apply    # repair + backup
+
+# Per-source difficulty scores + star distribution (drives the dashboard
+# Rating column and the auto-balancer weight)
+mojave-review-difficulty --results-dir ./Results
 
 # Smoke test the loader + figure
 python3 -c "

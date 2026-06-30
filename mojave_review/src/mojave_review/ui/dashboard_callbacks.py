@@ -30,6 +30,7 @@ from ..data.loader import list_sources
 from .dashboard import (
     known_reviewers, moves_preview, slug_name_map, _source_progress_rows,
 )
+from .urls import rel
 
 
 # Shown when any rebalance/move modal opens (covers the screen, dims behind).
@@ -281,7 +282,7 @@ def register_dashboard_callbacks(
         if n_credited:
             parts.append(f"credited {n_credited}")
         parts.append(f"added {n_added}")
-        return "/dashboard", "auto-balance: " + ", ".join(parts)
+        return rel("/dashboard"), "auto-balance: " + ", ".join(parts)
 
     # -------------------------------------------------------------------
     # Target dates: bulk-by-range + per-source save
@@ -357,7 +358,7 @@ def register_dashboard_callbacks(
                 set_source_target_date(store, src, new)
                 n_changed += 1
         save_store(recommendations_dir, store)
-        return "/dashboard", f"target dates: {n_changed} updated"
+        return rel("/dashboard"), f"target dates: {n_changed} updated"
 
     # -------------------------------------------------------------------
     # Credit my Stage-2 reviews (admin self-credit backfill)
@@ -387,7 +388,7 @@ def register_dashboard_callbacks(
         if not n:
             return no_update, "no missing reviews to credit"
         save_store(recommendations_dir, store)
-        return "/dashboard", f"credited {n} source(s) as reviewed by {me}"
+        return rel("/dashboard"), f"credited {n} source(s) as reviewed by {me}"
 
     # -------------------------------------------------------------------
     # Manage team — pause / activate individual reviewers
@@ -434,7 +435,7 @@ def register_dashboard_callbacks(
             f"+{len(new_paused - previous_paused)} paused / "
             f"-{len(previous_paused - new_paused)} resumed"
         )
-        return "/dashboard", f"team updated: {delta}"
+        return rel("/dashboard"), f"team updated: {delta}"
 
     @app.callback(
         Output("url", "href", allow_duplicate=True),
@@ -451,7 +452,7 @@ def register_dashboard_callbacks(
         store = load_store(recommendations_dir)
         if add_team_member(store, name):
             save_store(recommendations_dir, store)
-            return "/dashboard", f"added team member: {name}"
+            return rel("/dashboard"), f"added team member: {name}"
         return no_update, f"{name} is already on the roster"
 
     @app.callback(
@@ -473,7 +474,7 @@ def register_dashboard_callbacks(
         store = load_store(recommendations_dir)
         if remove_team_member(store, name):
             save_store(recommendations_dir, store)
-            return "/dashboard", f"removed team member: {name}"
+            return rel("/dashboard"), f"removed team member: {name}"
         return no_update, f"{name} was not a manual member"
 
     # -------------------------------------------------------------------
@@ -532,7 +533,7 @@ def register_dashboard_callbacks(
         msg = f"reassign {from_r}→{to_r}: moved {len(moved)}"
         if skipped:
             msg += f", skipped {len(skipped)}"
-        return "/dashboard", msg
+        return rel("/dashboard"), msg
 
     # -------------------------------------------------------------------
     # Surgical rebalancing — top-up / redistribute / move-one-source.
@@ -628,7 +629,7 @@ def register_dashboard_callbacks(
         save_store(recommendations_dir, store)
         note = " (completed-weighted)" if (
             consider_completed and "completed" in consider_completed) else ""
-        return "/dashboard", f"rebalanced: {n} move(s){note}"
+        return rel("/dashboard"), f"rebalanced: {n} move(s){note}"
 
     # --- Redistribute one reviewer's queue (break) --------------------
     @app.callback(
@@ -692,7 +693,7 @@ def register_dashboard_callbacks(
         msg = f"redistributed {n} source(s) from {from_r}"
         if did_pause:
             msg += " (paused)"
-        return "/dashboard", msg
+        return rel("/dashboard"), msg
 
     # --- Move a single source -----------------------------------------
     @app.callback(
@@ -730,4 +731,4 @@ def register_dashboard_callbacks(
                 f"couldn't move {source}: {frm} doesn't hold it or {to} "
                 f"already does")
         save_store(recommendations_dir, store)
-        return "/dashboard", f"moved {source}: {frm}→{to}"
+        return rel("/dashboard"), f"moved {source}: {frm}→{to}"

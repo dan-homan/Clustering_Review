@@ -77,6 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Bind address. Default 127.0.0.1.")
     p.add_argument("--port", type=int, default=None,
                    help="TCP port. Default 8050.")
+    p.add_argument("--url-base-prefix", default=None,
+                   help="Public path prefix when behind a reverse proxy "
+                        "(e.g. /mojave-review/). Default: served at root.")
     p.add_argument("--no-browser", action="store_true",
                    default=None,         # None ⇒ "user didn't say"
                    help="Don't auto-open browser.")
@@ -145,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         "admin_contact":       args.admin_contact,
         "host":                args.host,
         "port":                args.port,
+        "url_base_prefix":     args.url_base_prefix,
         "no_browser":          args.no_browser,
         "debug":               args.debug,
         "admin":               args.admin,
@@ -190,9 +194,12 @@ def main(argv: list[str] | None = None) -> int:
         tokens_path=cfg.tokens_file,
         cookie_secure=cfg.cookie_secure,
         admin_contact=cfg.admin_contact,
+        url_base_prefix=cfg.url_base_prefix,
     )
 
-    url = f"http://{cfg.host}:{cfg.port}"
+    # The launcher hits the bound port directly (root), even when a public
+    # url_base_prefix is set for the reverse-proxy deployment.
+    url = f"http://{cfg.host}:{cfg.port}{cfg.url_base_prefix or '/'}"
     if not cfg.no_browser:
         Timer(1.0, lambda: webbrowser.open(url)).start()
 

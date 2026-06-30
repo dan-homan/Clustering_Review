@@ -36,6 +36,7 @@ def create_app(
     tokens_path: Path | None = None,
     cookie_secure: bool = True,
     admin_contact: str = "the admin",
+    url_base_prefix: str | None = None,
 ) -> Dash:
     """Build the Dash app.
 
@@ -52,11 +53,18 @@ def create_app(
       ``reviewer`` argument is the single-user fallback used when
       there's no request context (or in Phase 1).
     """
+    # Behind a reverse-proxy prefix, url_base_pathname makes Dash serve its
+    # routes/assets under the prefix; the in-app links use ui.urls.rel
+    # (dash.get_relative_path) so they match. None ⇒ served at root.
+    dash_kwargs = {}
+    if url_base_prefix:
+        dash_kwargs["url_base_pathname"] = url_base_prefix
     app = Dash(
         __name__,
         title="MOJAVE Cluster Review",
         suppress_callback_exceptions=True,
         assets_folder=_PACKAGE_ASSETS,
+        **dash_kwargs,
     )
 
     # gzip every response, including the /_dash-update-component callback

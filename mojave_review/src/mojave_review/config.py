@@ -92,6 +92,14 @@ class Config:
     # Bind
     host: str = "127.0.0.1"
     port: int = 8050
+    # Public path prefix when served behind a reverse proxy
+    # (e.g. ``/mojave-review/``). ``None`` ⇒ served at root. Normalised
+    # post-init to have leading + trailing slashes. Passed to Dash as
+    # ``url_base_pathname`` so its routes/assets and all in-app links
+    # (via ``ui.urls.rel``) carry the prefix. Pair with an nginx
+    # ``proxy_pass`` that PRESERVES the prefix (no trailing slash on the
+    # upstream), so the path the browser uses matches the path Dash serves.
+    url_base_prefix: str | None = None
 
     # Identity & roles
     reviewer: str | None = None                 # None ⇒ resolve to $USER
@@ -193,6 +201,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "cookie_secure":       ("MOJAVE_REVIEW_COOKIE_SECURE",),
     "host":                ("MOJAVE_REVIEW_HOST",),
     "port":                ("MOJAVE_REVIEW_PORT",),
+    "url_base_prefix":     ("MOJAVE_REVIEW_URL_BASE_PREFIX",),
     "reviewer":            ("MOJAVE_REVIEW_REVIEWER",),
     "admin":               ("MOJAVE_REVIEW_ADMIN",),
     "log_file":            ("MOJAVE_REVIEW_LOG_FILE",),
@@ -288,5 +297,11 @@ def load_config(
 
     if cfg.reviewer is None:
         cfg.reviewer = env.get("USER") or "anonymous"
+
+    # Normalise the public path prefix to /…/ (Dash requires both slashes).
+    # A blank / whitespace-only / bare-"/" value means "served at root" →
+    # None (so Dash gets no url_base_pathname and rel() is a no-op).
+    p = str(cfg.url_base_prefix or "").strip().strip("/")
+    cfg.url_base_prefix = f"/{p}/" if p else None
 
     return cfg

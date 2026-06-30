@@ -12,6 +12,7 @@ from ..recommendations.store import (
     is_submitted, load_recommendation)
 from .nwin_panel import build_nwin_panel
 from .recommendations_panel import build_recommendations_panel
+from .urls import rel
 
 
 def _reviewer_status(recommendations_dir: Path, source: str,
@@ -123,7 +124,7 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     # app.py).
                     html.A(
                         "📋 Assignment Dashboard",
-                        href="/dashboard", target="_blank",
+                        href=rel("/dashboard"), target="_blank",
                         style={"marginLeft": "1.5em", "color": "#1f77b4",
                                "textDecoration": "none", "fontSize": "0.9em",
                                "verticalAlign": "middle"},

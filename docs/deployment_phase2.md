@@ -53,7 +53,7 @@ need to forward `X-Forwarded-For` — auth is purely in the URL/cookie.
 |---|---|---|
 | Python ≥ 3.10 | In user space (`pyenv` / `uv`); no sudo install needed | App runs in a venv. |
 | Long-lived process on a local TCP port | Bound to `127.0.0.1`, port assigned to me | The Dash app under `gunicorn`. |
-| Reverse-proxy line | `https://<host>/mojave-review/` → `http://127.0.0.1:<port>/` with HTTPS at the proxy. WebSocket upgrade headers helpful but not required. | One nginx/Apache stanza. |
+| Reverse-proxy line | `https://<host>/mojave-review/` → `http://127.0.0.1:<port>` **(no trailing slash — preserve the prefix)**, HTTPS at the proxy. Launch the app with `--url-base-prefix /mojave-review/` so Dash serves under the same path. See "Path-prefix hosting" below. | One nginx/Apache stanza. |
 | Process manager | `systemd --user` service or supervisord, restart-on-failure | Auto-start, auto-recovery. |
 | Writable persistent dir | ~50 GB; nightly backup of just the `recommendations/` subdir | Cache + recommendations. Cache regenerable; recommendations not. |
 | Outbound HTTPS allowed | `www.cv.nrao.edu` (FITS only) | Live FITS fetch. No Google endpoints required. |
@@ -137,6 +137,40 @@ users:
   - name: chris
     token: chris-ePvD8gWa6oRcZj1tHy7uMxNb
 ```
+
+## Path-prefix hosting (reverse proxy)
+
+The app can be served either at a **root path** (a dedicated subdomain,
+e.g. `https://mojave-review.denison.edu/`) or under a **path prefix**
+(e.g. `https://www.denison.edu/mojave-review/`). Pick one:
+
+- **Root path (simplest):** launch with no prefix; proxy the subdomain to
+  `http://127.0.0.1:<port>`. Nothing else to configure — all in-app links
+  are already root-relative.
+- **Path prefix:** launch with `--url-base-prefix /mojave-review/` (or
+  `MOJAVE_REVIEW_URL_BASE_PREFIX=/mojave-review/`). Dash then serves its
+  pages, assets, and `_dash-update-component` callbacks under that prefix,
+  and every in-app link / navigation is prefixed to match (via
+  `dash.get_relative_path`). The proxy **must preserve the prefix** — use
+  a `proxy_pass` with **no trailing slash** so it doesn't get stripped:
+
+  ```nginx
+  location /mojave-review/ {
+      proxy_pass http://127.0.0.1:8050;   # NO trailing slash → keep prefix
+      proxy_set_header Host              $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+  }
+  ```
+
+  (A trailing slash — `proxy_pass http://127.0.0.1:8050/;` — strips the
+  prefix before it reaches the app, which then mismatches the prefix Dash
+  serves under and breaks asset/callback URLs. This was the original
+  doc's mistake.) The token-bootstrap URL is then
+  `https://<host>/mojave-review/?token=…`.
+
+The local launcher always talks to the bound port directly, so it opens
+`http://127.0.0.1:<port>/mojave-review/` (or `…/` at root) for you.
 
 ## Managing the team & assignments from your laptop
 
