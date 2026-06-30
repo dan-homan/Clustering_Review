@@ -96,7 +96,7 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     # access at /dashboard also works (router callback in
                     # app.py).
                     html.A(
-                        "📋 Dashboard",
+                        "📋 Progress Dashboard",
                         href="/dashboard", target="_blank",
                         style={"marginLeft": "1.5em", "color": "#1f77b4",
                                "textDecoration": "none", "fontSize": "0.9em",

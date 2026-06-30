@@ -43,7 +43,8 @@ from ..auth.tokens import load_store as load_token_store
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
 from ..recommendations.store import (
-    all_review_submitters, count_submissions, drafting_by_slug, reviewer_slug,
+    all_review_submitters, drafting_by_slug,
+    list_other_reviewer_slugs, reviewer_slug,
     reviewer_in_progress_sources, reviewer_submitted_sources, source_phase,
 )
 from ..data.assignments import (
@@ -214,6 +215,61 @@ def moves_preview(moves: list, *, empty_msg: str = "No moves needed.") -> "html.
     ])
 
 
+def _stat_box(value, label: str, accent: str) -> "html.Div":
+    """One stat tile: big number + caption, colour-accented top border."""
+    return html.Div(
+        [html.Div(str(value),
+                  style={"fontSize": "1.7em", "fontWeight": 700,
+                         "color": accent, "lineHeight": "1.1"}),
+         html.Div(label,
+                  style={"fontSize": "0.72em", "color": "#555",
+                         "marginTop": "0.25em", "textTransform": "uppercase",
+                         "letterSpacing": "0.04em"})],
+        style={"flex": "1", "minWidth": "120px", "padding": "0.7em 0.5em",
+               "background": "#fff", "border": "1px solid #e5e5e5",
+               "borderTop": f"3px solid {accent}", "borderRadius": "6px",
+               "textAlign": "center",
+               "boxShadow": "0 1px 3px rgba(0,0,0,0.06)"})
+
+
+def _stats_banner(team: dict, mine: dict, reviewer: str,
+                  deadline: str | None) -> "html.Div":
+    """Two prominent rows of stat tiles at the top of the dashboard:
+    team-wide progress, then the current reviewer's own progress."""
+    _row = lambda boxes: html.Div(
+        boxes, style={"display": "flex", "gap": "0.6em",
+                      "flexWrap": "wrap", "marginBottom": "0.5em"})
+    _label = lambda t: html.Div(
+        t, style={"fontSize": "0.72em", "fontWeight": 700, "color": "#888",
+                  "textTransform": "uppercase", "letterSpacing": "0.05em",
+                  "margin": "0 0 0.3em"})
+    children = [
+        _label("Team progress"),
+        _row([
+            _stat_box(team["total"], "Total Sources", "#555"),
+            _stat_box(team["final"], "Finalized", "#1a7a1a"),
+            _stat_box(team["ready_complete"], "Ready for Completion", "#1f77b4"),
+            _stat_box(team["ready_review"], "Ready for Review", "#b9770e"),
+            _stat_box(team["stage12"], "Stage 1/2", "#999"),
+        ]),
+        _label(f"My progress — {reviewer}" if reviewer else "My progress"),
+        _row([
+            _stat_box(mine["reviewed"], "Sources Reviewed", "#1a7a1a"),
+            _stat_box(mine["pending"], "Pending Assignments", "#b9770e"),
+            _stat_box(mine["in_progress"], "In Progress", "#1f77b4"),
+        ]),
+    ]
+    if deadline:
+        children.append(html.Div(
+            f"Deadline {deadline}",
+            style={"fontSize": "0.8em", "color": "#b00",
+                   "fontWeight": 600}))
+    return html.Div(
+        children,
+        style={"padding": "0.8em 1em", "background": "#f7f9fc",
+               "borderBottom": "1px solid #e0e0e0"})
+
+
 def _apply_btn(bid: str, label: str = "Apply") -> "html.Button":
     return html.Button(
         label, id=bid, n_clicks=0,
@@ -373,7 +429,7 @@ def _my_queue_table(
                     _status_chip("Stage 2", "#b9770e"),
                 ],
                 style_header={"fontWeight": 700, "background": "#f5f5f5"},
-                page_size=200,
+                page_size=10,
             ),
         ],
         style=_CARD_STYLE,
@@ -1425,11 +1481,32 @@ def build_dashboard_page(
         tokens_path, recommendations_dir, reviewer)
 
     all_srcs = list_sources(results_dir)
+    my_slug = reviewer_slug(reviewer)
+    target = store.default_review_target
 
-    # Overall progress banner: count total submissions across sources.
-    total_submissions = 0
+    # Phase per source, computed once and reused (team stats + the admin
+    # Stage-1/2 queue both need it).
+    phase_by_source = {
+        s.source: source_phase(recommendations_dir, s.source) for s in all_srcs}
+
+    # Team progress tallies. "Ready for Completion" = Stage-2-done with at
+    # least `target` reviews beyond the current viewer (enough to run
+    # Stage 3); "Ready for Review" = Stage-2-done but still short.
+    team_stats = {"total": len(all_srcs), "final": 0, "stage12": 0,
+                  "ready_complete": 0, "ready_review": 0}
     for src in all_srcs:
-        total_submissions += count_submissions(recommendations_dir, src.source)
+        ph = phase_by_source[src.source]
+        if ph == "final":
+            team_stats["final"] += 1
+        elif ph in ("stage1", "stage2"):
+            team_stats["stage12"] += 1
+        elif ph == "open":
+            others = len(list_other_reviewer_slugs(
+                recommendations_dir, src.source, exclude_slug=my_slug))
+            if others >= target:
+                team_stats["ready_complete"] += 1
+            else:
+                team_stats["ready_review"] += 1
 
     # Difficulty ratings (My-queue Rating column) + balance weights
     # (reviewer-summary Load column) from one scoring pass.
@@ -1444,9 +1521,7 @@ def build_dashboard_page(
     # source (the baseline work only the admin drives); every other
     # reviewer's queue is their explicit assignments.
     stage12_names = sorted(
-        s.source for s in all_srcs
-        if source_phase(recommendations_dir, s.source) in ("stage1", "stage2")
-    )
+        s for s, ph in phase_by_source.items() if ph in ("stage1", "stage2"))
     if admin:
         queue_sources = stage12_names
     else:
@@ -1462,6 +1537,14 @@ def build_dashboard_page(
     n_in_progress_total = len(
         reviewer_in_progress_sources(recommendations_dir, reviewer)
         - manual_for_me)
+    # Pending assignments = assigned sources the reviewer hasn't started.
+    n_pending_assignments = sum(
+        1 for rec in store.assignments.get(reviewer, [])
+        if assignment_status(recommendations_dir, rec.source, reviewer)
+        == "pending")
+    my_stats = {"reviewed": n_submitted_total,
+                "pending": n_pending_assignments,
+                "in_progress": n_in_progress_total}
 
     header = html.Div(
         [
@@ -1480,19 +1563,7 @@ def build_dashboard_page(
                "background": "#fafafa"},
     )
 
-    banner_parts = [
-        f"{total_submissions} submissions across all sources",
-        f"target {store.default_review_target} reviews each",
-    ]
-    if store.deadline:
-        banner_parts.append(f"deadline {store.deadline}")
-    banner = html.Div(
-        " · ".join(banner_parts),
-        style={"padding": "0.5em 1em", "color": "#444",
-               "background": "#f5f9ff",
-               "borderBottom": "1px solid #e0e0e0",
-               "fontSize": "0.9em"},
-    )
+    banner = _stats_banner(team_stats, my_stats, reviewer, store.deadline)
 
     body_children = [
         _my_queue_table(
