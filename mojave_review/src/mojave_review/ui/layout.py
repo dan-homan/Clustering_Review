@@ -363,6 +363,22 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
             html.Span(id="epoch-label",
                       style={"marginLeft": "1em", "minWidth": "9em",
                              "color": "#555", "fontFamily": "ui-monospace, monospace"}),
+            # Opens MOJAVE's per-epoch montage.png for the active epoch in a new
+            # tab. Styled as a button; its href is set by the epoch-label
+            # callback. target=_blank + rel for a safe external link.
+            html.A(
+                "MOJAVE montage ↗",
+                id="montage-link",
+                href="#",
+                target="_blank",
+                rel="noopener noreferrer",
+                title="Open this epoch's MOJAVE montage plot in a new tab",
+                style={"marginLeft": "1em", "padding": "0.2em 0.6em",
+                       "fontSize": "0.85em", "whiteSpace": "nowrap",
+                       "border": "1px solid #ccc", "borderRadius": "4px",
+                       "background": "#f7f7f7", "color": "#1f77b4",
+                       "textDecoration": "none"},
+            ),
         ],
         style={"display": "flex", "alignItems": "center",
                "padding": "0.25em 0.5em"},

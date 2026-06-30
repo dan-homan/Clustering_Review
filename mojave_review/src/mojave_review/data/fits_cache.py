@@ -35,6 +35,17 @@ def mojave_fits_url(source_no_band: str, band: str, epoch_name: str,
             f"{source_no_band}.{band}.{epoch_name}.{stokes}cn.fits.gz")
 
 
+def mojave_montage_url(source_no_band: str, band: str, epoch_name: str) -> str:
+    """URL of MOJAVE's per-epoch ``montage.png`` summary plot, e.g.
+    ``…/0235+164/2025_10_05/0235+164.u.2025_10_05.montage.png``.
+
+    HTTPS (not the http: of the FITS fetch) since this is opened directly in
+    the reviewer's browser, where the secure scheme is preferred."""
+    base = MOJAVE_BASE.replace("http://", "https://", 1)
+    return (f"{base}/{source_no_band}/{epoch_name}/"
+            f"{source_no_band}.{band}.{epoch_name}.montage.png")
+
+
 def split_source_band(source_with_band: str) -> tuple[str, str]:
     """Split ``"0003-066u"`` -> ``("0003-066", "u")``.
 

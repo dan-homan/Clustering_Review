@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, ctx, html, no_update
 
 from ..auth.runtime import current_reviewer
-from ..data.fits_cache import split_source_band
+from ..data.fits_cache import mojave_montage_url, split_source_band
 from ..data.loader import (
     _SOURCE_DIR_RE, SourceRef, clear_bundle_cache, list_models, load_bundle,
 )
@@ -993,6 +993,7 @@ def register_callbacks(
     @app.callback(
         Output("epoch-label", "children"),
         Output("active-epoch", "data"),
+        Output("montage-link", "href"),
         Input("source-picker", "value"),
         Input("model-picker", "value"),
         Input("epoch-slider", "value"),
@@ -1000,16 +1001,23 @@ def register_callbacks(
     )
     def _epoch_label(source_folder, model_key, epoch_int, _reload_counter):
         if not source_folder or not model_key or epoch_int is None:
-            return "", None
+            return "", None, "#"
         # rec:<slug> has no bundle of its own — its epochs are current's.
         bundle = load_bundle(source_folder, _effective_model_for_load(model_key))
         if bundle.plotdata is None or epoch_int >= len(bundle.plotdata.epoch_info):
-            return "", None
+            return "", None, "#"
         info = bundle.plotdata.epoch_info[int(epoch_int)]
         epoch_val = float(info['epoch_val'])
+        epoch_name = str(info['epoch_name'])
+        # Link the per-epoch MOJAVE montage.png (opened in a new tab).
+        src = _source_from_folder(source_folder)
+        montage_href = "#"
+        if src is not None:
+            source_no_band, band = split_source_band(src.source)
+            montage_href = mojave_montage_url(source_no_band, band, epoch_name)
         # active-epoch (decimal year) drives the vertical epoch marker the
         # clientside callback draws on the epoch-axis summary plots.
-        return f"{info['epoch_name']}  ·  {epoch_val:.4f}", epoch_val
+        return f"{epoch_name}  ·  {epoch_val:.4f}", epoch_val, montage_href
 
     # ---- overlay figure --------------------------------------------------
     @app.callback(
