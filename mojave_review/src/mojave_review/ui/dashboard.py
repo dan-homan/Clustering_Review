@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from dash import dash_table, dcc, html
 
@@ -332,6 +333,13 @@ _CELL_STYLE = {
 }
 
 
+def _source_link(name: str) -> str:
+    """Markdown link from a source name to its review page
+    (``/?source=<name>``), so dashboard tables let a reviewer jump
+    straight in. The name is URL-encoded (source names contain ``+``)."""
+    return f"[{name}](/?source={quote(name, safe='')})"
+
+
 def _status_chip(text: str, color: str) -> dict:
     return {
         "if": {"filter_query": f'{{status}} = "{text}"', "column_id": "status"},
@@ -403,7 +411,7 @@ def _my_queue_table(
         else:
             status = assignment_status(recommendations_dir, src, reviewer)
         rows.append({
-            "source": src,
+            "source": _source_link(src),
             "rating": rating_by_source.get(src, "—"),
             "status": status,
             "target_date": get_source_target_date(store, src) or "—",
@@ -414,11 +422,13 @@ def _my_queue_table(
                 id="dashboard-my-queue",
                 data=rows,
                 columns=[
-                    {"name": "Source", "id": "source"},
+                    {"name": "Source", "id": "source",
+                     "presentation": "markdown"},
                     {"name": "Rating", "id": "rating"},
                     {"name": "Status", "id": "status"},
                     {"name": "Target Date", "id": "target_date"},
                 ],
+                markdown_options={"link_target": "_blank"},
                 style_table=_TABLE_STYLE,
                 style_cell=_CELL_STYLE,
                 style_data_conditional=[
@@ -509,6 +519,9 @@ def _source_progress_rows(
             "target_date": get_source_target_date(store, src.source) or "—",
         })
     rows.sort(key=lambda r: r["source"])
+    # Linkify after sorting (the markdown wrapper would break name order).
+    for r in rows:
+        r["source"] = _source_link(r["source"])
     return rows
 
 
@@ -703,7 +716,7 @@ def _source_progress_table(
         [
             html.Div(
                 [
-                    html.H3("Source progress",
+                    html.H3("Sample Status",
                             style={"margin": "0",
                                    "display": "inline-block"}),
                     html.Span("Show:",
@@ -727,13 +740,15 @@ def _source_progress_table(
                 id="dashboard-sources",
                 data=rows,
                 columns=[
-                    {"name": "Source", "id": "source"},
+                    {"name": "Source", "id": "source",
+                     "presentation": "markdown"},
                     {"name": "Rating", "id": "rating"},
-                    {"name": "Still needed", "id": "needs_more"},
+                    {"name": "Reviews needed", "id": "needs_more"},
                     {"name": "Reviews", "id": "reviews"},
                     {"name": "Pending Reviews", "id": "pending"},
                     {"name": "Target", "id": "target_date"},
                 ],
+                markdown_options={"link_target": "_blank"},
                 style_table=_TABLE_STYLE,
                 style_cell={**_CELL_STYLE, "maxWidth": "320px",
                             "whiteSpace": "normal"},

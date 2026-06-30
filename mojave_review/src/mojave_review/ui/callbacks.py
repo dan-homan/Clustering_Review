@@ -158,6 +158,31 @@ def register_callbacks(
         clear_bundle_cache()
         return int(current or 0) + 1
 
+    # ---- deep-link: preselect a source from ?source=<name> --------------
+    # The Progress Dashboard links each source name to /?source=<name> so a
+    # reviewer can jump straight to it. On load (or any url.search change)
+    # this maps the name to the matching picker option (its value is the
+    # source folder path) and selects it — driving the normal source-change
+    # cascade. No param ⇒ leave the layout's default selection untouched.
+    @app.callback(
+        Output("source-picker", "value"),
+        Input("url", "search"),
+        State("source-picker", "options"),
+        prevent_initial_call=False,
+    )
+    def _deeplink_source(search, options):
+        if not search:
+            return no_update
+        from urllib.parse import parse_qs
+        name = (parse_qs(search.lstrip("?")).get("source") or [None])[0]
+        if not name:
+            return no_update
+        for o in (options or []):
+            # options carry search=<source name>; value=<folder path>
+            if o.get("search") == name:
+                return o["value"]
+        return no_update
+
     # ---- live source-picker labels --------------------------------------
     # Each source label carries the per-reviewer status note (needs review /
     # review in progress / submitted) + the bracket badge ([N] / [final] …).
