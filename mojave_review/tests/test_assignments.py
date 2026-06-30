@@ -21,7 +21,7 @@ from mojave_review.data.assignments import (
 from mojave_review.data.difficulty import SourceDifficulty
 from mojave_review.recommendations.schema import Recommendation
 from mojave_review.recommendations.store import (
-    save_recommendation, save_submitted,
+    archive_considered_submissions, save_recommendation, save_submitted,
 )
 
 
@@ -147,6 +147,17 @@ def test_assignment_status_empty_draft_is_pending(tmp_path):
 def test_assignment_status_nonempty_draft_is_in_progress(tmp_path):
     _draft(tmp_path, "0003-066u", "alice", empty=False)
     assert assignment_status(tmp_path, "0003-066u", "alice") == "in_progress"
+
+
+def test_assignment_status_archived_submission_counts_as_submitted(tmp_path):
+    # A finalized review lives in considered/ (no open submitted/) and may
+    # leave a stale current/ draft behind — must read as "submitted", not
+    # "in_progress" (the bug the reviewer summary exposed for mll).
+    _submit(tmp_path, "0003-066u", "alice")
+    archive_considered_submissions(
+        tmp_path, "0003-066u", ["alice"], date="2026-06-10")
+    _draft(tmp_path, "0003-066u", "alice", empty=False)   # stale leftover
+    assert assignment_status(tmp_path, "0003-066u", "alice") == "submitted"
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +699,23 @@ def test_rebalance_pending_gives_new_reviewer_a_share():
         assert len(holders) == 2
 
 
+def test_rebalance_pending_base_load_spares_heavy_completers():
+    # alice has 2 pending, bob none. Pure pending-balance sheds one to bob.
+    ca = {"alice": ["A", "B"], "bob": []}
+    mv = {"alice": {"A", "B"}, "bob": set()}
+    w = {"A": 10.0, "B": 10.0}
+    no_base = rebalance_pending(
+        current_assignments=ca, movable=mv, weight_by_source=w,
+        reviewers=["alice", "bob"])
+    assert len(no_base) == 1 and no_base[0][2] == "bob"
+    # But if bob already carries a heavy completed load, he should NOT be
+    # handed alice's pending work (first-round "lighter load" credit).
+    with_base = rebalance_pending(
+        current_assignments=ca, movable=mv, weight_by_source=w,
+        reviewers=["alice", "bob"], base_load={"bob": 100.0})
+    assert with_base == []
+
+
 def test_rebalance_pending_only_moves_pending():
     # alice's A is in-progress (not movable); only B is pending.
     ca = {"alice": ["A", "B"], "carol": []}
@@ -714,6 +742,16 @@ def test_redistribute_reviewer_spreads_and_respects_limit():
         reviewer="bob", current_assignments=ca, movable=mv,
         weight_by_source=w, targets=["alice", "carol"], limit=1)
     assert one == [("B", "bob", "carol")]
+
+
+def test_all_submitting_reviewers_folds_collision_suffix(tmp_path):
+    # A re-archived reviewer (considered/<date>/homand_2.json) must count
+    # as "homand", not mint a phantom "homand_2".
+    d = tmp_path / "X" / "considered" / "2026-06-10"
+    d.mkdir(parents=True)
+    (d / "homand.json").write_text("{}")
+    (d / "homand_2.json").write_text("{}")
+    assert all_submitting_reviewers(tmp_path, ["X"])["X"] == {"homand"}
 
 
 def test_save_store_writes_rotating_backup(tmp_path):

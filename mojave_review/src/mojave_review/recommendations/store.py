@@ -428,6 +428,45 @@ def _reviewer_submitted_source(src_dir: Path, slug: str) -> bool:
     return slug in _applied_review_slugs(src_dir)
 
 
+def reviewer_submitted_source(
+    recommendations_dir: Path, source: str, reviewer: str,
+) -> bool:
+    """Public: has ``reviewer`` submitted a review of ``source`` at any
+    time (open ``submitted/`` ∪ Stage-3 ``considered/`` ∪ Stage-2 applied
+    baseline)? Used by ``assignments.assignment_status`` so an archived
+    submission counts as done even when a stale ``current/`` draft lingers
+    beside it."""
+    return _reviewer_submitted_source(
+        Path(recommendations_dir) / source, reviewer_slug(reviewer))
+
+
+def drafting_by_slug(
+    recommendations_dir: Path, sources: list[str],
+) -> dict[str, set[str]]:
+    """``{slug: {source, ...}}`` for every NON-EMPTY ``current/`` draft on
+    disk, in one pass. ``draft`` here means started-but-not-submitted in
+    the literal sense; callers wanting genuine "in progress" should
+    subtract whatever the reviewer has already submitted (a finalized
+    review can leave a stale draft behind). Drives the reviewer-summary's
+    off-queue ("drafting a source not assigned to them") detection."""
+    rd = Path(recommendations_dir)
+    out: dict[str, set[str]] = {}
+    for src in sources:
+        cur = rd / src / "current"
+        if not cur.is_dir():
+            continue
+        for f in cur.glob("*.json"):
+            if not f.stem:
+                continue
+            try:
+                rec = Recommendation.from_dict(json.loads(f.read_text()))
+            except Exception:
+                continue
+            if not rec.is_empty():
+                out.setdefault(f.stem, set()).add(src)
+    return out
+
+
 def _source_dirs(recommendations_dir: Path):
     """Yield the per-source subdirs of ``recommendations_dir``, skipping
     the ``_admin`` (and any other ``_``-prefixed) bookkeeping dir."""

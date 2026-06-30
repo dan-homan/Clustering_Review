@@ -15,7 +15,9 @@ from dash import ALL, Input, Output, State, html, no_update
 
 from ..auth.runtime import current_reviewer
 from ..auth.tokens import load_store as load_token_store
-from ..recommendations.store import reviewer_slug, source_phase
+from ..recommendations.store import (
+    all_review_submitters, reviewer_slug, source_phase,
+)
 from ..data.assignments import (
     active_reviewers, add_team_member, apply_additions, apply_moves,
     assignment_status, auto_balance, backfill_manual_reviews,
@@ -561,10 +563,34 @@ def register_dashboard_callbacks(
         return weight_by_source, current_map, movable, pool
 
     # --- Top-up rebalance ---------------------------------------------
+    def _rb_plan(consider_completed):
+        """(store, moves) for the rebalance preview + apply. When
+        ``consider_completed`` is set, each reviewer's completed-review
+        weight seeds a fixed base load so past contributors get a lighter
+        share of the remaining pending work."""
+        store = load_store(recommendations_dir)
+        weight, current_map, movable, pool = _rebalance_inputs(store)
+        base_load = None
+        if consider_completed and "completed" in consider_completed:
+            source_names = [s.source for s in list_sources(results_dir)]
+            submitters = all_review_submitters(recommendations_dir, source_names)
+            completed_by_slug: dict = {}
+            for src, slugs in submitters.items():
+                for sl in slugs:
+                    completed_by_slug.setdefault(sl, set()).add(src)
+            base_load = {}
+            for r in pool:
+                slug = reviewer_slug(r)
+                completed = (set(completed_by_slug.get(slug, set()))
+                             | set(store.manual_reviews.get(r, [])))
+                base_load[r] = sum(weight.get(s, 0.0) for s in completed)
+        moves = rebalance_pending(
+            current_assignments=current_map, movable=movable,
+            weight_by_source=weight, reviewers=pool, base_load=base_load)
+        return store, moves
+
     @app.callback(
         Output("dashboard-rb-modal", "style"),
-        Output("dashboard-rb-preview-body", "children"),
-        Output("dashboard-rb-store", "data"),
         Input("dashboard-rb-btn", "n_clicks"),
         Input("dashboard-rb-close", "n_clicks"),
         Input("dashboard-rb-cancel", "n_clicks"),
@@ -572,32 +598,37 @@ def register_dashboard_callbacks(
     )
     def _rb_open(open_n, close_n, cancel_n):
         from dash import ctx
-        if ctx.triggered_id != "dashboard-rb-btn":
-            return {"display": "none"}, no_update, None
-        store = load_store(recommendations_dir)
-        weight, current_map, movable, pool = _rebalance_inputs(store)
-        moves = rebalance_pending(
-            current_assignments=current_map, movable=movable,
-            weight_by_source=weight, reviewers=pool)
-        body = moves_preview(
+        return (_OVERLAY_STYLE if ctx.triggered_id == "dashboard-rb-btn"
+                else {"display": "none"})
+
+    @app.callback(
+        Output("dashboard-rb-preview-body", "children"),
+        Input("dashboard-rb-btn", "n_clicks"),
+        Input("dashboard-rb-consider-completed", "value"),
+        prevent_initial_call=True,
+    )
+    def _rb_preview(_open_n, consider_completed):
+        _store, moves = _rb_plan(consider_completed)
+        return moves_preview(
             moves, empty_msg="Load is already balanced — no moves needed.")
-        return _OVERLAY_STYLE, body, moves
 
     @app.callback(
         Output("url", "href", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-rb-apply", "n_clicks"),
-        State("dashboard-rb-store", "data"),
+        State("dashboard-rb-consider-completed", "value"),
         prevent_initial_call=True,
     )
-    def _rb_apply(_n, moves):
+    def _rb_apply(_n, consider_completed):
+        store, moves = _rb_plan(consider_completed)
         if not moves:
             return no_update, "no moves to apply"
-        store = load_store(recommendations_dir)
-        n = apply_moves(store, [tuple(m) for m in moves],
+        n = apply_moves(store, moves,
                         assigned_by=current_reviewer(reviewer))
         save_store(recommendations_dir, store)
-        return "/dashboard", f"rebalanced: {n} move(s)"
+        note = " (completed-weighted)" if (
+            consider_completed and "completed" in consider_completed) else ""
+        return "/dashboard", f"rebalanced: {n} move(s){note}"
 
     # --- Redistribute one reviewer's queue (break) --------------------
     @app.callback(

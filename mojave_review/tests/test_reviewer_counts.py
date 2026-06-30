@@ -76,3 +76,22 @@ def test_counts_empty_when_dir_missing(tmp_path):
     missing = tmp_path / "nope"
     assert reviewer_submitted_sources(missing, "Alice") == set()
     assert reviewer_in_progress_sources(missing, "Alice") == set()
+
+
+def test_drafting_by_slug_lists_nonempty_drafts(tmp_path):
+    from mojave_review.recommendations.store import drafting_by_slug
+    _draft(tmp_path, "A", "alice", empty=False)
+    _draft(tmp_path, "B", "alice", empty=True)     # empty → excluded
+    _draft(tmp_path, "A", "bob", empty=False)
+    d = drafting_by_slug(tmp_path, ["A", "B"])
+    assert d.get("alice") == {"A"}
+    assert d.get("bob") == {"A"}
+
+
+def test_fold_collision_names_drops_artifacts():
+    from mojave_review.ui.dashboard import _fold_collision_names
+    # <base>_<N> folds away when <base> is present...
+    assert _fold_collision_names({"homand", "homand_2", "alice"}) == {
+        "homand", "alice"}
+    # ...but a standalone foo_2 with no "foo" survives.
+    assert _fold_collision_names({"foo_2"}) == {"foo_2"}

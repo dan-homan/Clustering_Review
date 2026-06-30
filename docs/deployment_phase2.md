@@ -171,7 +171,10 @@ no need to edit anything directly on the server:
 - **⚖ Top-up rebalance** — *move* PENDING assignments to even out load,
   so a reviewer added *after* seeding (the common case) gets a fair share
   instead of nothing. Minimal churn; submitted / in-progress work never
-  moves.
+  moves. A **"Consider completed reviews"** checkbox balances
+  `completed + pending` instead of pending-only, so reviewers who did a
+  lot of pre-system work get a lighter first-round share (run it once
+  with the box checked for the first round; leave it off afterward).
 - **🏖 Redistribute (break)** — spread one reviewer's PENDING queue across
   the rest of the pool by load (not all-onto-one), optionally pausing
   them, for when someone steps away.
@@ -182,6 +185,14 @@ no need to edit anything directly on the server:
 
 Because each write snapshots the prior file into `_admin/backups/`, a
 rebalance you don't like is one file-restore away from undone.
+
+The admin dashboard also shows a **Reviewer summary** card: one
+expandable row per reviewer with their current-queue breakdown
+(pending / in-progress / submitted, plus pending-load) and their
+**lifetime completed** reviews — including finalized sources whose
+submissions live in `considered/` / `applied/` — with the finalized
+count broken out. A `✎N` marker flags reviewers drafting sources not
+assigned to them.
 
 **Name-matching is the one rule that matters.** A reviewer's queue is
 looked up by name, and on the server that name comes from their token

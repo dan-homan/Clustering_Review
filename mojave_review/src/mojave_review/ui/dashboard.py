@@ -34,6 +34,7 @@ dashboard open in its own tab while they work in the main review tab.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from dash import dash_table, dcc, html
@@ -42,7 +43,7 @@ from ..auth.tokens import load_store as load_token_store
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
 from ..recommendations.store import (
-    all_review_submitters, count_submissions, reviewer_slug,
+    all_review_submitters, count_submissions, drafting_by_slug, reviewer_slug,
     reviewer_in_progress_sources, reviewer_submitted_sources, source_phase,
 )
 from ..data.assignments import (
@@ -138,7 +139,25 @@ def known_reviewers(
     store = load_store(recommendations_dir)
     names.update(store.team_members)
     names.update(store.assignments.keys())
-    return sorted(names)
+    return sorted(_fold_collision_names(names))
+
+
+_COLLISION_NAME_RE = re.compile(r"^(?P<base>.+)_\d+$")
+
+
+def _fold_collision_names(names: set[str]) -> set[str]:
+    """Drop ``<base>_<N>`` names when ``<base>`` is also present — these
+    are collision-rename artifacts (e.g. a ``considered/homand_2.json``
+    that ``credit_prior_submissions`` once minted into a phantom
+    "homand_2" reviewer). Only folds when the base genuinely exists, so a
+    real reviewer literally named ``foo_2`` survives unless ``foo`` is
+    also on the roster."""
+    out = set(names)
+    for n in list(out):
+        m = _COLLISION_NAME_RE.match(n)
+        if m and m.group("base") in out:
+            out.discard(n)
+    return out
 
 
 def slug_name_map(
@@ -435,6 +454,175 @@ def _source_progress_rows(
         })
     rows.sort(key=lambda r: r["source"])
     return rows
+
+
+def reviewer_summary_rows(
+    *, results_dir: Path, recommendations_dir: Path,
+    store: AssignmentStore, reviewers: list[str],
+    weight_by_source: dict[str, float],
+) -> list[dict]:
+    """Per-reviewer summary (admin): current-queue breakdown +
+    lifetime-completed history (item: the admin's reviewer summary).
+
+    For each reviewer:
+      * ``pending`` / ``in_progress`` / ``submitted`` — their current
+        assigned queue bucketed by :func:`assignment_status`;
+      * ``load`` — balance-weight of the pending sources;
+      * ``completed`` — every distinct source they've ever reviewed (open
+        ``submitted/`` ∪ Stage-3 ``considered/`` ∪ Stage-2 applied
+        baseline ∪ manual self-credit), i.e. INCLUDING finalized sources;
+      * ``finalized`` — how many of ``completed`` are now Stage-3 done;
+      * ``off_queue`` — sources they're genuinely DRAFTING (non-empty,
+        not yet submitted) that are NOT in their assigned queue — i.e.
+        in-progress work nobody assigned them.
+
+    Two disk walks (``all_review_submitters`` + ``drafting_by_slug``),
+    inverted to slug→sources, so the whole roster is cheap and the
+    queue breakdown is consistent with the rest of the app (an archived
+    submission counts as done even with a stale ``current/`` draft)."""
+    all_srcs = list_sources(results_dir)
+    source_names = [s.source for s in all_srcs]
+    phase = {s: source_phase(recommendations_dir, s) for s in source_names}
+    submitters = all_review_submitters(recommendations_dir, source_names)
+    completed_by_slug: dict[str, set[str]] = {}
+    for src, slugs in submitters.items():
+        for sl in slugs:
+            completed_by_slug.setdefault(sl, set()).add(src)
+    drafting = drafting_by_slug(recommendations_dir, source_names)
+
+    rows = []
+    for r in reviewers:
+        slug = reviewer_slug(r)
+        completed = (set(completed_by_slug.get(slug, set()))
+                     | set(store.manual_reviews.get(r, [])))
+        finalized = sum(1 for s in completed if phase.get(s) == "final")
+        # Genuine in-progress = non-empty draft AND not already submitted.
+        genuine_drafting = set(drafting.get(slug, set())) - completed
+        assigned = {rec.source for rec in store.assignments.get(r, [])}
+        pending, in_progress, submitted = [], [], 0
+        for s in assigned:
+            if s in completed:
+                submitted += 1
+            elif s in genuine_drafting:
+                in_progress.append(s)
+            else:
+                pending.append(s)
+        rows.append({
+            "reviewer": r,
+            "paused": r in store.paused_reviewers,
+            "load": sum(weight_by_source.get(s, 0.0) for s in pending),
+            "pending": sorted(pending),
+            "in_progress": len(in_progress),
+            "submitted": submitted,
+            "completed": sorted(completed),
+            "finalized": finalized,
+            "off_queue": sorted(genuine_drafting - assigned),
+        })
+    rows.sort(key=lambda x: (x["paused"], x["reviewer"]))
+    return rows
+
+
+# Column widths for the reviewer-summary flex grid (header / rows / total
+# share these so columns line up; rows are <summary> so a ~1.2em left pad
+# on header + total compensates for the disclosure triangle).
+_RS_COLS = [
+    ("reviewer", "Reviewer", "180px", "left"),
+    ("load", "Load", "62px", "right"),
+    ("pending", "Pending", "70px", "right"),
+    ("in_progress", "In prog", "66px", "right"),
+    ("submitted", "Submitted", "84px", "right"),
+    ("completed", "Completed", "86px", "right"),
+    ("finalized", "(final)", "62px", "right"),
+]
+
+
+def _rs_cell(text, width, align, **extra) -> "html.Span":
+    return html.Span(str(text), style={
+        "display": "inline-block", "width": width,
+        "textAlign": align, **extra})
+
+
+def _reviewer_summary_card(rows: list[dict]) -> html.Div:
+    """Admin per-reviewer summary: a flex-grid header + one expandable
+    ``<details>`` per reviewer (summary line = the counts, body = the
+    Completed / Pending source lists) + a TOTAL row. No callbacks — the
+    native ``<details>`` element handles expand/collapse."""
+    header = html.Div(
+        [_rs_cell(label, w, align, fontWeight=700)
+         for _k, label, w, align in _RS_COLS],
+        style={"display": "flex", "gap": "0.5em", "padding": "4px 8px",
+               "paddingLeft": "1.4em", "borderBottom": "2px solid #ddd"})
+
+    items = []
+    for row in rows:
+        name = row["reviewer"] + ("  ⏸" if row["paused"] else "")
+        if row.get("off_queue"):     # drafting sources nobody assigned them
+            name += f"  ✎{len(row['off_queue'])}"
+        cells = [
+            _rs_cell(name, _RS_COLS[0][2], "left", fontWeight=600,
+                     fontStyle="italic" if row["paused"] else "normal",
+                     color="#888" if row["paused"] else "#222"),
+            _rs_cell(f"{row['load']:.1f}" if row["load"] else "—",
+                     _RS_COLS[1][2], "right"),
+            _rs_cell(len(row["pending"]), _RS_COLS[2][2], "right"),
+            _rs_cell(row["in_progress"], _RS_COLS[3][2], "right"),
+            _rs_cell(row["submitted"], _RS_COLS[4][2], "right"),
+            _rs_cell(len(row["completed"]), _RS_COLS[5][2], "right",
+                     fontWeight=600, color="#1a7a1a"),
+            _rs_cell(row["finalized"], _RS_COLS[6][2], "right", color="#888"),
+        ]
+        summary = html.Summary(
+            html.Div(cells, style={"display": "inline-flex", "gap": "0.5em",
+                                   "alignItems": "center"}),
+            style={"cursor": "pointer", "padding": "4px 8px"})
+        body_lines = [
+            html.Div([html.B("Completed: "),
+                      ", ".join(row["completed"]) or "—"],
+                     style={"marginBottom": "0.25em"}),
+            html.Div([html.B("Pending: "),
+                      ", ".join(row["pending"]) or "—"]),
+        ]
+        if row.get("off_queue"):
+            body_lines.append(html.Div(
+                [html.B("Drafting (not assigned): "),
+                 ", ".join(row["off_queue"])],
+                style={"marginTop": "0.25em", "color": "#b9770e"}))
+        body = html.Div(
+            body_lines,
+            style={"padding": "0.4em 1em", "fontSize": "0.82em",
+                   "color": "#555", "background": "#fafafa",
+                   "whiteSpace": "normal", "wordBreak": "break-word"})
+        items.append(html.Details(
+            [summary, body], style={"borderBottom": "1px solid #eee"}))
+
+    tot = {
+        "pending": sum(len(r["pending"]) for r in rows),
+        "in_progress": sum(r["in_progress"] for r in rows),
+        "submitted": sum(r["submitted"] for r in rows),
+        "completed": sum(len(r["completed"]) for r in rows),
+        "finalized": sum(r["finalized"] for r in rows),
+    }
+    total_row = html.Div(
+        [_rs_cell("TOTAL", _RS_COLS[0][2], "left", fontWeight=700),
+         _rs_cell("", _RS_COLS[1][2], "right"),
+         _rs_cell(tot["pending"], _RS_COLS[2][2], "right", fontWeight=700),
+         _rs_cell(tot["in_progress"], _RS_COLS[3][2], "right", fontWeight=700),
+         _rs_cell(tot["submitted"], _RS_COLS[4][2], "right", fontWeight=700),
+         _rs_cell(tot["completed"], _RS_COLS[5][2], "right", fontWeight=700),
+         _rs_cell(tot["finalized"], _RS_COLS[6][2], "right", fontWeight=700)],
+        style={"display": "flex", "gap": "0.5em", "padding": "4px 8px",
+               "paddingLeft": "1.4em", "borderTop": "2px solid #ddd"})
+
+    return html.Div(
+        [html.H3("Reviewer summary", style={"margin": "0 0 0.25em"}),
+         html.Div("Completed = every source the reviewer has ever reviewed "
+                  "(open + Stage-3 archived + Stage-2 baseline + manual "
+                  "credit), including finalized. Click a row to see the "
+                  "source lists.",
+                  style={"color": "#666", "fontSize": "0.82em",
+                         "marginBottom": "0.5em"}),
+         header, *items, total_row],
+        style=_CARD_STYLE)
 
 
 def _source_progress_table(
@@ -1059,12 +1247,19 @@ def _admin_controls_panel(
                     "work stays put. Review the moves, then Apply.",
                     style={"color": "#666", "fontSize": "0.85em",
                            "marginBottom": "0.5em"}),
+                 dcc.Checklist(
+                     id="dashboard-rb-consider-completed",
+                     options=[{"label": " Consider completed reviews "
+                                        "(give past contributors a lighter "
+                                        "share — for the first round)",
+                               "value": "completed"}],
+                     value=[],
+                     style={"fontSize": "0.85em", "marginBottom": "0.5em"}),
                  html.Div(id="dashboard-rb-preview-body",
-                          style={"maxHeight": "48vh", "overflowY": "auto"})],
+                          style={"maxHeight": "44vh", "overflowY": "auto"})],
                 [_apply_btn("dashboard-rb-apply"),
                  _cancel_btn("dashboard-rb-cancel")],
                 max_width="620px"),
-            dcc.Store(id="dashboard-rb-store", data=None),
             # Redistribute-on-break modal -------------------------------
             _modal_shell(
                 "dashboard-rd-modal", "Redistribute a reviewer's queue",
@@ -1233,11 +1428,14 @@ def build_dashboard_page(
     for src in all_srcs:
         total_submissions += count_submissions(recommendations_dir, src.source)
 
-    # Difficulty ratings for the My-queue Rating column.
-    rating_by_source = {
-        d.source: ("★" * d.stars + ("  ⚠" if d.outlier else ""))
-        for d in score_all(all_srcs)
-    }
+    # Difficulty ratings (My-queue Rating column) + balance weights
+    # (reviewer-summary Load column) from one scoring pass.
+    rating_by_source: dict[str, str] = {}
+    weight_by_source: dict[str, float] = {}
+    for d in score_all(all_srcs):
+        rating_by_source[d.source] = (
+            "★" * d.stars + ("  ⚠" if d.outlier else ""))
+        weight_by_source[d.source] = d.balance_weight
 
     # My-queue contents (item 4): the admin's queue is every Stage 1/2
     # source (the baseline work only the admin drives); every other
@@ -1293,25 +1491,33 @@ def build_dashboard_page(
                "fontSize": "0.9em"},
     )
 
+    body_children = [
+        _my_queue_table(
+            queue_sources=queue_sources,
+            store=store,
+            recommendations_dir=recommendations_dir,
+            reviewer=reviewer,
+            rating_by_source=rating_by_source,
+            n_submitted_total=n_submitted_total,
+            n_in_progress_total=n_in_progress_total,
+            admin_queue=admin,
+        ),
+        _source_progress_table(
+            results_dir=results_dir,
+            recommendations_dir=recommendations_dir,
+            store=store,
+            name_for_slug=name_for_slug,
+        ),
+    ]
+    if admin:
+        body_children.append(_reviewer_summary_card(reviewer_summary_rows(
+            results_dir=results_dir,
+            recommendations_dir=recommendations_dir,
+            store=store, reviewers=reviewers,
+            weight_by_source=weight_by_source,
+        )))
     body = html.Div(
-        [
-            _my_queue_table(
-                queue_sources=queue_sources,
-                store=store,
-                recommendations_dir=recommendations_dir,
-                reviewer=reviewer,
-                rating_by_source=rating_by_source,
-                n_submitted_total=n_submitted_total,
-                n_in_progress_total=n_in_progress_total,
-                admin_queue=admin,
-            ),
-            _source_progress_table(
-                results_dir=results_dir,
-                recommendations_dir=recommendations_dir,
-                store=store,
-                name_for_slug=name_for_slug,
-            ),
-        ],
+        body_children,
         style={"padding": "1em", "maxWidth": "1100px", "margin": "0 auto"},
     )
 

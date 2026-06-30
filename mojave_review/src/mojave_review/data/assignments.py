@@ -43,13 +43,20 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+# Trailing collision-rename suffix on an archived submission stem
+# (``<slug>_2.json``); folded back to the base slug where reviewer
+# identity is derived from filenames.
+_COLLISION_SLUG_RE = re.compile(r"_\d+$")
+
 from ..recommendations.store import (
     count_submissions, is_submitted, load_recommendation,
+    reviewer_submitted_source,
 )
 from .difficulty import SourceDifficulty
 
@@ -289,14 +296,17 @@ def assignment_status(
     recommendations_dir: Path, source: str, reviewer: str,
 ) -> str:
     """``"submitted"`` / ``"in_progress"`` / ``"pending"`` for the given
-    reviewer's *current-model* recommendation on a source.
+    reviewer's review of a source.
 
-    The hierarchy matches the source-picker badges: a submitted review
-    always wins over a draft; an empty draft (no edits / no comments)
-    is treated as ``"pending"`` so a reviewer who just clicked the
-    source doesn't get falsely credited with "in progress."
+    A submitted review always wins over a draft — and "submitted" means
+    submitted *at any time* (open ``submitted/`` OR Stage-3-archived
+    ``considered/`` OR Stage-2 applied baseline), so a finalized review
+    that left a stale ``current/`` draft behind reads as done, not
+    "in progress". An empty draft (no edits / no comments) is treated as
+    ``"pending"`` so a reviewer who just clicked the source isn't falsely
+    credited with "in progress."
     """
-    if is_submitted(recommendations_dir, source, reviewer):
+    if reviewer_submitted_source(recommendations_dir, source, reviewer):
         return "submitted"
     draft = load_recommendation(
         recommendations_dir, source, "current", reviewer,
@@ -487,8 +497,12 @@ def all_submitting_reviewers(
             for date_dir in considered.iterdir():
                 if not date_dir.is_dir():
                     continue
+                # Fold the <slug>_N collision-rename suffix back to the
+                # base slug, so a re-archived reviewer doesn't get minted
+                # as a phantom "<slug>_2" reviewer by credit_prior.
                 slugs.update(
-                    f.stem for f in date_dir.glob("*.json") if f.stem
+                    _COLLISION_SLUG_RE.sub("", f.stem)
+                    for f in date_dir.glob("*.json") if f.stem
                 )
         out[src] = slugs
     return out
@@ -897,6 +911,7 @@ def rebalance_pending(
     movable: dict[str, set[str]],
     weight_by_source: dict[str, float],
     reviewers: list[str],
+    base_load: dict[str, float] | None = None,
 ) -> list[Move]:
     """Plan moves of PENDING assignments to equalise ``balance_weight``
     load across ``reviewers`` (the active pool), with minimal churn.
@@ -907,6 +922,13 @@ def rebalance_pending(
     does once every source is at its target). Source coverage count is
     invariant — each move just swaps one holder of a source for another.
 
+    ``base_load`` adds a fixed per-reviewer starting load that can't be
+    moved — pass each reviewer's *completed* work weight to give those
+    who've already done a lot a lighter share of the remaining pending
+    work (a reviewer whose completed load alone exceeds the target sheds
+    all their movable pending and receives none). Default ``None`` = pure
+    pending balancing.
+
     Heuristic (single pass, heaviest items first): an item is moved off a
     reviewer only while they're above the average load, to the lightest
     reviewer who is below average and doesn't already hold that source —
@@ -914,7 +936,10 @@ def rebalance_pending(
     than the donor was). Deterministic; ties break on name."""
     if len(reviewers) < 2:
         return []
-    load = {r: _pending_load(r, movable, weight_by_source) for r in reviewers}
+    base_load = base_load or {}
+    load = {r: (base_load.get(r, 0.0)
+                + _pending_load(r, movable, weight_by_source))
+            for r in reviewers}
     holds = {r: set(current_assignments.get(r, [])) for r in reviewers}
     target = sum(load.values()) / len(reviewers)
     items = sorted(
