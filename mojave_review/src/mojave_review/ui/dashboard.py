@@ -325,12 +325,22 @@ _CARD_STYLE = {
     "background": "#fff", "padding": "0.75em 1em",
     "marginBottom": "1em",
 }
+# One readable font size shared by headers, plain cells, and the markdown
+# source-name links, so every table reads uniformly. Also enforced via
+# assets/dashboard.css (the markdown link content doesn't reliably inherit
+# style_cell's fontSize, which is why an em bump alone looked unchanged).
+_FONT_SIZE = "1rem"
 _TABLE_STYLE = {
-    "fontFamily": "system-ui, sans-serif", "fontSize": "0.88em",
+    "fontFamily": "system-ui, sans-serif", "fontSize": _FONT_SIZE,
 }
 _CELL_STYLE = {
-    "padding": "6px 10px", "textAlign": "left",
+    "padding": "6px 10px", "textAlign": "left", "fontSize": _FONT_SIZE,
 }
+_HEADER_STYLE = {
+    "fontWeight": 700, "background": "#f5f5f5", "fontSize": _FONT_SIZE,
+}
+# Sources per page before paging (both tables).
+_PAGE_SIZE = 10
 
 
 def _source_link(name: str) -> str:
@@ -438,8 +448,8 @@ def _my_queue_table(
                     _status_chip("Stage 1", "#c62828"),
                     _status_chip("Stage 2", "#b9770e"),
                 ],
-                style_header={"fontWeight": 700, "background": "#f5f5f5"},
-                page_size=10,
+                style_header=_HEADER_STYLE,
+                page_size=_PAGE_SIZE,
             ),
         ],
         style=_CARD_STYLE,
@@ -757,8 +767,8 @@ def _source_progress_table(
                             "column_id": "needs_more"},
                      "color": "#1a7a1a", "fontWeight": 700},
                 ],
-                style_header={"fontWeight": 700, "background": "#f5f5f5"},
-                page_size=200,
+                style_header=_HEADER_STYLE,
+                page_size=_PAGE_SIZE,
             ),
         ],
         style=_CARD_STYLE,

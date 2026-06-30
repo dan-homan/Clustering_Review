@@ -1,0 +1,21 @@
+/* Progress Dashboard tables: one uniform, readable font across headers,
+   plain cell text, AND the markdown source-name links. The markdown link
+   content does not reliably inherit the DataTable's style_cell fontSize
+   (Dash injects its own cell-markdown styles), so a style-prop bump alone
+   looked unchanged — force it here. Scoped to the two dashboard tables. */
+
+#dashboard-my-queue .dash-header,
+#dashboard-sources .dash-header,
+#dashboard-my-queue .dash-cell .dash-cell-value,
+#dashboard-sources .dash-cell .dash-cell-value,
+#dashboard-my-queue .dash-cell .dash-cell-value *,
+#dashboard-sources .dash-cell .dash-cell-value * {
+    font-size: 1rem !important;
+}
+
+/* Markdown cells wrap their content in a <p> with default margins that
+   add stray vertical space in a table row — flatten it. */
+#dashboard-my-queue .dash-cell-value p,
+#dashboard-sources .dash-cell-value p {
+    margin: 0;
+}

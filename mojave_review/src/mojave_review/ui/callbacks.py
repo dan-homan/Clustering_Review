@@ -159,7 +159,7 @@ def register_callbacks(
         return int(current or 0) + 1
 
     # ---- deep-link: preselect a source from ?source=<name> --------------
-    # The Progress Dashboard links each source name to /?source=<name> so a
+    # The Assignment Dashboard links each source name to /?source=<name> so a
     # reviewer can jump straight to it. On load (or any url.search change)
     # this maps the name to the matching picker option (its value is the
     # source folder path) and selects it — driving the normal source-change

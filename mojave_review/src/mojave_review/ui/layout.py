@@ -64,7 +64,26 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
     error boundary blanks the surrounding render. So the rich italic/bold note
     is folded into the text instead. A ``search`` field keeps type-to-filter
     working. With ``recommendations_dir=None`` (introspection) the note + badge
-    are omitted."""
+    are omitted.
+
+    The current reviewer's **outstanding assignments** (assigned to them and
+    not yet submitted) are listed **first** and prefixed with ``★`` so they
+    can dive straight in. (This Dash version's ``dcc.Dropdown`` only accepts
+    plain-string option labels — a component there throws React error #31 —
+    so the marker stands in for true bold text.)"""
+    # Which sources are this reviewer's outstanding (unsubmitted) assignments?
+    outstanding: set[str] = set()
+    if recommendations_dir is not None and reviewer:
+        try:
+            from ..data.assignments import load_store, assignment_status
+            store = load_store(recommendations_dir)
+            for rec in store.assignments.get(reviewer, []):
+                if assignment_status(
+                        recommendations_dir, rec.source, reviewer) != "submitted":
+                    outstanding.add(rec.source)
+        except Exception:
+            outstanding = set()
+
     out: list[dict] = []
     for s in list_sources(results_dir):
         parts: list[str] = [s.source]
@@ -73,8 +92,15 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
             parts.append(text)
         if recommendations_dir is not None:
             parts.append(source_badge(recommendations_dir, s.source))
-        out.append({"label": "   ".join(parts), "value": str(s.folder),
-                    "search": s.source})
+        mine = s.source in outstanding
+        label = ("★ " if mine else "") + "   ".join(parts)
+        out.append({"label": label, "value": str(s.folder),
+                    "search": s.source, "_mine": mine})
+    # Outstanding assignments first (then everything else), each group
+    # alphabetical by source name.
+    out.sort(key=lambda o: (0 if o["_mine"] else 1, o["search"]))
+    for o in out:
+        o.pop("_mine", None)
     return out
 
 
@@ -96,7 +122,7 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     # access at /dashboard also works (router callback in
                     # app.py).
                     html.A(
-                        "📋 Progress Dashboard",
+                        "📋 Assignment Dashboard",
                         href="/dashboard", target="_blank",
                         style={"marginLeft": "1.5em", "color": "#1f77b4",
                                "textDecoration": "none", "fontSize": "0.9em",
