@@ -47,7 +47,7 @@ from ..recommendations.store import (
 )
 from ..data.assignments import (
     AssignmentStore, assignment_status, get_source_target_date,
-    load_store, needs_for,
+    load_store, manual_review_slugs_by_source, needs_for,
 )
 
 
@@ -153,6 +153,90 @@ def slug_name_map(
         for n in known_reviewers(
             tokens_path, recommendations_dir, fallback_reviewer)
     }
+
+
+def moves_preview(moves: list, *, empty_msg: str = "No moves needed.") -> "html.Div":
+    """Render a list of ``(source, from, to)`` moves as a preview table —
+    shared by the Top-up rebalance and Redistribute modals. ``moves`` may
+    be tuples or 3-lists (the latter after a JSON round-trip through a
+    dcc.Store)."""
+    if not moves:
+        return html.Div(empty_msg, style={"color": "#666", "padding": "0.4em"})
+    # Per-reviewer net change, so the admin sees the load shift at a glance.
+    delta: dict[str, int] = {}
+    for _s, frm, to in moves:
+        delta[frm] = delta.get(frm, 0) - 1
+        delta[to] = delta.get(to, 0) + 1
+    rows = [html.Tr([
+        html.Td(s, style={"padding": "3px 8px"}),
+        html.Td(frm, style={"padding": "3px 8px", "color": "#b00"}),
+        html.Td("→", style={"padding": "3px 8px", "textAlign": "center"}),
+        html.Td(to, style={"padding": "3px 8px", "color": "#1a7a1a",
+                           "fontWeight": 600}),
+    ]) for s, frm, to in moves]
+    summary = ", ".join(
+        f"{r} {'+' if d > 0 else ''}{d}" for r, d in sorted(delta.items()))
+    return html.Div([
+        html.Div(f"{len(moves)} move(s): {summary}",
+                 style={"marginBottom": "0.4em", "fontWeight": 600}),
+        html.Table(
+            [html.Thead(html.Tr([
+                html.Th("Source", style={"padding": "3px 8px",
+                                         "textAlign": "left"}),
+                html.Th("From", style={"padding": "3px 8px",
+                                       "textAlign": "left"}),
+                html.Th("", style={"padding": "3px 8px"}),
+                html.Th("To", style={"padding": "3px 8px",
+                                     "textAlign": "left"}),
+            ]))] + [html.Tbody(rows)],
+            style={"width": "100%", "borderCollapse": "collapse",
+                   "fontFamily": "system-ui, sans-serif", "fontSize": "0.85em"},
+        ),
+    ])
+
+
+def _apply_btn(bid: str, label: str = "Apply") -> "html.Button":
+    return html.Button(
+        label, id=bid, n_clicks=0,
+        style={"padding": "0.45em 1em", "background": "#1f77b4",
+               "color": "white", "border": "none", "borderRadius": "4px",
+               "cursor": "pointer"})
+
+
+def _cancel_btn(bid: str, label: str = "Cancel") -> "html.Button":
+    return html.Button(
+        label, id=bid, n_clicks=0,
+        style={"padding": "0.45em 1em", "background": "white", "color": "#555",
+               "border": "1px solid #bbb", "borderRadius": "4px",
+               "cursor": "pointer"})
+
+
+def _modal_shell(
+    modal_id: str, title: str, close_id: str,
+    body: list, footer: list, *, max_width: str = "560px",
+) -> "html.Div":
+    """A hidden modal scaffold (overlay set by the open callback). Shared
+    by the rebalance / redistribute / move-source modals."""
+    header = html.Div(
+        [html.H4(title, style={"margin": 0}),
+         html.Button("×", id=close_id, n_clicks=0,
+                     style={"border": "none", "background": "transparent",
+                            "fontSize": "1.5em", "lineHeight": 1,
+                            "cursor": "pointer", "color": "#888"})],
+        style={"display": "flex", "justifyContent": "space-between",
+               "alignItems": "center", "marginBottom": "0.4em"})
+    footer_row = html.Div(
+        footer, style={"display": "flex", "gap": "0.5em",
+                       "justifyContent": "flex-end", "marginTop": "0.6em"})
+    return html.Div(
+        id=modal_id, style={"display": "none"},
+        children=[html.Div(
+            [header] + body + [footer_row],
+            style={"background": "white", "padding": "1.5em",
+                   "borderRadius": "6px", "maxWidth": max_width,
+                   "margin": "5% auto", "maxHeight": "85vh",
+                   "overflowY": "auto",
+                   "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"})])
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +400,12 @@ def _source_progress_rows(
             assigned_by_source.setdefault(r.source, []).append(reviewer)
 
     # Everyone who has ever submitted a review (open + Stage-3 considered
-    # + Stage-2 applied baseline), one disk walk.
+    # + Stage-2 applied baseline), one disk walk, plus explicit manual
+    # credits (admin self-credit for sources advanced without an
+    # artifact).
     ever_submitted = all_review_submitters(
         recommendations_dir, [s.source for s in all_srcs])
+    manual_by_source = manual_review_slugs_by_source(store)
 
     rows = []
     for src in all_srcs:
@@ -329,7 +416,8 @@ def _source_progress_rows(
             ("★" * diff.stars + ("  ⚠" if diff.outlier else ""))
             if diff is not None else "—"
         )
-        ever_slugs = ever_submitted.get(src.source, set())
+        ever_slugs = (ever_submitted.get(src.source, set())
+                      | manual_by_source.get(src.source, set()))
         reviews = sorted(
             name_for_slug.get(slug, slug) for slug in ever_slugs)
         # Pending = assigned reviewers who have not (ever) submitted.
@@ -544,6 +632,7 @@ def _admin_controls_panel(
     open_sources: list[str],
     current_targets: dict[str, str],
     removable: set[str],
+    assigned_sources: list[str],
 ) -> html.Div:
     """Top-of-dashboard admin section: Manage team + Auto-balance +
     Reassign-queue + Set-target-dates buttons, their modals, and a
@@ -658,6 +747,57 @@ def _admin_controls_panel(
                         title="Set per-source target dates. Bulk-set a "
                               "lexicographic range with one action, then "
                               "tweak individual rows before saving.",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Button(
+                        "✓ Credit my Stage-2 reviews",
+                        id="dashboard-credit-btn", n_clicks=0,
+                        title="Record yourself as reviewer for every "
+                              "Stage-2-done / finalized source where you "
+                              "have no submission, considered, or applied "
+                              "record — for sources you advanced past "
+                              "Stage 2 without leaving an artifact. "
+                              "Idempotent.",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Button(
+                        "⚖ Top-up rebalance…",
+                        id="dashboard-rb-btn", n_clicks=0,
+                        title="Move PENDING assignments to even out load "
+                              "across active reviewers — gives newly-added "
+                              "reviewers a fair share without reshuffling "
+                              "everyone. Preview before applying.",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Button(
+                        "🏖 Redistribute (break)…",
+                        id="dashboard-rd-btn", n_clicks=0,
+                        title="Spread one reviewer's PENDING queue across "
+                              "the rest of the active pool (not 1→1), "
+                              "optionally pausing them.",
+                        style={"marginLeft": "0.6em",
+                               "padding": "0.4em 1em", "fontSize": "0.9em",
+                               "background": "white", "color": "#555",
+                               "border": "1px solid #bbb",
+                               "borderRadius": "4px", "cursor": "pointer"},
+                    ),
+                    html.Button(
+                        "↔ Move a source…",
+                        id="dashboard-ms-btn", n_clicks=0,
+                        title="Reassign a single source from one reviewer "
+                              "to another.",
                         style={"marginLeft": "0.6em",
                                "padding": "0.4em 1em", "fontSize": "0.9em",
                                "background": "white", "color": "#555",
@@ -909,6 +1049,96 @@ def _admin_controls_panel(
             # dict ({reviewer: [src, ...]}) from auto_balance. Holds nothing
             # until the admin clicks "Auto-balance"; cleared on Apply/Cancel.
             dcc.Store(id="dashboard-ab-preview-store", data=None),
+            # Top-up rebalance modal ------------------------------------
+            _modal_shell(
+                "dashboard-rb-modal", "Top-up rebalance",
+                "dashboard-rb-close",
+                [html.Div(
+                    "Moves PENDING assignments (not started) to even out "
+                    "load across active reviewers. Submitted and in-progress "
+                    "work stays put. Review the moves, then Apply.",
+                    style={"color": "#666", "fontSize": "0.85em",
+                           "marginBottom": "0.5em"}),
+                 html.Div(id="dashboard-rb-preview-body",
+                          style={"maxHeight": "48vh", "overflowY": "auto"})],
+                [_apply_btn("dashboard-rb-apply"),
+                 _cancel_btn("dashboard-rb-cancel")],
+                max_width="620px"),
+            dcc.Store(id="dashboard-rb-store", data=None),
+            # Redistribute-on-break modal -------------------------------
+            _modal_shell(
+                "dashboard-rd-modal", "Redistribute a reviewer's queue",
+                "dashboard-rd-close",
+                [html.Div(
+                    "Spread one reviewer's PENDING sources across the rest "
+                    "of the active pool, by load. Their submitted / "
+                    "in-progress work stays with them.",
+                    style={"color": "#666", "fontSize": "0.85em",
+                           "marginBottom": "0.5em"}),
+                 html.Div([
+                     html.Label("Reviewer:", style={"marginRight": "0.5em"}),
+                     dcc.Dropdown(
+                         id="dashboard-rd-from", options=reviewer_opts,
+                         clearable=False,
+                         style={"width": "200px", "display": "inline-block",
+                                "verticalAlign": "middle",
+                                "marginRight": "1em"}),
+                     html.Label("Max to move:",
+                                style={"marginRight": "0.5em"}),
+                     dcc.Input(id="dashboard-rd-limit", type="number", min=1,
+                               placeholder="all", value=None,
+                               style={"width": "80px", "marginRight": "1em",
+                                      "verticalAlign": "middle"}),
+                     dcc.Checklist(
+                         id="dashboard-rd-pause",
+                         options=[{"label": " pause this reviewer",
+                                   "value": "pause"}],
+                         value=["pause"],
+                         style={"display": "inline-block",
+                                "verticalAlign": "middle"}),
+                 ], style={"display": "flex", "alignItems": "center",
+                           "flexWrap": "wrap", "gap": "0.25em",
+                           "marginBottom": "0.6em"}),
+                 html.Div(id="dashboard-rd-preview-body",
+                          style={"maxHeight": "40vh", "overflowY": "auto"})],
+                [_apply_btn("dashboard-rd-apply"),
+                 _cancel_btn("dashboard-rd-cancel")],
+                max_width="620px"),
+            # Move-a-source modal ---------------------------------------
+            _modal_shell(
+                "dashboard-ms-modal", "Move a source",
+                "dashboard-ms-close",
+                [html.Div(
+                    "Reassign one source from one reviewer to another.",
+                    style={"color": "#666", "fontSize": "0.85em",
+                           "marginBottom": "0.5em"}),
+                 html.Div([
+                     html.Label("Source:", style={"marginRight": "0.5em"}),
+                     dcc.Dropdown(
+                         id="dashboard-ms-source",
+                         options=[{"label": s, "value": s}
+                                  for s in assigned_sources],
+                         clearable=False,
+                         style={"width": "180px", "display": "inline-block",
+                                "verticalAlign": "middle",
+                                "marginRight": "1em"}),
+                     html.Label("From:", style={"marginRight": "0.5em"}),
+                     dcc.Dropdown(
+                         id="dashboard-ms-from", options=reviewer_opts,
+                         clearable=False,
+                         style={"width": "160px", "display": "inline-block",
+                                "verticalAlign": "middle",
+                                "marginRight": "1em"}),
+                     html.Label("To:", style={"marginRight": "0.5em"}),
+                     dcc.Dropdown(
+                         id="dashboard-ms-to", options=reviewer_opts,
+                         clearable=False,
+                         style={"width": "160px", "display": "inline-block",
+                                "verticalAlign": "middle"}),
+                 ], style={"display": "flex", "alignItems": "center",
+                           "flexWrap": "wrap", "gap": "0.25em"})],
+                [_apply_btn("dashboard-ms-apply", "Move"),
+                 _cancel_btn("dashboard-ms-cancel")]),
             # Target-dates modal ----------------------------------------
             html.Div(
                 id="dashboard-td-modal", style={"display": "none"},
@@ -1023,10 +1253,14 @@ def build_dashboard_page(
             rec.source for rec in store.assignments.get(reviewer, [])]
 
     # Lifetime stats (item 2) — across all sources, assigned or not.
+    # Manual review credits count as submitted and never as in-progress.
+    manual_for_me = set(store.manual_reviews.get(reviewer, []))
     n_submitted_total = len(
-        reviewer_submitted_sources(recommendations_dir, reviewer))
+        reviewer_submitted_sources(recommendations_dir, reviewer)
+        | manual_for_me)
     n_in_progress_total = len(
-        reviewer_in_progress_sources(recommendations_dir, reviewer))
+        reviewer_in_progress_sources(recommendations_dir, reviewer)
+        - manual_for_me)
 
     header = html.Div(
         [
@@ -1100,12 +1334,17 @@ def build_dashboard_page(
             | set(store.assignments.keys())
         )
         removable = set(store.team_members) - discovered
+        assigned_sources = sorted({
+            rec.source for recs in store.assignments.values()
+            for rec in recs
+        })
         page_children.append(_admin_controls_panel(
             reviewers, set(store.paused_reviewers),
             stage12_names,
             open_src_names,
             {s: get_source_target_date(store, s) or "" for s in td_sources},
             removable,
+            assigned_sources,
         ))
     page_children.append(body)
 

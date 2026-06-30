@@ -17,14 +17,24 @@ from ..auth.runtime import current_reviewer
 from ..auth.tokens import load_store as load_token_store
 from ..recommendations.store import reviewer_slug, source_phase
 from ..data.assignments import (
-    active_reviewers, add_team_member, apply_additions, auto_balance,
-    credit_prior_submissions, load_store, reassign_queue,
-    remove_team_member, save_store, set_paused, set_source_target_date,
-    sources_in_range, submitted_by_map,
+    active_reviewers, add_team_member, apply_additions, apply_moves,
+    assignment_status, auto_balance, backfill_manual_reviews,
+    credit_prior_submissions, load_store, move_assignment, reassign_queue,
+    rebalance_pending, redistribute_reviewer, remove_team_member, save_store,
+    set_paused, set_source_target_date, sources_in_range, submitted_by_map,
 )
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
-from .dashboard import known_reviewers, slug_name_map, _source_progress_rows
+from .dashboard import (
+    known_reviewers, moves_preview, slug_name_map, _source_progress_rows,
+)
+
+
+# Shown when any rebalance/move modal opens (covers the screen, dims behind).
+_OVERLAY_STYLE = {
+    "display": "block", "position": "fixed", "top": 0, "left": 0,
+    "right": 0, "bottom": 0, "background": "rgba(0,0,0,0.35)", "zIndex": 1000,
+}
 
 
 def _name_for_slug(
@@ -348,6 +358,36 @@ def register_dashboard_callbacks(
         return "/dashboard", f"target dates: {n_changed} updated"
 
     # -------------------------------------------------------------------
+    # Credit my Stage-2 reviews (admin self-credit backfill)
+    # -------------------------------------------------------------------
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children",
+               allow_duplicate=True),
+        Input("dashboard-credit-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _credit_my_reviews(_n):
+        me = current_reviewer(reviewer)
+        if not me:
+            return no_update, "no reviewer identity to credit"
+        # Candidate sources: everything past Stage 2 (open or finalized) —
+        # those the admin advanced and therefore reviewed.
+        candidates = [
+            s.source for s in list_sources(results_dir)
+            if source_phase(recommendations_dir, s.source) in ("open", "final")
+        ]
+        store = load_store(recommendations_dir)
+        n = backfill_manual_reviews(
+            store, recommendations_dir=recommendations_dir,
+            reviewer=me, candidate_sources=candidates)
+        if not n:
+            return no_update, "no missing reviews to credit"
+        save_store(recommendations_dir, store)
+        return "/dashboard", f"credited {n} source(s) as reviewed by {me}"
+
+    # -------------------------------------------------------------------
     # Manage team — pause / activate individual reviewers
     # -------------------------------------------------------------------
 
@@ -491,3 +531,172 @@ def register_dashboard_callbacks(
         if skipped:
             msg += f", skipped {len(skipped)}"
         return "/dashboard", msg
+
+    # -------------------------------------------------------------------
+    # Surgical rebalancing — top-up / redistribute / move-one-source.
+    # All move PENDING assignments only and touch only store.assignments.
+    # -------------------------------------------------------------------
+
+    def _rebalance_inputs(store):
+        """(weight_by_source, current_map, movable, active_pool) for the
+        rebalance planners. ``movable`` is each reviewer's PENDING (not
+        started) assignments — the only ones eligible to move. The active
+        pool excludes the admin (who drives Stage 1/2, not Stage-3 work)
+        and paused reviewers."""
+        srcs = list_sources(results_dir)
+        weight_by_source = {d.source: d.balance_weight for d in score_all(srcs)}
+        current_map = {
+            r: [rec.source for rec in recs]
+            for r, recs in store.assignments.items()
+        }
+        movable = {
+            r: {s for s in sources
+                if assignment_status(recommendations_dir, s, r) == "pending"}
+            for r, sources in current_map.items()
+        }
+        me = current_reviewer(reviewer)
+        known = [r for r in known_reviewers(
+            tokens_path, recommendations_dir, reviewer) if r != me]
+        pool = active_reviewers(store, known)
+        return weight_by_source, current_map, movable, pool
+
+    # --- Top-up rebalance ---------------------------------------------
+    @app.callback(
+        Output("dashboard-rb-modal", "style"),
+        Output("dashboard-rb-preview-body", "children"),
+        Output("dashboard-rb-store", "data"),
+        Input("dashboard-rb-btn", "n_clicks"),
+        Input("dashboard-rb-close", "n_clicks"),
+        Input("dashboard-rb-cancel", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _rb_open(open_n, close_n, cancel_n):
+        from dash import ctx
+        if ctx.triggered_id != "dashboard-rb-btn":
+            return {"display": "none"}, no_update, None
+        store = load_store(recommendations_dir)
+        weight, current_map, movable, pool = _rebalance_inputs(store)
+        moves = rebalance_pending(
+            current_assignments=current_map, movable=movable,
+            weight_by_source=weight, reviewers=pool)
+        body = moves_preview(
+            moves, empty_msg="Load is already balanced — no moves needed.")
+        return _OVERLAY_STYLE, body, moves
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children", allow_duplicate=True),
+        Input("dashboard-rb-apply", "n_clicks"),
+        State("dashboard-rb-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _rb_apply(_n, moves):
+        if not moves:
+            return no_update, "no moves to apply"
+        store = load_store(recommendations_dir)
+        n = apply_moves(store, [tuple(m) for m in moves],
+                        assigned_by=current_reviewer(reviewer))
+        save_store(recommendations_dir, store)
+        return "/dashboard", f"rebalanced: {n} move(s)"
+
+    # --- Redistribute one reviewer's queue (break) --------------------
+    @app.callback(
+        Output("dashboard-rd-modal", "style"),
+        Input("dashboard-rd-btn", "n_clicks"),
+        Input("dashboard-rd-close", "n_clicks"),
+        Input("dashboard-rd-cancel", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _rd_open(open_n, close_n, cancel_n):
+        from dash import ctx
+        return (_OVERLAY_STYLE if ctx.triggered_id == "dashboard-rd-btn"
+                else {"display": "none"})
+
+    def _rd_plan(from_r, limit):
+        """Shared planner for the redistribute preview + apply, so apply
+        never trusts a stale preview store."""
+        store = load_store(recommendations_dir)
+        weight, current_map, movable, pool = _rebalance_inputs(store)
+        targets = [r for r in pool if r != from_r]
+        lim = int(limit) if limit else None
+        moves = redistribute_reviewer(
+            reviewer=from_r, current_assignments=current_map, movable=movable,
+            weight_by_source=weight, targets=targets, limit=lim)
+        return store, moves
+
+    @app.callback(
+        Output("dashboard-rd-preview-body", "children"),
+        Input("dashboard-rd-from", "value"),
+        Input("dashboard-rd-limit", "value"),
+        prevent_initial_call=True,
+    )
+    def _rd_preview(from_r, limit):
+        if not from_r:
+            return "Pick a reviewer to redistribute."
+        _store, moves = _rd_plan(from_r, limit)
+        return moves_preview(
+            moves, empty_msg="Nothing pending to redistribute.")
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children", allow_duplicate=True),
+        Input("dashboard-rd-apply", "n_clicks"),
+        State("dashboard-rd-from", "value"),
+        State("dashboard-rd-limit", "value"),
+        State("dashboard-rd-pause", "value"),
+        prevent_initial_call=True,
+    )
+    def _rd_apply(_n, from_r, limit, pause_val):
+        if not from_r:
+            return no_update, "pick a reviewer"
+        store, moves = _rd_plan(from_r, limit)
+        n = apply_moves(store, moves, assigned_by=current_reviewer(reviewer))
+        did_pause = False
+        if pause_val and "pause" in pause_val:
+            set_paused(store, from_r, True)
+            did_pause = True
+        if not n and not did_pause:
+            return no_update, "nothing to redistribute"
+        save_store(recommendations_dir, store)
+        msg = f"redistributed {n} source(s) from {from_r}"
+        if did_pause:
+            msg += " (paused)"
+        return "/dashboard", msg
+
+    # --- Move a single source -----------------------------------------
+    @app.callback(
+        Output("dashboard-ms-modal", "style"),
+        Input("dashboard-ms-btn", "n_clicks"),
+        Input("dashboard-ms-close", "n_clicks"),
+        Input("dashboard-ms-cancel", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _ms_open(open_n, close_n, cancel_n):
+        from dash import ctx
+        return (_OVERLAY_STYLE if ctx.triggered_id == "dashboard-ms-btn"
+                else {"display": "none"})
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children", allow_duplicate=True),
+        Input("dashboard-ms-apply", "n_clicks"),
+        State("dashboard-ms-source", "value"),
+        State("dashboard-ms-from", "value"),
+        State("dashboard-ms-to", "value"),
+        prevent_initial_call=True,
+    )
+    def _ms_apply(_n, source, frm, to):
+        if not (source and frm and to):
+            return no_update, "pick source, from, and to"
+        if frm == to:
+            return no_update, "from and to must differ"
+        store = load_store(recommendations_dir)
+        ok = move_assignment(
+            store, source=source, from_reviewer=frm, to_reviewer=to,
+            assigned_by=current_reviewer(reviewer))
+        if not ok:
+            return no_update, (
+                f"couldn't move {source}: {frm} doesn't hold it or {to} "
+                f"already does")
+        save_store(recommendations_dir, store)
+        return "/dashboard", f"moved {source}: {frm}→{to}"

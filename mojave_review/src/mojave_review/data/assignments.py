@@ -43,6 +43,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -53,7 +54,7 @@ from ..recommendations.store import (
 from .difficulty import SourceDifficulty
 
 
-SCHEMA_VERSION = 4          # v4: adds team_members (manual roster, syncs)
+SCHEMA_VERSION = 5          # v5: adds manual_reviews (admin self-credit)
 DEFAULT_REVIEW_TARGET = 2
 STALE_DAYS = 7
 
@@ -115,6 +116,15 @@ class AssignmentStore:
     # ``dashboard.known_reviewers``. Names should match the deployed
     # tokens.yaml ``name:`` fields so identities line up.
     team_members: list[str] = field(default_factory=list)
+    # Manual review credit (v5): ``{reviewer_name: [source, ...]}``. The
+    # admin advances a source to "Stage 2 done" once they've reviewed it,
+    # but if they did so without leaving a submission/baseline file there
+    # is no on-disk artifact to credit them with. This records "I
+    # reviewed this source" explicitly so the dashboard counts/lists it
+    # like any other submitted review. Keyed by full reviewer name (same
+    # identity as ``assignments``); the dashboard maps names→slugs where
+    # it merges with the on-disk (slug-keyed) submitter sets.
+    manual_reviews: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "AssignmentStore":
@@ -122,7 +132,8 @@ class AssignmentStore:
         # * v1 stores: no paused_reviewers, no source_target_dates
         # * v2 stores: no source_target_dates
         # * v3 stores: no team_members
-        # * v4 (current): everything present
+        # * v4 stores: no manual_reviews
+        # * v5 (current): everything present
         # Defaults make older versions load cleanly. Per-record
         # target_date (v1/v2) is preserved as a hint but the source
         # map wins everywhere — to migrate explicitly, callers can
@@ -145,6 +156,10 @@ class AssignmentStore:
                 if v                                # drop blanks/nulls on read
             },
             team_members=list(d.get("team_members", []) or []),
+            manual_reviews={
+                k: list(v) for k, v in
+                (d.get("manual_reviews", {}) or {}).items() if v
+            },
         )
 
     def to_dict(self) -> dict:
@@ -160,10 +175,18 @@ class AssignmentStore:
             "paused_reviewers": list(self.paused_reviewers),
             "source_target_dates": dict(self.source_target_dates),
             "team_members": list(self.team_members),
+            "manual_reviews": {
+                k: list(v) for k, v in self.manual_reviews.items()
+            },
         }
 
     def touch(self) -> None:
+        # Any write conforms to the current schema (to_dict always emits
+        # every field), so stamp the current version — a store loaded from
+        # an older file is upgraded on its next save rather than lying
+        # about its shape.
         self.updated_at = _utcnow_iso()
+        self.version = SCHEMA_VERSION
 
 
 def _utcnow_iso() -> str:
@@ -188,11 +211,46 @@ def load_store(recommendations_dir: Path) -> AssignmentStore:
         return AssignmentStore.from_dict(json.load(f))
 
 
+_BACKUP_KEEP = 10
+
+
+def _write_backup(p: Path) -> None:
+    """Copy the *current* on-disk assignments.json (if any) to
+    ``_admin/backups/assignments.<utc-ts>.json`` before it's overwritten,
+    keeping the most recent ``_BACKUP_KEEP``. assignments.json now carries
+    target dates, the team roster, and manual review credits as well as
+    assignments — a rotating backup makes any rebalance / bulk edit
+    recoverable. Backups live under ``recommendations/`` so they sync too.
+    Best-effort: a backup failure never blocks the real save."""
+    if not p.is_file():
+        return
+    try:
+        bdir = p.parent / "backups"
+        bdir.mkdir(parents=True, exist_ok=True)
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
+        dst = bdir / f"assignments.{ts}.json"
+        n = 2
+        while dst.exists():
+            dst = bdir / f"assignments.{ts}_{n}.json"
+            n += 1
+        shutil.copy2(p, dst)
+        backups = sorted(bdir.glob("assignments.*.json"))
+        for old in backups[:-_BACKUP_KEEP]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def save_store(recommendations_dir: Path, store: AssignmentStore) -> Path:
-    """Atomic write — temp file + ``os.replace``. Returns the file path."""
-    store.touch()
+    """Atomic write — temp file + ``os.replace``. Returns the file path.
+    Snapshots the prior file into ``_admin/backups/`` first."""
     p = assignments_path(recommendations_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
+    _write_backup(p)
+    store.touch()
     payload = json.dumps(store.to_dict(), indent=2, sort_keys=False)
     fd, tmp_path = tempfile.mkstemp(
         prefix=p.name + ".", dir=str(p.parent), suffix=".part",
@@ -485,6 +543,81 @@ def remove_team_member(store: AssignmentStore, name: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Manual review credit (v5)
+# ---------------------------------------------------------------------------
+
+
+def add_manual_review(
+    store: AssignmentStore, reviewer: str, source: str,
+) -> bool:
+    """Record that ``reviewer`` reviewed ``source`` (with no on-disk
+    artifact). Returns True if newly added, False if already present."""
+    bucket = store.manual_reviews.setdefault(reviewer, [])
+    if source in bucket:
+        return False
+    bucket.append(source)
+    return True
+
+
+def remove_manual_review(
+    store: AssignmentStore, reviewer: str, source: str,
+) -> bool:
+    """Drop a manual review credit. Returns True if it was present.
+    Empties the reviewer's bucket key when the last credit is removed."""
+    bucket = store.manual_reviews.get(reviewer)
+    if not bucket or source not in bucket:
+        return False
+    store.manual_reviews[reviewer] = [s for s in bucket if s != source]
+    if not store.manual_reviews[reviewer]:
+        del store.manual_reviews[reviewer]
+    return True
+
+
+def manual_review_slugs_by_source(
+    store: AssignmentStore,
+) -> dict[str, set[str]]:
+    """``{source: {reviewer_slug, ...}}`` from ``manual_reviews``,
+    translating the stored reviewer NAMES into slugs so the dashboard can
+    merge them with the on-disk (slug-keyed) submitter sets."""
+    from ..recommendations.store import reviewer_slug
+    out: dict[str, set[str]] = {}
+    for name, sources in store.manual_reviews.items():
+        slug = reviewer_slug(name)
+        for s in sources:
+            out.setdefault(s, set()).add(slug)
+    return out
+
+
+def backfill_manual_reviews(
+    store: AssignmentStore,
+    *,
+    recommendations_dir: Path,
+    reviewer: str,
+    candidate_sources: list[str],
+) -> int:
+    """Credit ``reviewer`` for each candidate source where they have NO
+    on-disk review artifact (open ``submitted/``, archived
+    ``considered/``, or applied baseline) and aren't already manually
+    credited. Returns the number of credits added. Idempotent — re-runs
+    add only newly-missing sources.
+
+    ``candidate_sources`` is supplied by the caller (e.g. the dashboard's
+    open+final source list); this keeps phase/IO discovery out of the
+    pure store mutation."""
+    from ..recommendations.store import reviewer_submitted_sources
+    have = reviewer_submitted_sources(recommendations_dir, reviewer)
+    already = set(store.manual_reviews.get(reviewer, []))
+    n = 0
+    for s in candidate_sources:
+        if s in have or s in already:
+            continue
+        store.manual_reviews.setdefault(reviewer, []).append(s)
+        already.add(s)
+        n += 1
+    return n
+
+
 def active_reviewers(
     store: AssignmentStore, all_reviewers: list[str],
 ) -> list[str]:
@@ -699,3 +832,154 @@ def reassign_queue(
         moved.append(s)
     store.assignments[from_reviewer] = remaining
     return moved, skipped
+
+
+# ---------------------------------------------------------------------------
+# Surgical rebalancing — move PENDING assignments only, preserve the rest
+# ---------------------------------------------------------------------------
+#
+# These planners are pure (no disk / no store mutation): the caller passes
+# in-memory state and gets back a list of ``(source, from, to)`` moves to
+# preview, then commits with :func:`apply_moves`. "Movable" is supplied by
+# the caller as ``{reviewer: {pending_source, ...}}`` — only not-yet-started
+# assignments are eligible, so submitted and in-progress work never moves.
+# Everything outside ``store.assignments`` (target dates, team roster,
+# manual reviews, paused list) is untouched.
+
+Move = tuple[str, str, str]            # (source, from_reviewer, to_reviewer)
+
+
+def _pending_load(
+    reviewer: str, movable: dict[str, set[str]],
+    weight_by_source: dict[str, float],
+) -> float:
+    return sum(weight_by_source.get(s, 0.0)
+               for s in movable.get(reviewer, set()))
+
+
+def move_assignment(
+    store: AssignmentStore, *, source: str,
+    from_reviewer: str, to_reviewer: str, assigned_by: str = "",
+) -> bool:
+    """Move one source between reviewers. Returns False (no-op) when the
+    source isn't on ``from_reviewer`` or is already on ``to_reviewer``."""
+    if from_reviewer == to_reviewer:
+        return False
+    src_bucket = store.assignments.get(from_reviewer, [])
+    if not any(r.source == source for r in src_bucket):
+        return False
+    tgt_bucket = store.assignments.setdefault(to_reviewer, [])
+    if any(r.source == source for r in tgt_bucket):
+        return False
+    remove_assignment(store, from_reviewer, source)
+    tgt_bucket.append(AssignmentRecord(
+        source=source, assigned_at=_utcnow_iso(), target_date=None,
+        assigned_by=assigned_by or from_reviewer))
+    return True
+
+
+def apply_moves(
+    store: AssignmentStore, moves: list[Move], *, assigned_by: str = "",
+) -> int:
+    """Commit a list of ``(source, from, to)`` moves. Returns the count
+    actually applied (skips no-op moves)."""
+    n = 0
+    for source, frm, to in moves:
+        if move_assignment(store, source=source, from_reviewer=frm,
+                           to_reviewer=to, assigned_by=assigned_by):
+            n += 1
+    return n
+
+
+def rebalance_pending(
+    *,
+    current_assignments: dict[str, list[str]],
+    movable: dict[str, set[str]],
+    weight_by_source: dict[str, float],
+    reviewers: list[str],
+) -> list[Move]:
+    """Plan moves of PENDING assignments to equalise ``balance_weight``
+    load across ``reviewers`` (the active pool), with minimal churn.
+
+    Used after adding a reviewer to an already-seeded project: the new
+    reviewer starts at zero load and pulls a fair share from the
+    over-loaded, instead of getting nothing (which is what ``auto_balance``
+    does once every source is at its target). Source coverage count is
+    invariant — each move just swaps one holder of a source for another.
+
+    Heuristic (single pass, heaviest items first): an item is moved off a
+    reviewer only while they're above the average load, to the lightest
+    reviewer who is below average and doesn't already hold that source —
+    and only when the move doesn't overshoot (make the receiver heavier
+    than the donor was). Deterministic; ties break on name."""
+    if len(reviewers) < 2:
+        return []
+    load = {r: _pending_load(r, movable, weight_by_source) for r in reviewers}
+    holds = {r: set(current_assignments.get(r, [])) for r in reviewers}
+    target = sum(load.values()) / len(reviewers)
+    items = sorted(
+        ((weight_by_source.get(s, 0.0), s, owner)
+         for owner in reviewers for s in movable.get(owner, set())),
+        key=lambda t: (-t[0], t[1], t[2]),
+    )
+    moves: list[Move] = []
+    for w, s, owner in items:
+        if load[owner] <= target:
+            continue
+        cands = sorted(
+            (r for r in reviewers
+             if r != owner and s not in holds[r] and load[r] < target),
+            key=lambda r: (load[r], r),
+        )
+        if not cands:
+            continue
+        recv = cands[0]
+        if load[owner] - w < load[recv]:           # would overshoot → skip
+            continue
+        moves.append((s, owner, recv))
+        load[owner] -= w
+        load[recv] += w
+        holds[owner].discard(s)
+        holds[recv].add(s)
+    return moves
+
+
+def redistribute_reviewer(
+    *,
+    reviewer: str,
+    current_assignments: dict[str, list[str]],
+    movable: dict[str, set[str]],
+    weight_by_source: dict[str, float],
+    targets: list[str],
+    limit: int | None = None,
+) -> list[Move]:
+    """Plan moves that spread ``reviewer``'s PENDING queue across
+    ``targets`` (the rest of the active pool) by load — for when someone
+    takes a break, instead of dumping everything on one person
+    (cf. :func:`reassign_queue`). Heaviest sources first; each goes to the
+    lightest target that doesn't already hold it. ``limit`` caps how many
+    of their (heaviest) pending sources are redistributed (None = all).
+    Their submitted / in-progress work stays with them."""
+    items = sorted(
+        ((weight_by_source.get(s, 0.0), s) for s in movable.get(reviewer, set())),
+        key=lambda t: (-t[0], t[1]),
+    )
+    if limit is not None:
+        items = items[:max(0, limit)]
+    if not targets:
+        return []
+    load = {r: _pending_load(r, movable, weight_by_source) for r in targets}
+    holds = {r: set(current_assignments.get(r, [])) for r in targets}
+    moves: list[Move] = []
+    for w, s in items:
+        cands = sorted(
+            (r for r in targets if s not in holds[r]),
+            key=lambda r: (load[r], r),
+        )
+        if not cands:
+            continue
+        recv = cands[0]
+        moves.append((s, reviewer, recv))
+        load[recv] += w
+        holds[recv].add(s)
+    return moves

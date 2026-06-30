@@ -7,14 +7,16 @@ import json
 
 from mojave_review.data.assignments import (
     AssignmentRecord, AssignmentStore, SCHEMA_VERSION, STALE_DAYS,
-    active_reviewers, add_team_member, all_assigned_sources,
-    all_submitting_reviewers, apply_additions, assignment_status,
-    assignments_for, assignments_path, auto_balance, credit_prior_submissions,
-    get_source_target_date, is_paused, is_stale, load_store,
-    migrate_per_record_targets_to_source, needs_for, reassign_queue,
-    remove_assignment, remove_team_member, reviewer_load, save_store,
-    set_paused, set_source_target_date, set_source_target_dates_bulk,
-    sources_in_range, submitted_by_map,
+    active_reviewers, add_manual_review, add_team_member, all_assigned_sources,
+    all_submitting_reviewers, apply_additions, apply_moves, assignment_status,
+    assignments_for, assignments_path, auto_balance, backfill_manual_reviews,
+    credit_prior_submissions, get_source_target_date, is_paused, is_stale,
+    load_store, manual_review_slugs_by_source,
+    migrate_per_record_targets_to_source, move_assignment, needs_for,
+    reassign_queue, rebalance_pending, redistribute_reviewer,
+    remove_assignment, remove_manual_review, remove_team_member, reviewer_load,
+    save_store, set_paused, set_source_target_date,
+    set_source_target_dates_bulk, sources_in_range, submitted_by_map,
 )
 from mojave_review.data.difficulty import SourceDifficulty
 from mojave_review.recommendations.schema import Recommendation
@@ -559,6 +561,173 @@ def test_team_members_round_trip(tmp_path):
     assert on_disk["version"] == SCHEMA_VERSION
     assert on_disk["team_members"] == ["Alice", "Bob Lee"]
     assert load_store(tmp_path).team_members == ["Alice", "Bob Lee"]
+
+
+# ---------------------------------------------------------------------------
+# Manual review credit (v5)
+# ---------------------------------------------------------------------------
+
+
+def test_load_store_v4_compat(tmp_path):
+    # v4 (no manual_reviews) loads cleanly with an empty map.
+    p = tmp_path / "_admin"
+    p.mkdir()
+    (p / "assignments.json").write_text(json.dumps({
+        "version": 4, "updated_at": "t0", "deadline": None,
+        "default_review_target": 2, "assignments": {},
+        "paused_reviewers": [], "source_target_dates": {},
+        "team_members": ["Alice"],
+    }))
+    store = load_store(tmp_path)
+    assert store.manual_reviews == {}
+    assert store.team_members == ["Alice"]
+
+
+def test_save_bumps_version_from_old_file(tmp_path):
+    # A store read from an older on-disk version is upgraded on save.
+    p = tmp_path / "_admin"
+    p.mkdir()
+    (p / "assignments.json").write_text(json.dumps({
+        "version": 3, "updated_at": "t0", "deadline": None,
+        "default_review_target": 2, "assignments": {},
+        "paused_reviewers": [], "source_target_dates": {},
+    }))
+    store = load_store(tmp_path)
+    assert store.version == 3                       # read preserves
+    save_store(tmp_path, store)
+    on_disk = json.loads(assignments_path(tmp_path).read_text())
+    assert on_disk["version"] == SCHEMA_VERSION      # save upgrades
+
+
+def test_add_remove_manual_review():
+    store = AssignmentStore()
+    assert add_manual_review(store, "homand", "A") is True
+    assert add_manual_review(store, "homand", "A") is False     # dup
+    add_manual_review(store, "homand", "B")
+    assert store.manual_reviews == {"homand": ["A", "B"]}
+    assert remove_manual_review(store, "homand", "A") is True
+    assert store.manual_reviews == {"homand": ["B"]}
+    assert remove_manual_review(store, "homand", "Z") is False
+    # Removing the last credit drops the reviewer key entirely.
+    remove_manual_review(store, "homand", "B")
+    assert store.manual_reviews == {}
+
+
+def test_manual_review_slugs_by_source_translates_names():
+    store = AssignmentStore(manual_reviews={"Dan Homan": ["A", "B"]})
+    out = manual_review_slugs_by_source(store)
+    assert out == {"A": {"dan_homan"}, "B": {"dan_homan"}}
+
+
+def test_backfill_manual_reviews_skips_existing_artifacts(tmp_path):
+    # "homand" has an on-disk submission for A; backfill should credit
+    # only the candidates with no artifact, and be idempotent.
+    save_submitted(
+        tmp_path,
+        Recommendation(source="A", model="current", reviewer="homand",
+                       source_comment="ok"),
+    )
+    store = AssignmentStore()
+    n = backfill_manual_reviews(
+        store, recommendations_dir=tmp_path, reviewer="homand",
+        candidate_sources=["A", "B", "C"])
+    assert n == 2
+    assert sorted(store.manual_reviews["homand"]) == ["B", "C"]
+    # Idempotent re-run adds nothing.
+    assert backfill_manual_reviews(
+        store, recommendations_dir=tmp_path, reviewer="homand",
+        candidate_sources=["A", "B", "C"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Surgical rebalancing (move pending only)
+# ---------------------------------------------------------------------------
+
+
+def test_move_assignment_and_apply_moves():
+    store = AssignmentStore(assignments={
+        "alice": [AssignmentRecord("A", "t0"), AssignmentRecord("B", "t0")],
+        "bob": [AssignmentRecord("A", "t0")],
+    })
+    # No-op cases.
+    assert move_assignment(store, source="A", from_reviewer="alice",
+                           to_reviewer="bob") is False        # bob has A
+    assert move_assignment(store, source="Z", from_reviewer="alice",
+                           to_reviewer="bob") is False        # alice lacks Z
+    # Real move.
+    assert move_assignment(store, source="B", from_reviewer="alice",
+                           to_reviewer="bob") is True
+    assert [r.source for r in store.assignments["alice"]] == ["A"]
+    assert sorted(r.source for r in store.assignments["bob"]) == ["A", "B"]
+    # apply_moves counts only the ones applied: B back to alice works,
+    # A→bob is a no-op (bob already holds A).
+    assert apply_moves(store, [("A", "alice", "bob"),     # bob already has A
+                               ("B", "bob", "alice")]) == 1
+    assert sorted(r.source for r in store.assignments["alice"]) == ["A", "B"]
+
+
+def test_rebalance_pending_gives_new_reviewer_a_share():
+    # Two sources at target 2, seeded to alice+bob; add carol (load 0).
+    ca = {"alice": ["A", "B", "C"], "bob": ["A", "B", "C"], "carol": []}
+    mv = {"alice": {"A", "B", "C"}, "bob": {"A", "B", "C"}, "carol": set()}
+    w = {"A": 10.0, "B": 10.0, "C": 10.0}
+    moves = rebalance_pending(
+        current_assignments=ca, movable=mv, weight_by_source=w,
+        reviewers=["alice", "bob", "carol"])
+    # carol must receive a fair share (target load 20 of 60 total).
+    to_carol = [m for m in moves if m[2] == "carol"]
+    assert len(to_carol) == 2
+    # Coverage count per source stays at 2 after applying.
+    store = AssignmentStore(assignments={
+        r: [AssignmentRecord(s, "t0") for s in ss]
+        for r, ss in ca.items()})
+    apply_moves(store, moves)
+    for src in "ABC":
+        holders = [r for r, recs in store.assignments.items()
+                   if any(x.source == src for x in recs)]
+        assert len(holders) == 2
+
+
+def test_rebalance_pending_only_moves_pending():
+    # alice's A is in-progress (not movable); only B is pending.
+    ca = {"alice": ["A", "B"], "carol": []}
+    mv = {"alice": {"B"}, "carol": set()}        # A omitted ⇒ not movable
+    w = {"A": 10.0, "B": 10.0}
+    moves = rebalance_pending(
+        current_assignments=ca, movable=mv, weight_by_source=w,
+        reviewers=["alice", "carol"])
+    assert all(s != "A" for s, _, _ in moves)
+
+
+def test_redistribute_reviewer_spreads_and_respects_limit():
+    ca = {"alice": ["A"], "bob": ["B", "C", "D"], "carol": []}
+    mv = {"alice": {"A"}, "bob": {"B", "C", "D"}, "carol": set()}
+    w = {"A": 10.0, "B": 10.0, "C": 5.0, "D": 5.0}
+    moves = redistribute_reviewer(
+        reviewer="bob", current_assignments=ca, movable=mv,
+        weight_by_source=w, targets=["alice", "carol"])
+    assert {m[0] for m in moves} == {"B", "C", "D"}
+    assert {m[2] for m in moves} == {"alice", "carol"}    # spread, not 1→1
+    assert all(m[1] == "bob" for m in moves)
+    # limit keeps only the heaviest.
+    one = redistribute_reviewer(
+        reviewer="bob", current_assignments=ca, movable=mv,
+        weight_by_source=w, targets=["alice", "carol"], limit=1)
+    assert one == [("B", "bob", "carol")]
+
+
+def test_save_store_writes_rotating_backup(tmp_path):
+    store = AssignmentStore()
+    add_team_member(store, "Alice")
+    save_store(tmp_path, store)              # first write: no prior → no backup
+    bdir = tmp_path / "_admin" / "backups"
+    assert not bdir.exists() or not list(bdir.glob("*.json"))
+    add_team_member(store, "Bob")
+    save_store(tmp_path, store)              # second write backs up the first
+    backups = list(bdir.glob("assignments.*.json"))
+    assert len(backups) == 1
+    prior = json.loads(backups[0].read_text())
+    assert prior["team_members"] == ["Alice"]   # the pre-overwrite state
 
 
 # ---------------------------------------------------------------------------

@@ -109,7 +109,8 @@ Estimated effort: **3–5 days of focused dev** (vs. 1–2 weeks for OAuth).
 ├── Results/                 ← synced from Drive
 ├── recommendations/         ← per-user JSON output (backed up nightly)
 │   └── _admin/
-│       └── assignments.json ← team roster + assignments + target dates
+│       ├── assignments.json ← roster + assignments + target dates + credits
+│       └── backups/         ← rotating snapshots of assignments.json (last 10)
 ├── fits_cache/              ← grows over time; regeneratable
 └── logs/
 ```
@@ -117,7 +118,10 @@ Estimated effort: **3–5 days of focused dev** (vs. 1–2 weeks for OAuth).
 `recommendations/_admin/assignments.json` is part of the
 `recommendations/` tree, so it is covered by the nightly backup **and**
 by any sync you run on that directory — which is what makes the
-laptop→server roster/assignment workflow below work.
+laptop→server roster/assignment workflow below work. Every write also
+drops a timestamped copy into `_admin/backups/` (last 10 kept), so a
+mis-applied rebalance is recoverable by restoring one of those files;
+they sync with the rest of the tree.
 
 ### `tokens.yaml` example
 
@@ -155,11 +159,29 @@ no need to edit anything directly on the server:
    (`mojave-review --results-dir ./Results --recommendations-dir
    ./recommendations --reviewer <you> --admin`).
 2. In **👥 Manage team**, add teammates who haven't submitted yet, then
-   use **🔀 Auto-balance**, **↪ Reassign queue**, and **📅 Set target
-   dates** to lay out the work. All of this writes only
-   `recommendations/_admin/assignments.json`.
+   use the assignment tools (below) to lay out the work. All of this
+   writes only `recommendations/_admin/assignments.json`.
 3. Sync `recommendations/` to the server. The deployed app reads the
    same file and every reviewer sees their queue.
+
+**Assignment tools (all preview-then-apply, all move only `assignments`):**
+
+- **🔀 Auto-balance** — fill open review slots across the active pool
+  (additions only; won't move existing work).
+- **⚖ Top-up rebalance** — *move* PENDING assignments to even out load,
+  so a reviewer added *after* seeding (the common case) gets a fair share
+  instead of nothing. Minimal churn; submitted / in-progress work never
+  moves.
+- **🏖 Redistribute (break)** — spread one reviewer's PENDING queue across
+  the rest of the pool by load (not all-onto-one), optionally pausing
+  them, for when someone steps away.
+- **↪ Reassign queue** — bulk-move one reviewer's whole queue to a single
+  other reviewer (someone explicitly takes over).
+- **↔ Move a source** — reassign one source, for fine-tuning.
+- **📅 Set target dates** / **✓ Credit my Stage-2 reviews** — as above.
+
+Because each write snapshots the prior file into `_admin/backups/`, a
+rebalance you don't like is one file-restore away from undone.
 
 **Name-matching is the one rule that matters.** A reviewer's queue is
 looked up by name, and on the server that name comes from their token

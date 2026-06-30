@@ -406,7 +406,10 @@ def _applied_review_slugs(src_dir: Path) -> set[str]:
         slug = stem.split("__", 1)[1]
         if slug == "aggregated" or slug.startswith("aggregated_"):
             continue
-        out.add(slug)
+        # Same-source/date collisions become <slug>_N — fold back to the
+        # base slug so a re-applied reviewer is listed once (parity with
+        # the considered-archive handling).
+        out.add(_COLLISION_RE.sub("", slug))
     return out
 
 
