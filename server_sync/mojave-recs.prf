@@ -56,3 +56,11 @@ ignore = Name .DS_Store
 ignore = Name *.part
 ignore = Name .*.swp
 ignore = Path .git
+# --- _admin/ is workstation-authoritative, NOT bidirectional ---
+# assignments.json / team roster / target dates / manual credits are authored
+# on the workstation (the admin curates locally; reviewers only author their
+# own submissions, which DO flow back). Syncing _admin/ bidirectionally let the
+# server's older assignments.json overwrite a fresh local rebalance (Unison
+# prefer=newer / archive resolution). It is pushed one-way workstation->server
+# by sync_server.sh's rsync leg instead. (backups/ never syncs either.)
+ignore = Path _admin

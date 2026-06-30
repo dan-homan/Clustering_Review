@@ -256,6 +256,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _ab_apply(_n, preview):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         if not preview or preview.get("additions") is None:
             return no_update, "no preview to apply"
         # Re-load from disk and re-credit so the apply is correct even
@@ -344,6 +346,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _td_save(_n, ids, values):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         store = load_store(recommendations_dir)
         n_changed = 0
         for ident, val in zip(ids, values):
@@ -372,6 +376,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _credit_my_reviews(_n):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         me = current_reviewer(reviewer)
         if not me:
             return no_update, "no reviewer identity to credit"
@@ -420,6 +426,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _tm_save(_n, statuses, ids):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         # Same i["..."] dict-indexing convention as the aggregation
         # callback in ui/callbacks.py — real browser dispatch hands
         # pattern-matching IDs through as dicts; test_client doesn't,
@@ -446,6 +454,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _tm_add(_n, name):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         name = (name or "").strip()
         if not name:
             return no_update, "enter a name to add"
@@ -507,6 +517,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _rq_apply(_n, from_r, to_r):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         if not from_r or not to_r:
             return no_update, "pick both From and To"
         if from_r == to_r:
@@ -621,6 +633,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _rb_apply(_n, consider_completed):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         store, moves = _rb_plan(consider_completed)
         if not moves:
             return no_update, "no moves to apply"
@@ -679,6 +693,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _rd_apply(_n, from_r, limit, pause_val):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         if not from_r:
             return no_update, "pick a reviewer"
         store, moves = _rd_plan(from_r, limit)
@@ -718,6 +734,8 @@ def register_dashboard_callbacks(
         prevent_initial_call=True,
     )
     def _ms_apply(_n, source, frm, to):
+        if not _n:                      # spurious fire on dynamic render
+            return no_update, no_update
         if not (source and frm and to):
             return no_update, "pick source, from, and to"
         if frm == to:

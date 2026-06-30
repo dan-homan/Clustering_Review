@@ -72,10 +72,27 @@ mirror --exclude-from="$EXCLUDE_FILE" \
        ./Results/ "$REMOTE:$REMOTE_BASE/Results/"
 
 # === 2) bidirectional MERGE: recommendations (Unison) ===
-echo "--> recommendations/  <->  server (unison)"
+# Unison ignores recommendations/_admin (see mojave-recs.prf) — it's pushed
+# one-way below. Everything else under recommendations/ (reviewer submissions,
+# considered/, applied/, notes ledgers) merges bidirectionally as before.
+echo "--> recommendations/  <->  server (unison; _admin/ excluded)"
 if [[ "$MODE" == "preview" ]]; then
   echo "    (interactive Unison: review the listed changes, then accept or quit)"
 fi
 unison "$UNISON_PROFILE" $UNISON_FLAGS
+
+# === 3) one-way push: recommendations/_admin/ workstation -> server ===
+# Assignments / roster / target dates / manual credits are authored on the
+# workstation and must never be overwritten by the server's copy. backups/ is
+# a local-only undo trail, so it's excluded. --delete keeps the server's
+# _admin in sync with the workstation (safe: the workstation is the sole
+# author of _admin).
+echo "--> recommendations/_admin/  ->  server (one-way, excl backups/)"
+if [[ -d ./recommendations/_admin ]]; then
+  mirror --exclude 'backups/' \
+         ./recommendations/_admin/ "$REMOTE:$REMOTE_BASE/recommendations/_admin/"
+else
+  echo "    (no recommendations/_admin/ yet — skipping)"
+fi
 
 echo "=== done ($MODE) ==="
