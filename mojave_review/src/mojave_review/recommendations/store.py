@@ -373,6 +373,145 @@ def list_other_reviewer_slugs(
     )
 
 
+def _considered_has_slug(date_dir: Path, slug: str) -> bool:
+    """True if a considered-archive date dir holds a submission from
+    ``slug`` — matches ``<slug>.json`` and the ``<slug>_N.json``
+    collision-renamed variants (see ``archive_considered_submissions``)."""
+    for f in date_dir.glob("*.json"):
+        st = f.stem
+        if st == slug or st.startswith(slug + "_"):
+            return True
+    return False
+
+
+_COLLISION_RE = re.compile(r"_\d+$")
+
+
+def _applied_review_slugs(src_dir: Path) -> set[str]:
+    """Reviewer slugs with a recommendation archived under
+    ``applied/<date>__<slug>.json`` — the admin's **Stage-2 baseline**
+    applies (``mojave-apply --recommendation <own JSON>``). These are
+    real reviews of the source, just archived to ``applied/`` rather than
+    ``considered/``. Aggregated Stage-3 applies
+    (``<date>__aggregated[_N].json``) carry no single reviewer and are
+    excluded."""
+    applied = src_dir / "applied"
+    out: set[str] = set()
+    if not applied.is_dir():
+        return out
+    for f in applied.glob("*.json"):
+        stem = f.stem
+        if "__" not in stem:
+            continue
+        slug = stem.split("__", 1)[1]
+        if slug == "aggregated" or slug.startswith("aggregated_"):
+            continue
+        out.add(slug)
+    return out
+
+
+def _reviewer_submitted_source(src_dir: Path, slug: str) -> bool:
+    """Has ``slug`` submitted a review of this one source *at any time*?
+    Open ``submitted/`` OR Stage-3-archived ``considered/`` OR
+    Stage-2-archived ``applied/<date>__<slug>.json``."""
+    if (src_dir / "submitted" / f"{slug}.json").is_file():
+        return True
+    considered = src_dir / "considered"
+    if considered.is_dir() and any(
+        _considered_has_slug(d, slug)
+        for d in considered.iterdir() if d.is_dir()
+    ):
+        return True
+    return slug in _applied_review_slugs(src_dir)
+
+
+def _source_dirs(recommendations_dir: Path):
+    """Yield the per-source subdirs of ``recommendations_dir``, skipping
+    the ``_admin`` (and any other ``_``-prefixed) bookkeeping dir."""
+    rd = Path(recommendations_dir)
+    if not rd.is_dir():
+        return
+    for src_dir in rd.iterdir():
+        if src_dir.is_dir() and not src_dir.name.startswith("_"):
+            yield src_dir
+
+
+def reviewer_submitted_sources(
+    recommendations_dir: Path, reviewer: str,
+) -> set[str]:
+    """Distinct sources this reviewer has submitted a review for *at any
+    time* — currently-open ``submitted/``, Stage-3-archived
+    ``considered/<date>/``, OR Stage-2-archived
+    ``applied/<date>__<slug>.json``. Matched by slug. Used for the
+    dashboard's lifetime "reviews submitted" count (independent of
+    whether the source was ever assigned)."""
+    slug = reviewer_slug(reviewer)
+    if not slug:
+        return set()
+    return {
+        src_dir.name for src_dir in _source_dirs(recommendations_dir)
+        if _reviewer_submitted_source(src_dir, slug)
+    }
+
+
+def reviewer_in_progress_sources(
+    recommendations_dir: Path, reviewer: str,
+) -> set[str]:
+    """Distinct sources where this reviewer has a non-empty in-progress
+    draft (``current/<slug>.json``) and has NOT submitted it *in any
+    form* — open, considered, or applied baseline. (A leftover draft
+    beside an already-archived submission is completed work, not "in
+    progress".) Mirrors the ``in_progress`` rule of
+    ``assignments.assignment_status`` swept across every source,
+    regardless of assignment."""
+    slug = reviewer_slug(reviewer)
+    if not slug:
+        return set()
+    out: set[str] = set()
+    for src_dir in _source_dirs(recommendations_dir):
+        src = src_dir.name
+        if _reviewer_submitted_source(src_dir, slug):
+            continue
+        draft = load_recommendation(
+            recommendations_dir, src, "current", reviewer)
+        if not draft.is_empty():
+            out.add(src)
+    return out
+
+
+def all_review_submitters(
+    recommendations_dir: Path, sources: list[str],
+) -> dict[str, set[str]]:
+    """``{source: {reviewer_slug, ...}}`` for **every review ever
+    submitted** of each source: open ``submitted/`` ∪ Stage-3-archived
+    ``considered/`` ∪ Stage-2-archived ``applied/<date>__<slug>.json``.
+
+    Drives the dashboard Source-progress "Reviews" column (a complete
+    roster of who has reviewed the object, including archived Stage-2 and
+    Stage-3 work). Collision-renamed considered files (``<slug>_N.json``)
+    are folded back to the base slug so a re-archived reviewer is listed
+    once."""
+    rd = Path(recommendations_dir)
+    out: dict[str, set[str]] = {}
+    for src in sources:
+        src_dir = rd / src
+        slugs: set[str] = set()
+        sub = src_dir / "submitted"
+        if sub.is_dir():
+            slugs.update(f.stem for f in sub.glob("*.json") if f.stem)
+        considered = src_dir / "considered"
+        if considered.is_dir():
+            for d in considered.iterdir():
+                if not d.is_dir():
+                    continue
+                for f in d.glob("*.json"):
+                    if f.stem:
+                        slugs.add(_COLLISION_RE.sub("", f.stem))
+        slugs.update(_applied_review_slugs(src_dir))
+        out[src] = slugs
+    return out
+
+
 def load_recommendation_by_slug(
     recommendations_dir: Path, source: str, model: str, slug: str,
 ) -> "Recommendation | None":

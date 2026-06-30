@@ -24,7 +24,7 @@ from ..data.assignments import (
 )
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
-from .dashboard import known_reviewers, _source_progress_rows
+from .dashboard import known_reviewers, slug_name_map, _source_progress_rows
 
 
 def _name_for_slug(
@@ -82,6 +82,8 @@ def register_dashboard_callbacks(
             recommendations_dir=recommendations_dir,
             store=store,
             filter_value=value or "in_progress",
+            name_for_slug=slug_name_map(
+                tokens_path, recommendations_dir, reviewer),
         )
 
     # -------------------------------------------------------------------
@@ -129,8 +131,14 @@ def register_dashboard_callbacks(
         ]
         scored = score_all(open_sources)
 
-        known = known_reviewers(
-            tokens_path, recommendations_dir, reviewer)
+        # The admin drives Stage 1/2 baseline work, not Stage-3 reviews,
+        # so exclude them from the auto-balance pool (item 4).
+        me = current_reviewer(reviewer)
+        known = [
+            r for r in known_reviewers(
+                tokens_path, recommendations_dir, reviewer)
+            if r != me
+        ]
         reviewers = active_reviewers(store, known)
 
         current_map = {

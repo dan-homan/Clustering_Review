@@ -1,9 +1,14 @@
 """Assignment & progress dashboard.
 
 A separate page at ``/dashboard``, linked from the review page header.
-Reviewers see three read-only tables (My queue, The team, All
-submitted reviews); admins additionally get an admin-controls block at
-the top with two buttons:
+Reviewers see two read-only tables: **My queue** (their assigned
+sources, with a lifetime submitted / in-progress / current-assignment
+summary) and **Source progress** (every source under the active
+filter, who has reviewed it, and what's still outstanding). The admin's
+My queue is instead every Stage 1/2 source — the baseline work only the
+admin drives — and the admin is excluded from the Stage-3 auto-balance
+pool. Admins additionally get an admin-controls block at the top with
+buttons:
 
 * **🔀 Auto-balance assignments** — runs the LPT load-balancer
   (``data/assignments.auto_balance``) using the current difficulty
@@ -37,12 +42,12 @@ from ..auth.tokens import load_store as load_token_store
 from ..data.difficulty import score_all
 from ..data.loader import list_sources
 from ..recommendations.store import (
-    count_submissions, is_submitted, list_other_reviewer_slugs,
-    reviewer_slug, source_phase,
+    all_review_submitters, count_submissions, reviewer_slug,
+    reviewer_in_progress_sources, reviewer_submitted_sources, source_phase,
 )
 from ..data.assignments import (
-    AssignmentStore, all_assigned_sources, assignment_status,
-    get_source_target_date, is_paused, is_stale, load_store, needs_for,
+    AssignmentStore, assignment_status, get_source_target_date,
+    load_store, needs_for,
 )
 
 
@@ -110,6 +115,20 @@ def known_reviewers(
     return sorted(names)
 
 
+def slug_name_map(
+    tokens_path: Path | None, recommendations_dir: Path,
+    fallback_reviewer: str,
+) -> dict[str, str]:
+    """``slug → full reviewer name`` for the Source-progress "Reviews"
+    column. Built from the same roster as :func:`known_reviewers`, so a
+    slug that exists only on disk (no tokens.yaml entry) maps to itself."""
+    return {
+        reviewer_slug(n): n
+        for n in known_reviewers(
+            tokens_path, recommendations_dir, fallback_reviewer)
+    }
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -136,50 +155,84 @@ def _status_chip(text: str, color: str) -> dict:
 
 
 def _my_queue_table(
-    store: AssignmentStore, recommendations_dir: Path, reviewer: str,
+    *,
+    queue_sources: list[str],
+    store: AssignmentStore,
+    recommendations_dir: Path,
+    reviewer: str,
+    rating_by_source: dict[str, str],
+    n_submitted_total: int,
+    n_in_progress_total: int,
+    admin_queue: bool,
 ) -> html.Div:
-    records = store.assignments.get(reviewer, [])
-    if not records:
-        msg = ("You have no assignments yet."
-               if reviewer else "No reviewer identity in this session.")
+    """My-queue card.
+
+    The summary line carries three lifetime/queue statistics (item 2):
+
+    * **submitted** — distinct sources this reviewer has ever submitted a
+      review for (open + Stage-3-archived ``considered/``), assigned or
+      not.
+    * **in progress** — distinct sources with a non-empty draft, not yet
+      submitted, assigned or not.
+    * **current assignments** — size of the queue below.
+
+    The queue itself (``queue_sources``) is the reviewer's assigned
+    sources; for an **admin** it is instead every Stage 1/2 source — the
+    baseline work only the admin drives (item 4). Columns: Source /
+    Rating / Status / Target Date.
+    """
+    n_current = len(queue_sources)
+    summary = (
+        f"{n_submitted_total} submitted · "
+        f"{n_in_progress_total} in progress · "
+        f"{n_current} current assignment"
+        f"{'' if n_current == 1 else 's'}"
+    )
+    title = f"My queue — {reviewer}" if reviewer else "My queue"
+    header = [
+        html.H3(title, style={"margin": "0 0 0.25em"}),
+        html.Div(summary,
+                 style={"color": "#666", "fontSize": "0.85em",
+                        "marginBottom": "0.5em"}),
+    ]
+    if not queue_sources:
+        if admin_queue:
+            msg = "No Stage 1/2 sources remain — all baseline work is done."
+        elif reviewer:
+            msg = "You have no assignments yet."
+        else:
+            msg = "No reviewer identity in this session."
         return html.Div(
-            [html.H3("My queue", style={"margin": "0 0 0.5em"}),
-             html.Div(msg, style={"color": "#777"})],
+            header + [html.Div(msg, style={"color": "#777"})],
             style=_CARD_STYLE,
         )
     rows = []
-    for rec in sorted(records, key=lambda r: (
-            get_source_target_date(store, r.source) or "9999-12-31",
-            r.source)):
-        status = assignment_status(
-            recommendations_dir, rec.source, reviewer)
-        tgt = get_source_target_date(store, rec.source) or "—"
+    for src in sorted(queue_sources, key=lambda s: (
+            get_source_target_date(store, s) or "9999-12-31", s)):
+        if admin_queue:
+            # Status for the admin's baseline queue is how far the source
+            # has progressed, not a reviewer submission state.
+            status = ("Stage 1"
+                      if source_phase(recommendations_dir, src) == "stage1"
+                      else "Stage 2")
+        else:
+            status = assignment_status(recommendations_dir, src, reviewer)
         rows.append({
-            "source": rec.source,
-            "target_date": tgt,
+            "source": src,
+            "rating": rating_by_source.get(src, "—"),
             "status": status,
-            "assigned_at": (rec.assigned_at or "")[:10],
+            "target_date": get_source_target_date(store, src) or "—",
         })
-    n_done = sum(1 for r in rows if r["status"] == "submitted")
-    n_progress = sum(1 for r in rows if r["status"] == "in_progress")
-    summary = (f"{len(rows)} assigned · {n_done} submitted · "
-               f"{n_progress} in progress · "
-               f"{len(rows) - n_done - n_progress} pending")
     return html.Div(
-        [
-            html.H3(f"My queue — {reviewer}",
-                    style={"margin": "0 0 0.25em"}),
-            html.Div(summary,
-                     style={"color": "#666", "fontSize": "0.85em",
-                            "marginBottom": "0.5em"}),
+        header + [
             dash_table.DataTable(
                 id="dashboard-my-queue",
                 data=rows,
                 columns=[
                     {"name": "Source", "id": "source"},
-                    {"name": "Target date", "id": "target_date"},
+                    {"name": "Rating", "id": "rating"},
                     {"name": "Status", "id": "status"},
-                    {"name": "Assigned", "id": "assigned_at"},
+                    {"name": "Target Date", "id": "target_date"},
                 ],
                 style_table=_TABLE_STYLE,
                 style_cell=_CELL_STYLE,
@@ -187,73 +240,11 @@ def _my_queue_table(
                     _status_chip("submitted", "#1a7a1a"),
                     _status_chip("in_progress", "#b9770e"),
                     _status_chip("pending", "#888"),
+                    _status_chip("Stage 1", "#c62828"),
+                    _status_chip("Stage 2", "#b9770e"),
                 ],
                 style_header={"fontWeight": 700, "background": "#f5f5f5"},
-                page_size=50,
-            ),
-        ],
-        style=_CARD_STYLE,
-    )
-
-
-def _team_table(
-    store: AssignmentStore, recommendations_dir: Path,
-    reviewers: list[str],
-) -> html.Div:
-    today = None  # is_stale default is today (real)
-    rows = []
-    for reviewer in reviewers:
-        assigned = store.assignments.get(reviewer, [])
-        n_assigned = len(assigned)
-        n_submitted = sum(
-            1 for r in assigned
-            if is_submitted(recommendations_dir, r.source, reviewer))
-        n_progress = sum(
-            1 for r in assigned
-            if not is_submitted(recommendations_dir, r.source, reviewer)
-            and assignment_status(
-                recommendations_dir, r.source, reviewer) == "in_progress")
-        n_stale = sum(
-            1 for r in assigned if is_stale(store, r.source, today=today))
-        paused = is_paused(store, reviewer)
-        rows.append({
-            # Visual marker for paused; the DataTable column is text only
-            # (this Dash version doesn't accept rich cell content in
-            # standard columns) so the badge goes inline.
-            "reviewer": f"{reviewer}  ⏸ paused" if paused else reviewer,
-            "assigned": n_assigned,
-            "submitted": n_submitted,
-            "in_progress": n_progress,
-            "stale": n_stale,
-            "_paused": paused,           # internal — drives row styling
-        })
-    # Stable order: active first (alphabetical), paused after.
-    rows.sort(key=lambda r: (r["_paused"], r["reviewer"]))
-    return html.Div(
-        [
-            html.H3("The team", style={"margin": "0 0 0.5em"}),
-            dash_table.DataTable(
-                id="dashboard-team",
-                data=rows,
-                columns=[
-                    {"name": "Reviewer", "id": "reviewer"},
-                    {"name": "Assigned", "id": "assigned"},
-                    {"name": "Submitted", "id": "submitted"},
-                    {"name": "In progress", "id": "in_progress"},
-                    {"name": "Stale", "id": "stale"},
-                ],
-                style_table=_TABLE_STYLE,
-                style_cell=_CELL_STYLE,
-                style_data_conditional=[
-                    {"if": {"filter_query": "{stale} > 0",
-                            "column_id": "stale"},
-                     "color": "#c62828", "fontWeight": 700},
-                    {"if": {"filter_query": "{_paused} = true"},
-                     "color": "#888", "fontStyle": "italic",
-                     "background": "#fafafa"},
-                ],
-                style_header={"fontWeight": 700, "background": "#f5f5f5"},
-                page_size=50,
+                page_size=200,
             ),
         ],
         style=_CARD_STYLE,
@@ -263,6 +254,7 @@ def _team_table(
 def _source_progress_rows(
     *, results_dir: Path, recommendations_dir: Path,
     store: AssignmentStore, filter_value: str,
+    name_for_slug: dict[str, str] | None = None,
 ) -> list[dict]:
     """Build the rows for the source-progress table under one filter.
 
@@ -270,7 +262,18 @@ def _source_progress_rows(
       * ``in_progress`` → phase == "open"
       * ``final``       → phase == "final"
       * ``preopen``     → phase in {"stage1", "stage2"}
+
+    Columns (item 5): Source / Rating / Still needed / Reviews /
+    Pending Reviews / Target.
+
+    * **Reviews** — names of *everyone who has ever submitted* a review of
+      this source (open ``submitted/`` + Stage-3-archived
+      ``considered/``), slug→name via ``name_for_slug`` (falls back to the
+      slug).
+    * **Pending Reviews** — assigned reviewers who have *not* submitted
+      (open or archived) — i.e. assignments still outstanding.
     """
+    name_for_slug = name_for_slug or {}
     phases = _phase_for_filter(filter_value)
     all_srcs = list_sources(results_dir)
 
@@ -286,33 +289,35 @@ def _source_progress_rows(
         for r in recs:
             assigned_by_source.setdefault(r.source, []).append(reviewer)
 
+    # Everyone who has ever submitted a review (open + Stage-3 considered
+    # + Stage-2 applied baseline), one disk walk.
+    ever_submitted = all_review_submitters(
+        recommendations_dir, [s.source for s in all_srcs])
+
     rows = []
     for src in all_srcs:
         if source_phase(recommendations_dir, src.source) not in phases:
             continue
-        n_sub = count_submissions(recommendations_dir, src.source)
-        slugs = list_other_reviewer_slugs(
-            recommendations_dir, src.source, exclude_slug="")
         diff = by_folder.get(src.folder.name)
         rating = (
             ("★" * diff.stars + ("  ⚠" if diff.outlier else ""))
             if diff is not None else "—"
         )
-        # Target date is only meaningful for in-progress sources;
-        # finalized + stage1/2 get a "—" per the user's spec.
-        if filter_value == "in_progress":
-            tgt = get_source_target_date(store, src.source) or ""
-        else:
-            tgt = "—"
+        ever_slugs = ever_submitted.get(src.source, set())
+        reviews = sorted(
+            name_for_slug.get(slug, slug) for slug in ever_slugs)
+        # Pending = assigned reviewers who have not (ever) submitted.
+        pending = sorted(
+            r for r in assigned_by_source.get(src.source, [])
+            if reviewer_slug(r) not in ever_slugs
+        )
         rows.append({
             "source": src.source,
             "rating": rating,
-            "n_submitted": n_sub,
             "needs_more": needs_for(recommendations_dir, src.source),
-            "reviewers": ", ".join(slugs) if slugs else "",
-            "target_date": tgt,
-            "assigned_to": ", ".join(
-                sorted(assigned_by_source.get(src.source, []))),
+            "reviews": ", ".join(reviews),
+            "pending": ", ".join(pending),
+            "target_date": get_source_target_date(store, src.source) or "—",
         })
     rows.sort(key=lambda r: r["source"])
     return rows
@@ -321,6 +326,7 @@ def _source_progress_rows(
 def _source_progress_table(
     *, results_dir: Path, recommendations_dir: Path,
     store: AssignmentStore, initial_filter: str = DEFAULT_FILTER,
+    name_for_slug: dict[str, str] | None = None,
 ) -> html.Div:
     """Source-progress table. The dropdown above it filters by review
     phase; default = In Progress (Stage 2 done). All sources are shown
@@ -330,6 +336,7 @@ def _source_progress_table(
         results_dir=results_dir,
         recommendations_dir=recommendations_dir,
         store=store, filter_value=initial_filter,
+        name_for_slug=name_for_slug,
     )
     return html.Div(
         [
@@ -361,11 +368,10 @@ def _source_progress_table(
                 columns=[
                     {"name": "Source", "id": "source"},
                     {"name": "Rating", "id": "rating"},
-                    {"name": "Submitted", "id": "n_submitted"},
                     {"name": "Still needed", "id": "needs_more"},
-                    {"name": "Reviewers", "id": "reviewers"},
+                    {"name": "Reviews", "id": "reviews"},
+                    {"name": "Pending Reviews", "id": "pending"},
                     {"name": "Target", "id": "target_date"},
-                    {"name": "Assigned to", "id": "assigned_to"},
                 ],
                 style_table=_TABLE_STYLE,
                 style_cell={**_CELL_STYLE, "maxWidth": "320px",
@@ -383,16 +389,24 @@ def _source_progress_table(
     )
 
 
-def _target_dates_modal_body(
-    open_sources: list[str],
-    current_targets: dict[str, str],
-) -> list:
-    """The per-source list + bulk-by-range form, both inside the modal.
-    Pulled out of ``_admin_controls_panel`` so the latter stays
-    readable."""
-    src_opts = [{"label": s, "value": s} for s in open_sources]
+def _td_section(
+    title: str, sources: list[str], current_targets: dict[str, str],
+) -> html.Div:
+    """One labeled per-source date-input table inside the modal. Every
+    input is a ``dashboard-td-input`` pattern-matching id keyed by
+    source, so the shared save / bulk-range callbacks pick up both
+    sections automatically."""
+    if not sources:
+        return html.Div(
+            [html.Div(title, style={"fontWeight": 600,
+                                    "fontSize": "0.85em",
+                                    "margin": "0.4em 0 0.2em"}),
+             html.Div("(none)", style={"color": "#999",
+                                       "fontSize": "0.85em",
+                                       "padding": "0 0 0.4em"})],
+        )
     rows = []
-    for s in open_sources:
+    for s in sources:
         rows.append(html.Tr([
             html.Td(s, style={"padding": "4px 8px"}),
             html.Td(
@@ -405,6 +419,42 @@ def _target_dates_modal_body(
                 style={"padding": "4px 8px"},
             ),
         ]))
+    return html.Div([
+        html.Div(title, style={"fontWeight": 600, "fontSize": "0.85em",
+                               "margin": "0.4em 0 0.2em"}),
+        html.Div(
+            html.Table(
+                [html.Thead(html.Tr([
+                    html.Th("Source",
+                            style={"padding": "4px 8px",
+                                   "textAlign": "left"}),
+                    html.Th("Target date",
+                            style={"padding": "4px 8px",
+                                   "textAlign": "left"}),
+                ]))] + [html.Tbody(rows)],
+                style={"width": "100%", "borderCollapse": "collapse",
+                       "fontFamily": "system-ui, sans-serif",
+                       "fontSize": "0.88em"},
+            ),
+            style={"maxHeight": "26vh", "overflowY": "auto",
+                   "border": "1px solid #e0e0e0", "borderRadius": "4px"},
+        ),
+    ])
+
+
+def _target_dates_modal_body(
+    stage12_sources: list[str],
+    open_sources: list[str],
+    current_targets: dict[str, str],
+) -> list:
+    """The per-source list + bulk-by-range form, both inside the modal.
+    Pulled out of ``_admin_controls_panel`` so the latter stays
+    readable. Two sections (item 4): the admin's own Stage 1/2 baseline
+    sources, and the Stage-2-done sources open to reviewers. Both write
+    to the same ``source_target_dates`` map."""
+    # From/To range dropdowns span every source shown in the modal.
+    all_modal = sorted(set(stage12_sources) | set(open_sources))
+    src_opts = [{"label": s, "value": s} for s in all_modal]
     bulk_form = html.Div(
         [
             html.Span("Bulk: set date for range",
@@ -453,28 +503,18 @@ def _target_dates_modal_body(
                "display": "flex", "alignItems": "center",
                "flexWrap": "wrap", "gap": "0.25em"},
     )
-    per_source = html.Div(
-        html.Table(
-            [html.Thead(html.Tr([
-                html.Th("Source",
-                        style={"padding": "4px 8px",
-                               "textAlign": "left"}),
-                html.Th("Target date",
-                        style={"padding": "4px 8px",
-                               "textAlign": "left"}),
-            ]))] + [html.Tbody(rows)],
-            style={"width": "100%", "borderCollapse": "collapse",
-                   "fontFamily": "system-ui, sans-serif",
-                   "fontSize": "0.88em"},
-        ),
-        style={"maxHeight": "40vh", "overflowY": "auto",
-               "border": "1px solid #e0e0e0", "borderRadius": "4px"},
-    )
-    return [bulk_form, per_source]
+    return [
+        bulk_form,
+        _td_section("Stage 1/2 — your baseline sources",
+                    stage12_sources, current_targets),
+        _td_section("Stage 2 done — reviewer targets",
+                    open_sources, current_targets),
+    ]
 
 
 def _admin_controls_panel(
     reviewers: list[str], paused_set: set[str],
+    stage12_sources: list[str],
     open_sources: list[str],
     current_targets: dict[str, str],
 ) -> html.Div:
@@ -808,15 +848,15 @@ def _admin_controls_panel(
                                "marginBottom": "0.4em"},
                     ),
                     html.Div(
-                        "Only Stage-2-done sources are shown — "
-                        "finalized and Stage 1/2 sources don't carry "
-                        "target dates. Bulk-set a range, then tweak "
-                        "individual rows. Save commits everything.",
+                        "Set target dates for your Stage 1/2 baseline "
+                        "sources and for the Stage-2-done sources open to "
+                        "reviewers. Bulk-set a lexicographic range, then "
+                        "tweak individual rows. Save commits everything.",
                         style={"color": "#666", "fontSize": "0.85em",
                                "marginBottom": "0.5em"},
                     ),
                     *_target_dates_modal_body(
-                        open_sources, current_targets),
+                        stage12_sources, open_sources, current_targets),
                     html.Div(
                         [
                             html.Button(
@@ -845,7 +885,11 @@ def _admin_controls_panel(
                     ),
                 ], style={"background": "white", "padding": "1.5em",
                           "borderRadius": "6px", "maxWidth": "640px",
-                          "margin": "4% auto",
+                          "margin": "3% auto",
+                          # Cap height + scroll so the Save/Cancel row at the
+                          # bottom is always reachable even with both the
+                          # Stage 1/2 and reviewer sections expanded.
+                          "maxHeight": "90vh", "overflowY": "auto",
                           "boxShadow": "0 4px 20px rgba(0,0,0,0.25)"})],
             ),
         ],
@@ -864,11 +908,40 @@ def build_dashboard_page(
 ) -> html.Div:
     store = load_store(recommendations_dir)
     reviewers = known_reviewers(tokens_path, recommendations_dir, reviewer)
+    name_for_slug = slug_name_map(
+        tokens_path, recommendations_dir, reviewer)
+
+    all_srcs = list_sources(results_dir)
 
     # Overall progress banner: count total submissions across sources.
     total_submissions = 0
-    for src in list_sources(results_dir):
+    for src in all_srcs:
         total_submissions += count_submissions(recommendations_dir, src.source)
+
+    # Difficulty ratings for the My-queue Rating column.
+    rating_by_source = {
+        d.source: ("★" * d.stars + ("  ⚠" if d.outlier else ""))
+        for d in score_all(all_srcs)
+    }
+
+    # My-queue contents (item 4): the admin's queue is every Stage 1/2
+    # source (the baseline work only the admin drives); every other
+    # reviewer's queue is their explicit assignments.
+    stage12_names = sorted(
+        s.source for s in all_srcs
+        if source_phase(recommendations_dir, s.source) in ("stage1", "stage2")
+    )
+    if admin:
+        queue_sources = stage12_names
+    else:
+        queue_sources = [
+            rec.source for rec in store.assignments.get(reviewer, [])]
+
+    # Lifetime stats (item 2) — across all sources, assigned or not.
+    n_submitted_total = len(
+        reviewer_submitted_sources(recommendations_dir, reviewer))
+    n_in_progress_total = len(
+        reviewer_in_progress_sources(recommendations_dir, reviewer))
 
     header = html.Div(
         [
@@ -903,12 +976,21 @@ def build_dashboard_page(
 
     body = html.Div(
         [
-            _my_queue_table(store, recommendations_dir, reviewer),
-            _team_table(store, recommendations_dir, reviewers),
+            _my_queue_table(
+                queue_sources=queue_sources,
+                store=store,
+                recommendations_dir=recommendations_dir,
+                reviewer=reviewer,
+                rating_by_source=rating_by_source,
+                n_submitted_total=n_submitted_total,
+                n_in_progress_total=n_in_progress_total,
+                admin_queue=admin,
+            ),
             _source_progress_table(
                 results_dir=results_dir,
                 recommendations_dir=recommendations_dir,
                 store=store,
+                name_for_slug=name_for_slug,
             ),
         ],
         style={"padding": "1em", "maxWidth": "1100px", "margin": "0 auto"},
@@ -916,17 +998,20 @@ def build_dashboard_page(
 
     page_children = [header, banner]
     if admin:
-        # Open-source list + current targets feed the Target-dates
-        # modal — both small enough to compute at render time.
+        # Stage 1/2 (admin baseline) + open (reviewer) source lists feed
+        # the Target-dates modal — both small enough to compute at render
+        # time. Current targets cover the union (one source_target_dates
+        # map backs both sections).
         open_src_names = sorted({
-            s.source for s in list_sources(results_dir)
+            s.source for s in all_srcs
             if source_phase(recommendations_dir, s.source) == "open"
         })
+        td_sources = sorted(set(stage12_names) | set(open_src_names))
         page_children.append(_admin_controls_panel(
             reviewers, set(store.paused_reviewers),
+            stage12_names,
             open_src_names,
-            {s: get_source_target_date(store, s) or ""
-             for s in open_src_names},
+            {s: get_source_target_date(store, s) or "" for s in td_sources},
         ))
     page_children.append(body)
 
