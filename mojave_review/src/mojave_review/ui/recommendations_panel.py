@@ -3,8 +3,9 @@
 Four tabs:
 
 * **Source** — free-text comment about the source as a whole.
-* **Clusters** — editable table, one row per cluster in the current model.
-* **Epochs** — editable table, one row per epoch.
+* **Clusters** — one row per eligible cluster: an inline Robust / Non-robust
+  radio (preloaded to the model's current status) + a comment textarea.
+* **Epochs** — one ``dcc.Textarea`` per epoch.
 * **Edits** — form to add a structured edit (clusterID change, use_in_fit
   toggle) plus a list of edits the reviewer has accumulated.
 
@@ -14,7 +15,7 @@ button. Last-saved timestamp is shown in the header.
 
 from __future__ import annotations
 
-from dash import dash_table, dcc, html
+from dash import dcc, html
 
 
 def build_epoch_rows(epoch_rows: list[dict]) -> list:
@@ -56,6 +57,84 @@ def build_epoch_rows(epoch_rows: list[dict]) -> list:
             ],
             style={"display": "flex", "gap": "0.4em", "alignItems": "center",
                    "padding": "2px 0", "fontSize": "0.9em"},
+        ))
+    return rows
+
+
+def _cluster_row_style(changed: bool) -> dict:
+    """Row container style for a Robustness row. Highlighted (soft red) when the
+    reviewer's pick differs from the model's current status. Kept in sync with
+    the clientside live-highlight callback in ``recommendations_callbacks.py`` —
+    if you change the colours, change them in both places."""
+    return {"display": "flex", "gap": "0.4em", "alignItems": "center",
+            "padding": "2px 4px", "fontSize": "0.9em", "borderRadius": "3px",
+            "backgroundColor": "#fff5f5" if changed else "transparent"}
+
+
+def build_cluster_rows(cluster_rows: list[dict]) -> list:
+    """Build the Robustness rows: one inline Robust / Non-robust radio per
+    eligible cluster, preloaded to the model's current status, plus a comment
+    textarea.
+
+    Replaces the old DataTable ``presentation="dropdown"`` cell — that dropdown
+    opened an option popup that rendered off-screen inside the scrollable panel
+    and forced the reviewer to scroll to see the choices. A radio shows both
+    options inline at all times.
+
+    Each row's component ids carry the clusterID (and the radio its current
+    status, ``cur``) so a bridge callback can reconstruct the
+    ``[{clusterID, current_robust, recommended_robust, comment}]`` store every
+    consumer (autosave / submit / build_rec / derived edits) still reads. The
+    radio fires immediately; the comment commits on blur (no per-keystroke
+    round-trip), matching the Epoch Notes tab. The core (cluster 0) is always
+    robust, so its radio is disabled; its comment stays editable."""
+    header = html.Div(
+        [
+            html.Div("Cluster", style={"width": "14%", "fontWeight": 600}),
+            html.Div("Robustness", style={"width": "34%", "fontWeight": 600}),
+            html.Div("Comment", style={"flex": "1", "fontWeight": 600,
+                                       "marginLeft": "0.6em"}),
+        ],
+        style={"display": "flex", "gap": "0.4em", "padding": "2px 4px",
+               "borderBottom": "1px solid #ddd", "fontSize": "0.9em"},
+    )
+    rows = [header]
+    for r in cluster_rows:
+        cid = int(r["clusterID"])
+        is_core = cid == 0
+        cur = "robust" if (r.get("current_robust") == "Robust") else "non-robust"
+        # Preload the radio to the reviewer's saved opinion, else to the
+        # model's current status (so "unchanged" reads as "no change").
+        value = "robust" if is_core else (r.get("recommended_robust") or cur)
+        rows.append(html.Div(
+            [
+                html.Div(f"{cid}" + ("  (core)" if is_core else ""),
+                         style={"width": "14%"}),
+                dcc.RadioItems(
+                    id={"type": "robust-radio", "cid": cid, "cur": cur},
+                    options=[
+                        {"label": " Robust", "value": "robust",
+                         "disabled": is_core},
+                        {"label": " Non-robust", "value": "non-robust",
+                         "disabled": is_core},
+                    ],
+                    value=value,
+                    inline=True,
+                    inputStyle={"marginRight": "0.25em", "marginLeft": "0.5em"},
+                    style={"width": "34%", "fontSize": "0.9em"},
+                ),
+                dcc.Textarea(
+                    id={"type": "cluster-comment", "cid": cid},
+                    value=r.get("comment") or "",
+                    style={"flex": "1", "marginLeft": "0.6em",
+                           "minHeight": "2.2em", "resize": "vertical",
+                           "fontFamily": "system-ui, sans-serif",
+                           "fontSize": "0.9em", "direction": "ltr",
+                           "textAlign": "left"},
+                ),
+            ],
+            id={"type": "robust-row", "cid": cid},
+            style=_cluster_row_style(value != cur and not is_core),
         ))
     return rows
 
@@ -117,124 +196,27 @@ def _clusters_tab() -> dcc.Tab:
                     ),
                     html.Div(
                         "Only eligible clusters are listed — those with at least 5 "
-                        "epochs of use_in_fit=True. Pick a 'Recommended Changes' "
-                        "value that differs from 'Current Robust Status' and an "
-                        "edit is added to the list automatically.",
+                        "epochs of use_in_fit=True. Each cluster's robustness is "
+                        "preloaded to the model's current setting; click the other "
+                        "radio to recommend flipping it (the row highlights and an "
+                        "edit is added automatically). The core is always robust.",
                         style={"fontSize": "0.85em", "color": "#666",
                                "marginBottom": "0.5em"},
                     ),
-                    html.Div(
-                        "💡 Double-click a Comment cell to edit it.",
-                        style={"fontSize": "0.85em", "color": "#666",
-                               "fontStyle": "italic", "marginBottom": "0.5em"},
-                    ),
+                    # Store mirroring the old DataTable's `.data` shape
+                    # ([{clusterID, current_robust, recommended_robust, comment}])
+                    # so every consumer (autosave / submit / build_rec / derived
+                    # edits) is unchanged. It is fed by the `_sync_cluster_store`
+                    # bridge from the radios + comment textareas below.
+                    dcc.Store(id="cluster-feedback-table", data=[]),
                     html.Div(
                         id="cluster-table-wrapper",
                         children=[
-                    dash_table.DataTable(
-                        id="cluster-feedback-table",
-                        columns=[
-                            {"name": "Eligible Clusters", "id": "clusterID",
-                             "type": "numeric", "editable": False},
-                            {"name": "Current Robust Status", "id": "current_robust",
-                             "editable": False},
-                            {"name": "Recommended Changes", "id": "recommended_robust",
-                             "presentation": "dropdown", "editable": True},
-                            {"name": "Comment", "id": "comment", "editable": True},
-                        ],
-                        data=[],
-                        dropdown={
-                            "recommended_robust": {
-                                "options": [
-                                    {"label": "—", "value": ""},
-                                    {"label": "Robust", "value": "robust"},
-                                    {"label": "Non-robust", "value": "non-robust"},
-                                ],
-                            },
-                        },
-                        # Cluster 0 is the fitted core — its robust status is
-                        # immutable, so restrict its dropdown to just "—" and
-                        # grey the cell. The Comment cell stays editable.
-                        dropdown_conditional=[
-                            {
-                                "if": {"column_id": "recommended_robust",
-                                       "filter_query": "{clusterID} = 0"},
-                                "options": [{"label": "—", "value": ""}],
-                            },
-                        ],
-                        editable=True,
-                        style_table={"maxHeight": "320px", "overflowY": "auto"},
-                        style_cell={"textAlign": "left", "padding": "4px 8px",
-                                    "fontFamily": "system-ui, sans-serif",
-                                    "fontSize": "0.9em",
-                                    # Wrap long comments instead of letting
-                                    # them scroll horizontally inside a
-                                    # narrow input — the original behaviour
-                                    # parked the edit cursor at the right
-                                    # edge with no way to see the start of
-                                    # the text.
-                                    "whiteSpace": "normal", "height": "auto",
-                                    "lineHeight": "1.3em"},
-                        # Give the Comment column the lion's share of the
-                        # width; the other three are fixed-content. Without
-                        # this, Plotly's auto-layout makes Comment narrow,
-                        # which is the root cause of the cramped-edit feel.
-                        style_cell_conditional=[
-                            {"if": {"column_id": "clusterID"},
-                             "width": "12%", "textAlign": "right"},
-                            {"if": {"column_id": "current_robust"},
-                             "width": "18%"},
-                            {"if": {"column_id": "recommended_robust"},
-                             "width": "20%"},
-                            {"if": {"column_id": "comment"},
-                             "width": "50%", "minWidth": "260px"},
-                        ],
-                        # Force left-alignment on the in-place edit input.
-                        # The DataTable's editing widget is an
-                        # ``<input class="dash-cell-value">`` (the class
-                        # is on the input itself, not on a parent) and
-                        # Dash's default stylesheet leaves it inheriting
-                        # ``text-align: right``, which parks the cursor
-                        # at the right edge of long text and makes
-                        # editing painful. Targeting ``input.dash-cell-
-                        # value`` / ``textarea.dash-cell-value`` with
-                        # !important overrides that. Also pin direction
-                        # to ltr defensively.
-                        css=[
-                            {"selector": "input.dash-cell-value,"
-                                         " textarea.dash-cell-value",
-                             "rule": "text-align: left !important; "
-                                     "direction: ltr !important;"},
-                        ],
-                        style_header={"fontWeight": 600, "background": "#f0f0f0"},
-                        style_data_conditional=[
-                            # Recommendation differs from current → highlight.
-                            {"if": {"filter_query":
-                                    "{recommended_robust} = 'non-robust' && "
-                                    "{current_robust} = 'Robust'"},
-                             "backgroundColor": "#fff5f5"},
-                            {"if": {"filter_query":
-                                    "{recommended_robust} = 'robust' && "
-                                    "{current_robust} = 'Non-robust'"},
-                             "backgroundColor": "#fff5f5"},
-                            # Recommendation matches current → soft confirm.
-                            {"if": {"filter_query":
-                                    "{recommended_robust} = 'robust' && "
-                                    "{current_robust} = 'Robust'"},
-                             "backgroundColor": "#f5fff5"},
-                            {"if": {"filter_query":
-                                    "{recommended_robust} = 'non-robust' && "
-                                    "{current_robust} = 'Non-robust'"},
-                             "backgroundColor": "#f5fff5"},
-                            # Core row — grey out the Recommended Changes cell
-                            # so the lock is visually obvious.
-                            {"if": {"column_id": "recommended_robust",
-                                    "filter_query": "{clusterID} = 0"},
-                             "backgroundColor": "#eee",
-                             "color": "#999",
-                             "fontStyle": "italic"},
-                        ],
-                    ),
+                            html.Div(
+                                id="cluster-feedback-rows",
+                                children=build_cluster_rows([]),
+                                style={"maxHeight": "320px", "overflowY": "auto"},
+                            ),
                         ],
                     ),  # /cluster-table-wrapper
                 ],

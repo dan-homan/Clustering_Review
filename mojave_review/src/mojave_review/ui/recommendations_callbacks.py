@@ -33,7 +33,7 @@ from ..recommendations.store import (
     load_recommendation, load_recommendation_by_slug, recommendations_locked,
     reviewer_slug, save_recommendation, save_submitted, submitted_at,
 )
-from .recommendations_panel import build_epoch_rows
+from .recommendations_panel import build_cluster_rows, build_epoch_rows
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +89,12 @@ def _table_for_clusters(bundle) -> list[dict]:
         rows.append({
             "clusterID": cid,
             "current_robust": "Robust" if model_robust else "Non-robust",
-            "recommended_robust": "",
+            # Preload the radio to the current status — the UI has no "no
+            # opinion" state, so "unchanged" is how the reviewer expresses
+            # "no change". Only a pick that DIFFERS from current becomes an
+            # opinion / derived edit (see build_rec_from_ui_state /
+            # _derived_robust_edits).
+            "recommended_robust": "robust" if model_robust else "non-robust",
             "comment": "",
         })
     rows.sort(key=lambda r: r["clusterID"])
@@ -314,7 +319,11 @@ def _populate_tables(bundle, rec: Recommendation) -> tuple[list[dict], list[dict
     for row in cluster_rows:
         cf = rec.cluster_feedback.get(str(row["clusterID"]))
         if cf is not None:
-            row["recommended_robust"] = _recommended_to_str(cf.recommended_robust)
+            # Only an explicit opinion (≠ None) moves the radio off its
+            # preloaded current status; a comment-only feedback leaves the
+            # radio at current (= no change).
+            if cf.recommended_robust is not None:
+                row["recommended_robust"] = _recommended_to_str(cf.recommended_robust)
             row["comment"] = cf.comment
     epoch_rows = _table_for_epochs(bundle)
     for row in epoch_rows:
@@ -394,8 +403,14 @@ def build_rec_from_ui_state(
     rec.no_robustness_changes = bool(no_robustness_changes)
     for row in cluster_rows or []:
         cid = str(row.get("clusterID"))
-        rr = _recommended_from_str(row.get("recommended_robust"))
         comment = (row.get("comment") or "").strip()
+        # The radio is preloaded to the current status, so it always carries a
+        # value; an opinion is recorded only when it DIFFERS from current
+        # (otherwise rr=None = "no opinion", matching the old "—" default).
+        recommended = _recommended_from_str(row.get("recommended_robust"))
+        current = (row.get("current_robust") or "") == "Robust"
+        rr = recommended if (recommended is not None and recommended != current) \
+            else None
         if rr is not None or comment:
             rec.cluster_feedback[cid] = ClusterFeedback(
                 recommended_robust=rr, comment=comment,
@@ -419,6 +434,30 @@ def build_rec_from_ui_state(
     return rec
 
 
+def _cluster_rows_from_components(
+    radio_vals, radio_ids, comment_vals, comment_ids,
+) -> list[dict]:
+    """Reconstruct the ``cluster-feedback-table`` store shape
+    ([{clusterID, current_robust, recommended_robust, comment}]) from the live
+    Robustness-tab components. The radio id carries the cluster's current status
+    (``cur``) so the store keeps the baseline the derived-edit / build_rec logic
+    compares against. Shared by the store bridge and the submit handler (which
+    reads live values to dodge the unblurred-comment race — see Epoch Notes)."""
+    comments = {int(i["cid"]): (v or "")
+                for i, v in zip(comment_ids or [], comment_vals or [])}
+    rows: list[dict] = []
+    for i, v in zip(radio_ids or [], radio_vals or []):
+        cid = int(i["cid"])
+        rows.append({
+            "clusterID": cid,
+            "current_robust": "Robust" if i.get("cur") == "robust" else "Non-robust",
+            "recommended_robust": v or "",
+            "comment": comments.get(cid, ""),
+        })
+    rows.sort(key=lambda r: r["clusterID"])
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -439,7 +478,7 @@ def register(
     #   - "rec:<slug>"       : that reviewer's JSON at <recs>/<src>/current/<slug>.json
     @app.callback(
         Output("source-comment", "value"),
-        Output("cluster-feedback-table", "data"),
+        Output("cluster-feedback-rows", "children"),
         Output("epoch-feedback-rows", "children"),
         Output("edits-store", "data"),
         Output("save-indicator", "children"),
@@ -449,7 +488,7 @@ def register(
     )
     def _load_for_source(source_folder: str | None, model_key: str | None):
         if not source_folder or not model_key:
-            return "", [], build_epoch_rows([]), [], "", []
+            return "", build_cluster_rows([]), build_epoch_rows([]), [], "", []
         # rec:<slug> — show slug's review (read-only is enforced elsewhere).
         if model_key.startswith("rec:"):
             slug = model_key[4:]
@@ -459,7 +498,7 @@ def register(
             )
             if rec is None:
                 # Stale dropdown entry — file was removed. Show a hint.
-                return ("", [], build_epoch_rows([]), [],
+                return ("", build_cluster_rows([]), build_epoch_rows([]), [],
                         f"Could not find recommendation for {slug}.", [])
             cluster_rows, epoch_rows = _populate_tables(bundle, rec)
             edits_data = [
@@ -472,8 +511,8 @@ def register(
             ]
             msg = f"Viewing {slug}'s review · saved {rec.updated_at}"
             checkbox = ["yes"] if rec.no_robustness_changes else []
-            return (rec.source_comment, cluster_rows, build_epoch_rows(epoch_rows),
-                    edits_data, msg, checkbox)
+            return (rec.source_comment, build_cluster_rows(cluster_rows),
+                    build_epoch_rows(epoch_rows), edits_data, msg, checkbox)
 
         # Any other non-current model (backup_NNN, alt_model_NNN) doesn't accept
         # recommendations — show an empty panel using current's cluster list so
@@ -485,7 +524,8 @@ def register(
                                        model=model_key,
                                        reviewer=current_reviewer(reviewer)),
             )
-            return "", cluster_rows, build_epoch_rows(epoch_rows), [], \
+            return "", build_cluster_rows(cluster_rows), \
+                   build_epoch_rows(epoch_rows), [], \
                    "Recommendations are only made against the current model.", []
 
         # Default: model=="current".
@@ -505,8 +545,8 @@ def register(
         ]
         msg = f"Loaded {rec.updated_at}" if rec.updated_at else "New review"
         checkbox = ["yes"] if rec.no_robustness_changes else []
-        return (rec.source_comment, cluster_rows, build_epoch_rows(epoch_rows),
-                edits_data, msg, checkbox)
+        return (rec.source_comment, build_cluster_rows(cluster_rows),
+                build_epoch_rows(epoch_rows), edits_data, msg, checkbox)
 
     # ---- 1b) Epoch comments: bridge the per-epoch textareas -> the
     #      ``epoch-feedback-table`` store that every consumer (autosave /
@@ -526,6 +566,55 @@ def register(
     def _sync_epoch_store(_blurs, values, ids):
         return [{"epoch": i["epoch"], "comment": (v or "")}
                 for i, v in zip(ids, values)]
+
+    # ---- 1c) Robustness rows -> the ``cluster-feedback-table`` store. Same
+    #      bridge pattern as the epoch comments: the rendered radios + comment
+    #      textareas are the source of truth, this callback mirrors them into
+    #      the store every consumer reads. The radio value is an Input (commit
+    #      immediately on click); the comment commits on blur (n_blur Input,
+    #      value via State) so typing stays purely client-side. Fires on
+    #      creation too, so load / resync / reset (which rebuild the rows)
+    #      repopulate the store. Sole writer of the store.
+    @app.callback(
+        Output("cluster-feedback-table", "data"),
+        Input({"type": "robust-radio", "cid": ALL, "cur": ALL}, "value"),
+        Input({"type": "cluster-comment", "cid": ALL}, "n_blur"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "id"),
+        State({"type": "cluster-comment", "cid": ALL}, "value"),
+        State({"type": "cluster-comment", "cid": ALL}, "id"),
+    )
+    def _sync_cluster_store(radio_vals, _blurs, radio_ids, comment_vals,
+                            comment_ids):
+        return _cluster_rows_from_components(
+            radio_vals, radio_ids, comment_vals, comment_ids)
+
+    # ---- 1d) Live row highlight: soft-red a Robustness row whenever its pick
+    #      differs from the cluster's current status (encoded in the radio id's
+    #      ``cur``). Clientside so it tracks every click without a server hop;
+    #      builds a cid->changed map so it's robust to pattern-match ordering.
+    #      Colours mirror ``recommendations_panel._cluster_row_style``.
+    app.clientside_callback(
+        """
+        function(radioVals, radioIds, rowIds) {
+            var changed = {};
+            (radioIds || []).forEach(function (id, i) {
+                changed[id.cid] = (radioVals[i] || "") !== id.cur && id.cid !== 0;
+            });
+            var base = {display: "flex", gap: "0.4em", alignItems: "center",
+                        padding: "2px 4px", fontSize: "0.9em",
+                        borderRadius: "3px"};
+            return (rowIds || []).map(function (id) {
+                var s = Object.assign({}, base);
+                s.backgroundColor = changed[id.cid] ? "#fff5f5" : "transparent";
+                return s;
+            });
+        }
+        """,
+        Output({"type": "robust-row", "cid": ALL}, "style"),
+        Input({"type": "robust-radio", "cid": ALL, "cur": ALL}, "value"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "id"),
+        State({"type": "robust-row", "cid": ALL}, "id"),
+    )
 
     # ---- 2) Render the edits list (manual store + derived from clusters) -
     @app.callback(
@@ -813,7 +902,7 @@ def register(
     # cluster_feedback into the baseline, the user's picks would
     # self-neutralize on every keystroke.)
     @app.callback(
-        Output("cluster-feedback-table", "data", allow_duplicate=True),
+        Output("cluster-feedback-rows", "children", allow_duplicate=True),
         Input("visualize-checkbox", "value"),
         Input("edits-store", "data"),
         State("cluster-feedback-table", "data"),
@@ -852,34 +941,40 @@ def register(
         from dataclasses import replace as _replace
         new_rows = _table_for_clusters(_replace(bundle, cluster_df=eff_df))
 
-        # Preserve whatever the user has already entered in the Recommended
-        # Changes / Comment columns — by clusterID, so the merge survives
-        # the eligibility-list reshuffle.
-        user_input: dict[int, tuple[str, str]] = {
-            int(r.get("clusterID", -1)):
-                (r.get("recommended_robust") or "",
-                 r.get("comment") or "")
-            for r in (current_rows or [])
-        }
+        # Preserve whatever the user has already entered — by clusterID, so the
+        # merge survives the eligibility-list reshuffle. Only carry forward a
+        # genuine *opinion* (a pick that differed from that row's current
+        # status); a pick equal to the old current is "no change" and must not
+        # override the rebuilt row's (possibly changed) current preload — else
+        # an auto-demoted cluster would falsely read as a recommended flip.
+        user_input: dict[int, tuple[str | None, str]] = {}
+        for r in (current_rows or []):
+            cid = int(r.get("clusterID", -1))
+            rec = r.get("recommended_robust") or ""
+            cur = r.get("current_robust") or ""
+            is_opinion = bool(rec) and ((rec == "robust") != (cur == "Robust"))
+            user_input[cid] = (rec if is_opinion else None, r.get("comment") or "")
         for row in new_rows:
             cid = int(row["clusterID"])
             if cid in user_input:
-                row["recommended_robust"], row["comment"] = user_input[cid]
-        return new_rows
+                rec, com = user_input[cid]
+                if rec is not None:
+                    row["recommended_robust"] = rec
+                row["comment"] = com
+        return build_cluster_rows(new_rows)
 
-    # ---- 4c) "No changes suggested" toggle: greys out the cluster table -
-    # `editable=False` blocks both regular and dropdown cells; the opacity
-    # gives a visual cue that the table is inactive.
+    # ---- 4c) "No changes suggested" toggle: greys out the cluster rows -
+    # `pointerEvents: none` makes the radios + comment fields un-clickable;
+    # the opacity gives a visual cue that the rows are inactive. (Derived
+    # set_robust edits are also suppressed while this is on — see
+    # `_derived_robust_edits` / `build_rec_from_ui_state`.)
     @app.callback(
-        Output("cluster-feedback-table", "editable"),
         Output("cluster-table-wrapper", "style"),
         Input("no-changes-checkbox", "value"),
     )
     def _toggle_no_changes(value):
         on = bool(value)
-        wrapper_style = {"opacity": 0.45, "pointerEvents": "none"} if on else {}
-        # When the table is "off", the dropdown column is also un-clickable.
-        return (not on), wrapper_style
+        return {"opacity": 0.45, "pointerEvents": "none"} if on else {}
 
     def _source_name_from_folder(folder_str: str | None) -> str | None:
         if not folder_str:
@@ -975,7 +1070,7 @@ def register(
     # and bump the reset counter (so the Submit button label re-evaluates).
     @app.callback(
         Output("source-comment", "value", allow_duplicate=True),
-        Output("cluster-feedback-table", "data", allow_duplicate=True),
+        Output("cluster-feedback-rows", "children", allow_duplicate=True),
         Output("epoch-feedback-rows", "children", allow_duplicate=True),
         Output("edits-store", "data", allow_duplicate=True),
         Output("no-changes-checkbox", "value", allow_duplicate=True),
@@ -1017,7 +1112,8 @@ def register(
             save_recommendation(recommendations_dir, rec, model_sha=bundle.csv_sha)
             cluster_rows, epoch_rows = _populate_tables(bundle, rec)
             checkbox = ["yes"] if rec.no_robustness_changes else []
-            return (rec.source_comment, cluster_rows, build_epoch_rows(epoch_rows),
+            return (rec.source_comment, build_cluster_rows(cluster_rows),
+                    build_epoch_rows(epoch_rows),
                     _edits_to_store(rec), checkbox,
                     f"Reset to last submitted ({rec.updated_at})",
                     hide, new_counter)
@@ -1028,7 +1124,8 @@ def register(
             empty = Recommendation(source=source_name, model="current",
                                    reviewer=cur)
             cluster_rows, epoch_rows = _populate_tables(bundle, empty)
-            return ("", cluster_rows, build_epoch_rows(epoch_rows), [], [],
+            return ("", build_cluster_rows(cluster_rows),
+                    build_epoch_rows(epoch_rows), [], [],
                     "Draft and submission deleted", hide, new_counter)
 
         return (*nu6, hide, no_update)
@@ -1078,12 +1175,15 @@ def register(
         State("source-picker", "value"),
         State("model-picker", "value"),
         State("source-comment", "value"),
-        State("cluster-feedback-table", "data"),
-        # Read the epoch comments straight from the live textareas (their value
-        # prop is current client-side), NOT the epoch store: the store is fed by
-        # the n_blur bridge — a server round-trip the submit clientside's
-        # microtask yield can't await — so reading the store here could drop a
-        # just-typed-but-unblurred comment.
+        # Read the Robustness radios + comments and the epoch comments straight
+        # from the live components (their value props are current client-side),
+        # NOT the stores: the stores are fed by n_blur bridges — a server
+        # round-trip the submit clientside's microtask yield can't await — so
+        # reading a store here could drop a just-typed-but-unblurred comment.
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "value"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "id"),
+        State({"type": "cluster-comment", "cid": ALL}, "value"),
+        State({"type": "cluster-comment", "cid": ALL}, "id"),
         State({"type": "epoch-comment", "epoch": ALL}, "value"),
         State({"type": "epoch-comment", "epoch": ALL}, "id"),
         State("edits-store", "data"),
@@ -1091,7 +1191,10 @@ def register(
         prevent_initial_call=True,
     )
     def _do_submit(_trigger, source_folder, model_key, source_comment,
-                   cluster_rows, epoch_vals, epoch_ids, edits, no_changes_val):
+                   radio_vals, radio_ids, cluster_comment_vals, cluster_comment_ids,
+                   epoch_vals, epoch_ids, edits, no_changes_val):
+        cluster_rows = _cluster_rows_from_components(
+            radio_vals, radio_ids, cluster_comment_vals, cluster_comment_ids)
         epoch_rows = [{"epoch": i["epoch"], "comment": (v or "")}
                       for i, v in zip(epoch_ids or [], epoch_vals or [])]
         # Defensive: don't fire on non-current models (button is hidden but
