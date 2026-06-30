@@ -108,9 +108,16 @@ Estimated effort: **3–5 days of focused dev** (vs. 1–2 weeks for OAuth).
 /data/
 ├── Results/                 ← synced from Drive
 ├── recommendations/         ← per-user JSON output (backed up nightly)
+│   └── _admin/
+│       └── assignments.json ← team roster + assignments + target dates
 ├── fits_cache/              ← grows over time; regeneratable
 └── logs/
 ```
+
+`recommendations/_admin/assignments.json` is part of the
+`recommendations/` tree, so it is covered by the nightly backup **and**
+by any sync you run on that directory — which is what makes the
+laptop→server roster/assignment workflow below work.
 
 ### `tokens.yaml` example
 
@@ -126,6 +133,41 @@ users:
   - name: chris
     token: chris-ePvD8gWa6oRcZj1tHy7uMxNb
 ```
+
+## Managing the team & assignments from your laptop
+
+The deployed server holds `tokens.yaml`; your local machine does not. So
+the dashboard builds its reviewer roster from the **union** of three
+signals (`dashboard.known_reviewers`):
+
+1. `tokens.yaml` `name:` fields (only present on the server),
+2. anyone who has submitted a review on disk (auto-discovered, syncs in
+   with `recommendations/`),
+3. a **manually-curated roster** — the `team_members` list in
+   `recommendations/_admin/assignments.json` (schema v4), editable from
+   the dashboard's **👥 Manage team** modal (Add member / Remove).
+
+This lets you do all team and assignment management from a local
+staging copy and push it up with your usual `recommendations/` sync —
+no need to edit anything directly on the server:
+
+1. Run the app locally against your synced `recommendations/`
+   (`mojave-review --results-dir ./Results --recommendations-dir
+   ./recommendations --reviewer <you> --admin`).
+2. In **👥 Manage team**, add teammates who haven't submitted yet, then
+   use **🔀 Auto-balance**, **↪ Reassign queue**, and **📅 Set target
+   dates** to lay out the work. All of this writes only
+   `recommendations/_admin/assignments.json`.
+3. Sync `recommendations/` to the server. The deployed app reads the
+   same file and every reviewer sees their queue.
+
+**Name-matching is the one rule that matters.** A reviewer's queue is
+looked up by name, and on the server that name comes from their token
+(`tokens.yaml` `name:`). So a name you add in **Manage team** must match
+the corresponding `tokens.yaml` `name:` **exactly**, or the assignment
+won't resolve to that reviewer's logged-in identity. Decide the
+canonical names once (e.g. `alice`, `bob`) and use them in both places.
+The Manage-team modal repeats this caveat inline.
 
 ## Reviewer's experience
 

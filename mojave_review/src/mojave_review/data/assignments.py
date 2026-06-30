@@ -53,7 +53,7 @@ from ..recommendations.store import (
 from .difficulty import SourceDifficulty
 
 
-SCHEMA_VERSION = 3          # v3: adds source_target_dates (was per-record)
+SCHEMA_VERSION = 4          # v4: adds team_members (manual roster, syncs)
 DEFAULT_REVIEW_TARGET = 2
 STALE_DAYS = 7
 
@@ -105,13 +105,24 @@ class AssignmentStore:
     # absent from this map have no target (the dashboard shows "—"
     # and :func:`is_stale` returns False).
     source_target_dates: dict[str, str] = field(default_factory=dict)
+    # Manually-curated team roster (v4). The admin's machine has no
+    # tokens.yaml (that lives on the deployed server), so the roster
+    # can't be discovered from tokens here. These names let the admin
+    # define teammates who haven't submitted anything yet and assign
+    # work to them. Stored in assignments.json (under recommendations/)
+    # so the usual server sync carries the roster to the deployment.
+    # Unioned with the auto-discovered reviewers by
+    # ``dashboard.known_reviewers``. Names should match the deployed
+    # tokens.yaml ``name:`` fields so identities line up.
+    team_members: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> "AssignmentStore":
         # Schema compat (read path is monotonic):
         # * v1 stores: no paused_reviewers, no source_target_dates
         # * v2 stores: no source_target_dates
-        # * v3 (current): everything present
+        # * v3 stores: no team_members
+        # * v4 (current): everything present
         # Defaults make older versions load cleanly. Per-record
         # target_date (v1/v2) is preserved as a hint but the source
         # map wins everywhere — to migrate explicitly, callers can
@@ -133,6 +144,7 @@ class AssignmentStore:
                 (d.get("source_target_dates", {}) or {}).items()
                 if v                                # drop blanks/nulls on read
             },
+            team_members=list(d.get("team_members", []) or []),
         )
 
     def to_dict(self) -> dict:
@@ -147,6 +159,7 @@ class AssignmentStore:
             },
             "paused_reviewers": list(self.paused_reviewers),
             "source_target_dates": dict(self.source_target_dates),
+            "team_members": list(self.team_members),
         }
 
     def touch(self) -> None:
@@ -446,6 +459,30 @@ def set_paused(
         store.paused_reviewers = [
             r for r in store.paused_reviewers if r != reviewer
         ]
+
+
+def add_team_member(store: AssignmentStore, name: str) -> bool:
+    """Add a name to the manually-curated roster (v4). Returns True if a
+    new name was added, False if it was blank or already present.
+    Whitespace is trimmed; matching is exact (case-sensitive) so the
+    admin can mirror the deployed tokens.yaml ``name:`` fields verbatim."""
+    name = (name or "").strip()
+    if not name or name in store.team_members:
+        return False
+    store.team_members.append(name)
+    return True
+
+
+def remove_team_member(store: AssignmentStore, name: str) -> bool:
+    """Drop a name from the manual roster. Returns True if it was
+    present. Only the manual entry is removed — a teammate who has
+    submitted reviews or holds assignments is still auto-discovered, so
+    removal is only meaningful for names that exist solely in
+    ``team_members``."""
+    if name in store.team_members:
+        store.team_members = [m for m in store.team_members if m != name]
+        return True
+    return False
 
 
 def active_reviewers(

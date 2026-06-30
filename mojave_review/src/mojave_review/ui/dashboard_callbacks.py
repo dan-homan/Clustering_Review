@@ -17,9 +17,9 @@ from ..auth.runtime import current_reviewer
 from ..auth.tokens import load_store as load_token_store
 from ..recommendations.store import reviewer_slug, source_phase
 from ..data.assignments import (
-    active_reviewers, apply_additions, auto_balance,
+    active_reviewers, add_team_member, apply_additions, auto_balance,
     credit_prior_submissions, load_store, reassign_queue,
-    save_store, set_paused, set_source_target_date,
+    remove_team_member, save_store, set_paused, set_source_target_date,
     sources_in_range, submitted_by_map,
 )
 from ..data.difficulty import score_all
@@ -393,6 +393,46 @@ def register_dashboard_callbacks(
             f"-{len(previous_paused - new_paused)} resumed"
         )
         return "/dashboard", f"team updated: {delta}"
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children",
+               allow_duplicate=True),
+        Input("dashboard-tm-add-btn", "n_clicks"),
+        State("dashboard-tm-add-name", "value"),
+        prevent_initial_call=True,
+    )
+    def _tm_add(_n, name):
+        name = (name or "").strip()
+        if not name:
+            return no_update, "enter a name to add"
+        store = load_store(recommendations_dir)
+        if add_team_member(store, name):
+            save_store(recommendations_dir, store)
+            return "/dashboard", f"added team member: {name}"
+        return no_update, f"{name} is already on the roster"
+
+    @app.callback(
+        Output("url", "href", allow_duplicate=True),
+        Output("dashboard-admin-status", "children",
+               allow_duplicate=True),
+        Input({"type": "dashboard-tm-remove", "reviewer": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _tm_remove(clicks):
+        from dash import ctx
+        # Pattern-matching Input fires for any button; ignore the initial
+        # all-zero render and act only on the one actually clicked.
+        if not ctx.triggered_id or not any(clicks or []):
+            return no_update, no_update
+        name = ctx.triggered_id.get("reviewer")
+        if not name:
+            return no_update, no_update
+        store = load_store(recommendations_dir)
+        if remove_team_member(store, name):
+            save_store(recommendations_dir, store)
+            return "/dashboard", f"removed team member: {name}"
+        return no_update, f"{name} was not a manual member"
 
     # -------------------------------------------------------------------
     # Reassign queue

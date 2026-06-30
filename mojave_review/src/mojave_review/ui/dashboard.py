@@ -76,20 +76,21 @@ def _phase_for_filter(value: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def known_reviewers(
+def discovered_reviewers(
     tokens_path: Path | None, recommendations_dir: Path,
     fallback_reviewer: str,
-) -> list[str]:
-    """The team list, taken from the union of three signals so the
-    dashboard never lies about who's on the project:
+) -> set[str]:
+    """Auto-discovered reviewers (NOT the manual roster): the union of
 
-    * tokens.yaml (authoritative when present)
-    * any reviewer who has submitted *anything* under ``recommendations/``
-    * the fallback (single-user) reviewer name
+    * tokens.yaml (authoritative when present — only on the deployed
+      server),
+    * any reviewer with an open submission on disk
+      (``<recs>/<src>/submitted/<slug>.json``),
+    * the fallback (single-user) reviewer name.
 
-    Returns alphabetically-sorted full reviewer names (NOT slugs) so the
-    dashboard tables read as a roster, not a filename listing.
-    """
+    Returns a set of full reviewer names (NOT slugs). See
+    :func:`known_reviewers` for the full roster (this ∪ the manual
+    ``team_members`` ∪ assignment keys)."""
     names: set[str] = {fallback_reviewer} if fallback_reviewer else set()
     if tokens_path is not None and Path(tokens_path).is_file():
         try:
@@ -112,6 +113,31 @@ def known_reviewers(
         covered = {reviewer_slug(n) for n in names}
         names.update(s for s in on_disk_slugs if s not in covered)
 
+    return names
+
+
+def known_reviewers(
+    tokens_path: Path | None, recommendations_dir: Path,
+    fallback_reviewer: str,
+) -> list[str]:
+    """The full team roster, so the dashboard never lies about who's on
+    the project. The union of:
+
+    * :func:`discovered_reviewers` (tokens.yaml ∪ open submitters ∪
+      fallback),
+    * the manually-curated ``team_members`` (v4) — the admin's machine
+      has no tokens.yaml, so this is how teammates who haven't submitted
+      yet get onto the roster; it syncs via ``recommendations/``,
+    * existing assignment keys — keeps a reviewer on the roster even
+      after their submissions are archived to ``considered/``/``applied/``
+      (open-submission discovery alone would drop them).
+
+    Returns alphabetically-sorted full reviewer names (NOT slugs)."""
+    names = discovered_reviewers(
+        tokens_path, recommendations_dir, fallback_reviewer)
+    store = load_store(recommendations_dir)
+    names.update(store.team_members)
+    names.update(store.assignments.keys())
     return sorted(names)
 
 
@@ -517,12 +543,18 @@ def _admin_controls_panel(
     stage12_sources: list[str],
     open_sources: list[str],
     current_targets: dict[str, str],
+    removable: set[str],
 ) -> html.Div:
     """Top-of-dashboard admin section: Manage team + Auto-balance +
     Reassign-queue + Set-target-dates buttons, their modals, and a
-    status line. Hidden when admin=False."""
+    status line. Hidden when admin=False.
+
+    ``removable`` is the subset of ``reviewers`` that exist *only* in the
+    manual roster (``team_members``) — those get a Remove button in the
+    Manage-team modal; auto-discovered reviewers don't (they'd reappear)."""
     reviewer_opts = [{"label": r, "value": r} for r in reviewers]
-    # Team-management rows: one per reviewer with a pause/active select.
+    # Team-management rows: one per reviewer with a pause/active select
+    # and (for manual-only members) a Remove button.
     team_rows = []
     for r in reviewers:
         active = r not in paused_set
@@ -546,7 +578,43 @@ def _admin_controls_panel(
                 ),
                 style={"padding": "4px 8px"},
             ),
+            html.Td(
+                html.Button(
+                    "Remove",
+                    id={"type": "dashboard-tm-remove", "reviewer": r},
+                    n_clicks=0,
+                    title="Remove this manually-added member from the "
+                          "roster.",
+                    style={"padding": "0.15em 0.6em", "fontSize": "0.8em",
+                           "background": "white", "color": "#b00",
+                           "border": "1px solid #e0b0b0",
+                           "borderRadius": "4px", "cursor": "pointer"},
+                ) if r in removable else "",
+                style={"padding": "4px 8px"},
+            ),
         ]))
+    # Add-member row appended below the table inside the modal.
+    add_member_row = html.Div(
+        [
+            dcc.Input(
+                id="dashboard-tm-add-name", type="text", value="",
+                placeholder="New teammate name (match tokens.yaml)",
+                debounce=False,
+                style={"width": "280px", "fontSize": "0.85em",
+                       "marginRight": "0.5em"},
+            ),
+            html.Button(
+                "Add member", id="dashboard-tm-add-btn", n_clicks=0,
+                style={"padding": "0.3em 0.8em", "fontSize": "0.85em",
+                       "background": "white", "color": "#1a7a1a",
+                       "border": "1px solid #bcd9bc", "borderRadius": "4px",
+                       "cursor": "pointer"},
+            ),
+        ],
+        style={"display": "flex", "alignItems": "center",
+               "flexWrap": "wrap", "gap": "0.25em",
+               "marginTop": "0.6em"},
+    )
     return html.Div(
         [
             html.Div(
@@ -625,10 +693,23 @@ def _admin_controls_panel(
                                "marginBottom": "0.4em"},
                     ),
                     html.Div(
-                        "Paused reviewers stay visible on the dashboard "
-                        "but are excluded from auto-balance. Existing "
-                        "assignments are preserved either way — to move "
-                        "them, use Reassign queue.",
+                        [
+                            html.Div(
+                                "Paused reviewers stay visible on the "
+                                "dashboard but are excluded from "
+                                "auto-balance. Existing assignments are "
+                                "preserved either way — to move them, use "
+                                "Reassign queue."),
+                            html.Div(
+                                "Add teammates who haven't submitted yet "
+                                "below. The roster is stored in "
+                                "assignments.json and syncs to the server, "
+                                "so names must match the deployed "
+                                "tokens.yaml exactly for identities to line "
+                                "up. Auto-discovered reviewers (from "
+                                "submissions / tokens) can't be removed.",
+                                style={"marginTop": "0.3em"}),
+                        ],
                         style={"color": "#666", "fontSize": "0.85em",
                                "marginBottom": "0.5em"},
                     ),
@@ -640,12 +721,16 @@ def _admin_controls_panel(
                             html.Th("Status",
                                     style={"padding": "4px 8px",
                                            "textAlign": "left"}),
+                            html.Th("",
+                                    style={"padding": "4px 8px",
+                                           "textAlign": "left"}),
                         ]))] + [html.Tbody(team_rows)],
                         style={"width": "100%",
                                "borderCollapse": "collapse",
                                "fontFamily": "system-ui, sans-serif",
                                "fontSize": "0.88em"},
                     ),
+                    add_member_row,
                     html.Div(
                         [
                             html.Button(
@@ -1007,11 +1092,20 @@ def build_dashboard_page(
             if source_phase(recommendations_dir, s.source) == "open"
         })
         td_sources = sorted(set(stage12_names) | set(open_src_names))
+        # Manual-only members (in team_members but not auto-discovered or
+        # assigned) are the ones safe to remove — removing an
+        # auto-discovered reviewer would just re-appear next render.
+        discovered = (
+            discovered_reviewers(tokens_path, recommendations_dir, reviewer)
+            | set(store.assignments.keys())
+        )
+        removable = set(store.team_members) - discovered
         page_children.append(_admin_controls_panel(
             reviewers, set(store.paused_reviewers),
             stage12_names,
             open_src_names,
             {s: get_source_target_date(store, s) or "" for s in td_sources},
+            removable,
         ))
     page_children.append(body)
 

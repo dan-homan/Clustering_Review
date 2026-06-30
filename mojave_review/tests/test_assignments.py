@@ -7,11 +7,12 @@ import json
 
 from mojave_review.data.assignments import (
     AssignmentRecord, AssignmentStore, SCHEMA_VERSION, STALE_DAYS,
-    active_reviewers, all_assigned_sources, all_submitting_reviewers,
-    apply_additions, assignment_status, assignments_for, assignments_path,
-    auto_balance, credit_prior_submissions, get_source_target_date,
-    is_paused, is_stale, load_store, migrate_per_record_targets_to_source,
-    needs_for, reassign_queue, remove_assignment, reviewer_load, save_store,
+    active_reviewers, add_team_member, all_assigned_sources,
+    all_submitting_reviewers, apply_additions, assignment_status,
+    assignments_for, assignments_path, auto_balance, credit_prior_submissions,
+    get_source_target_date, is_paused, is_stale, load_store,
+    migrate_per_record_targets_to_source, needs_for, reassign_queue,
+    remove_assignment, remove_team_member, reviewer_load, save_store,
     set_paused, set_source_target_date, set_source_target_dates_bulk,
     sources_in_range, submitted_by_map,
 )
@@ -512,6 +513,52 @@ def test_load_store_v2_compat(tmp_path):
     # NOT promoted automatically; callers can run the explicit
     # migration helper if they want.
     assert store.assignments["alice"][0].target_date == "2026-07-05"
+
+
+def test_load_store_v3_compat(tmp_path):
+    # v3 (no team_members) loads cleanly with an empty roster.
+    p = tmp_path / "_admin"
+    p.mkdir()
+    (p / "assignments.json").write_text(json.dumps({
+        "version": 3, "updated_at": "t0", "deadline": None,
+        "default_review_target": 2, "assignments": {},
+        "paused_reviewers": [], "source_target_dates": {},
+    }))
+    store = load_store(tmp_path)
+    assert store.team_members == []
+
+
+# ---------------------------------------------------------------------------
+# Team roster (v4 — manual team_members)
+# ---------------------------------------------------------------------------
+
+
+def test_add_team_member_dedup_and_trim():
+    store = AssignmentStore()
+    assert add_team_member(store, "  Alice  ") is True
+    assert store.team_members == ["Alice"]
+    assert add_team_member(store, "Alice") is False        # dedup
+    assert add_team_member(store, "") is False             # blank ignored
+    assert add_team_member(store, "Bob Lee") is True
+    assert store.team_members == ["Alice", "Bob Lee"]
+
+
+def test_remove_team_member():
+    store = AssignmentStore(team_members=["Alice", "Bob Lee"])
+    assert remove_team_member(store, "Alice") is True
+    assert store.team_members == ["Bob Lee"]
+    assert remove_team_member(store, "Nobody") is False
+
+
+def test_team_members_round_trip(tmp_path):
+    store = AssignmentStore()
+    add_team_member(store, "Alice")
+    add_team_member(store, "Bob Lee")
+    save_store(tmp_path, store)
+    on_disk = json.loads(assignments_path(tmp_path).read_text())
+    assert on_disk["version"] == SCHEMA_VERSION
+    assert on_disk["team_members"] == ["Alice", "Bob Lee"]
+    assert load_store(tmp_path).team_members == ["Alice", "Bob Lee"]
 
 
 # ---------------------------------------------------------------------------
