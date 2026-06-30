@@ -13,7 +13,8 @@ from mojave_review.data.assignments import (
     credit_prior_submissions, get_source_target_date, is_paused, is_stale,
     load_store, manual_review_slugs_by_source,
     migrate_per_record_targets_to_source, move_assignment, needs_for,
-    reassign_queue, rebalance_pending, redistribute_reviewer,
+    prune_collision_reviewers, reassign_queue, rebalance_pending,
+    redistribute_reviewer,
     remove_assignment, remove_manual_review, remove_team_member, reviewer_load,
     save_store, set_paused, set_source_target_date,
     set_source_target_dates_bulk, sources_in_range, submitted_by_map,
@@ -742,6 +743,27 @@ def test_redistribute_reviewer_spreads_and_respects_limit():
         reviewer="bob", current_assignments=ca, movable=mv,
         weight_by_source=w, targets=["alice", "carol"], limit=1)
     assert one == [("B", "bob", "carol")]
+
+
+def test_prune_collision_reviewers():
+    store = AssignmentStore(
+        assignments={
+            "homand": [AssignmentRecord("A", "t")],
+            "homand_2": [AssignmentRecord("B", "t")],
+            "alice": [],
+        },
+        paused_reviewers=["homand_2"],
+        manual_reviews={"homand_2": ["C"]},
+        team_members=["alice"],
+    )
+    assert prune_collision_reviewers(store) == ["homand_2"]
+    assert "homand_2" not in store.assignments
+    assert "homand_2" not in store.paused_reviewers
+    assert "homand_2" not in store.manual_reviews
+    assert "homand" in store.assignments              # base kept
+    # A standalone foo_2 (no "foo") is a real name → untouched.
+    store2 = AssignmentStore(assignments={"foo_2": []})
+    assert prune_collision_reviewers(store2) == []
 
 
 def test_all_submitting_reviewers_folds_collision_suffix(tmp_path):

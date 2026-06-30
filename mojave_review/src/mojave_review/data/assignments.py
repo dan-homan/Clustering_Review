@@ -53,6 +53,8 @@ from pathlib import Path
 # (``<slug>_2.json``); folded back to the base slug where reviewer
 # identity is derived from filenames.
 _COLLISION_SLUG_RE = re.compile(r"_\d+$")
+# A whole reviewer key that is a ``<base>_<N>`` collision artifact.
+_COLLISION_REVIEWER_RE = re.compile(r"^(?P<base>.+)_\d+$")
 
 from ..recommendations.store import (
     count_submissions, is_submitted, load_recommendation,
@@ -531,6 +533,30 @@ def set_paused(
         store.paused_reviewers = [
             r for r in store.paused_reviewers if r != reviewer
         ]
+
+
+def prune_collision_reviewers(store: AssignmentStore) -> list[str]:
+    """Remove phantom ``<base>_<N>`` reviewer entries (collision-rename
+    artifacts that ``credit_prior_submissions`` minted before the suffix
+    was folded) from the store — assignments, paused_reviewers,
+    manual_reviews, and team_members — but only when the real ``<base>``
+    reviewer is also present. The phantom's (bogus) assignment records are
+    dropped; ``<base>`` already carries the genuine work. Returns the
+    removed keys. A no-op for a standalone ``foo_2`` whose ``foo`` is
+    absent (treated as a real name)."""
+    keys = (set(store.assignments) | set(store.paused_reviewers)
+            | set(store.manual_reviews) | set(store.team_members))
+    removed = []
+    for k in list(keys):
+        m = _COLLISION_REVIEWER_RE.match(k)
+        if not (m and m.group("base") in keys):
+            continue
+        store.assignments.pop(k, None)
+        store.paused_reviewers = [r for r in store.paused_reviewers if r != k]
+        store.manual_reviews.pop(k, None)
+        store.team_members = [t for t in store.team_members if t != k]
+        removed.append(k)
+    return sorted(removed)
 
 
 def add_team_member(store: AssignmentStore, name: str) -> bool:

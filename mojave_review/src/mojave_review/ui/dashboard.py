@@ -615,10 +615,13 @@ def _reviewer_summary_card(rows: list[dict]) -> html.Div:
 
     return html.Div(
         [html.H3("Reviewer summary", style={"margin": "0 0 0.25em"}),
-         html.Div("Completed = every source the reviewer has ever reviewed "
-                  "(open + Stage-3 archived + Stage-2 baseline + manual "
-                  "credit), including finalized. Click a row to see the "
-                  "source lists.",
+         html.Div("Pending / In prog / Submitted break down the reviewer's "
+                  "CURRENT assigned queue. Completed counts every source "
+                  "they've ever reviewed (open + Stage-3 archived + Stage-2 "
+                  "baseline + manual credit), including finalized and "
+                  "no-longer-assigned — so Completed ≥ Submitted, the gap "
+                  "being reviews on sources not in their queue. Click a row "
+                  "for the source lists.",
                   style={"color": "#666", "fontSize": "0.82em",
                          "marginBottom": "0.5em"}),
          header, *items, total_row],
