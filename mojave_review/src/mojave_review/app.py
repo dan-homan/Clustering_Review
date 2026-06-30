@@ -97,22 +97,25 @@ def create_app(
     def _layout():
         return html.Div([
             dcc.Location(id="url", refresh=False),
-            # Admin write-then-navigate actions (dashboard balancing /
-            # target dates / team edits) target THIS location, which
-            # reloads the document. The shared refresh=False "url" can't
-            # refresh the dashboard after an apply: it's a same-path
-            # ("/dashboard"→"/dashboard") navigation, so no pathname
-            # change fires and the page (with its open modal) shows stale
-            # data — the write succeeded on disk but looked like a no-op.
-            # A dedicated refresh=True location forces a real reload.
-            dcc.Location(id="dashboard-redirect", refresh=True),
+            # Admin write-then-apply actions (dashboard balancing / target
+            # dates / team edits) bump this store, which re-renders the
+            # page IN PLACE via _route (below). We can't refresh by
+            # navigating url.href: the admin is already on /dashboard, so a
+            # same-path href is no pathname change and the page (with its
+            # open modal) shows stale data — the write succeeded on disk
+            # but looked like a no-op. (A refresh=True Location instead
+            # caused an endless reload loop, since it re-navigates on every
+            # mount.) An in-place re-render reads fresh from disk, closes
+            # the modal, and never touches the browser URL.
+            dcc.Store(id="dashboard-refresh", data=0),
             html.Div(id="page-content"),
         ])
     app.layout = _layout
 
     @app.callback(Output("page-content", "children"),
-                  Input("url", "pathname"))
-    def _route(pathname):
+                  Input("url", "pathname"),
+                  Input("dashboard-refresh", "data"))
+    def _route(pathname, _refresh):
         rev = current_reviewer(reviewer)
         # rstrip("/") handles both /dashboard and /dashboard/ ; endswith
         # composes cleanly with a future url_base_pathname prefix

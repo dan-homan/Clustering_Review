@@ -9,6 +9,7 @@ fresh on-disk state. Same pattern the existing review-page uses for
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from dash import ALL, Input, Output, State, html, no_update
@@ -30,7 +31,6 @@ from ..data.loader import list_sources
 from .dashboard import (
     known_reviewers, moves_preview, slug_name_map, _source_progress_rows,
 )
-from .urls import rel
 
 
 # Shown when any rebalance/move modal opens (covers the screen, dims behind).
@@ -248,7 +248,7 @@ def register_dashboard_callbacks(
                 "background": "rgba(0,0,0,0.35)", "zIndex": 1000}, body, preview_store
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-ab-apply", "n_clicks"),
@@ -282,7 +282,7 @@ def register_dashboard_callbacks(
         if n_credited:
             parts.append(f"credited {n_credited}")
         parts.append(f"added {n_added}")
-        return rel("/dashboard"), "auto-balance: " + ", ".join(parts)
+        return time.time(), "auto-balance: " + ", ".join(parts)
 
     # -------------------------------------------------------------------
     # Target dates: bulk-by-range + per-source save
@@ -335,7 +335,7 @@ def register_dashboard_callbacks(
         ]
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-td-save", "n_clicks"),
@@ -358,14 +358,14 @@ def register_dashboard_callbacks(
                 set_source_target_date(store, src, new)
                 n_changed += 1
         save_store(recommendations_dir, store)
-        return rel("/dashboard"), f"target dates: {n_changed} updated"
+        return time.time(), f"target dates: {n_changed} updated"
 
     # -------------------------------------------------------------------
     # Credit my Stage-2 reviews (admin self-credit backfill)
     # -------------------------------------------------------------------
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-credit-btn", "n_clicks"),
@@ -388,7 +388,7 @@ def register_dashboard_callbacks(
         if not n:
             return no_update, "no missing reviews to credit"
         save_store(recommendations_dir, store)
-        return rel("/dashboard"), f"credited {n} source(s) as reviewed by {me}"
+        return time.time(), f"credited {n} source(s) as reviewed by {me}"
 
     # -------------------------------------------------------------------
     # Manage team — pause / activate individual reviewers
@@ -411,7 +411,7 @@ def register_dashboard_callbacks(
         return {"display": "none"}
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-tm-save", "n_clicks"),
@@ -435,10 +435,10 @@ def register_dashboard_callbacks(
             f"+{len(new_paused - previous_paused)} paused / "
             f"-{len(previous_paused - new_paused)} resumed"
         )
-        return rel("/dashboard"), f"team updated: {delta}"
+        return time.time(), f"team updated: {delta}"
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-tm-add-btn", "n_clicks"),
@@ -452,11 +452,11 @@ def register_dashboard_callbacks(
         store = load_store(recommendations_dir)
         if add_team_member(store, name):
             save_store(recommendations_dir, store)
-            return rel("/dashboard"), f"added team member: {name}"
+            return time.time(), f"added team member: {name}"
         return no_update, f"{name} is already on the roster"
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input({"type": "dashboard-tm-remove", "reviewer": ALL}, "n_clicks"),
@@ -474,7 +474,7 @@ def register_dashboard_callbacks(
         store = load_store(recommendations_dir)
         if remove_team_member(store, name):
             save_store(recommendations_dir, store)
-            return rel("/dashboard"), f"removed team member: {name}"
+            return time.time(), f"removed team member: {name}"
         return no_update, f"{name} was not a manual member"
 
     # -------------------------------------------------------------------
@@ -498,7 +498,7 @@ def register_dashboard_callbacks(
         return {"display": "none"}
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children",
                allow_duplicate=True),
         Input("dashboard-rq-apply", "n_clicks"),
@@ -533,7 +533,7 @@ def register_dashboard_callbacks(
         msg = f"reassign {from_r}→{to_r}: moved {len(moved)}"
         if skipped:
             msg += f", skipped {len(skipped)}"
-        return rel("/dashboard"), msg
+        return time.time(), msg
 
     # -------------------------------------------------------------------
     # Surgical rebalancing — top-up / redistribute / move-one-source.
@@ -614,7 +614,7 @@ def register_dashboard_callbacks(
             moves, empty_msg="Load is already balanced — no moves needed.")
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-rb-apply", "n_clicks"),
         State("dashboard-rb-consider-completed", "value"),
@@ -629,7 +629,7 @@ def register_dashboard_callbacks(
         save_store(recommendations_dir, store)
         note = " (completed-weighted)" if (
             consider_completed and "completed" in consider_completed) else ""
-        return rel("/dashboard"), f"rebalanced: {n} move(s){note}"
+        return time.time(), f"rebalanced: {n} move(s){note}"
 
     # --- Redistribute one reviewer's queue (break) --------------------
     @app.callback(
@@ -670,7 +670,7 @@ def register_dashboard_callbacks(
             moves, empty_msg="Nothing pending to redistribute.")
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-rd-apply", "n_clicks"),
         State("dashboard-rd-from", "value"),
@@ -693,7 +693,7 @@ def register_dashboard_callbacks(
         msg = f"redistributed {n} source(s) from {from_r}"
         if did_pause:
             msg += " (paused)"
-        return rel("/dashboard"), msg
+        return time.time(), msg
 
     # --- Move a single source -----------------------------------------
     @app.callback(
@@ -709,7 +709,7 @@ def register_dashboard_callbacks(
                 else {"display": "none"})
 
     @app.callback(
-        Output("dashboard-redirect", "href", allow_duplicate=True),
+        Output("dashboard-refresh", "data", allow_duplicate=True),
         Output("dashboard-admin-status", "children", allow_duplicate=True),
         Input("dashboard-ms-apply", "n_clicks"),
         State("dashboard-ms-source", "value"),
@@ -731,4 +731,4 @@ def register_dashboard_callbacks(
                 f"couldn't move {source}: {frm} doesn't hold it or {to} "
                 f"already does")
         save_store(recommendations_dir, store)
-        return rel("/dashboard"), f"moved {source}: {frm}→{to}"
+        return time.time(), f"moved {source}: {frm}→{to}"
