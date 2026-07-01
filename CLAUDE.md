@@ -120,12 +120,12 @@ http://www.cv.nrao.edu/2cmVLBA/data/<source>/<epoch_name>/<source>.<band>.<epoch
 ## Web app: views and conventions
 
 `build_summary_figure(view=...)` → a 2-row figure for four views, single-plot
-for `Position Angle`:
+for `Position (XY)`:
 
 | View | Top | Bottom |
 |---|---|---|
-| Position | distance vs epoch (+ polyfit), 1σ bars | centroid track (x,y) mas vs core, +x reversed, equal scale, 1σ bars |
-| Position Angle | *(single)* PA vs epoch, 1σ bars | — |
+| Position | distance vs epoch (+ polyfit), 1σ bars | PA vs epoch, 1σ bars (core skipped) |
+| Position (XY) | *(single)* centroid track (x,y) mas vs core, +x reversed, equal scale, 1σ bars | — |
 | Flux | I flux vs epoch (log y) | Tb vs epoch (log y; 15.4 GHz, z) |
 | Polarization | P flux vs epoch (log y) | EVPA vs epoch |
 | Kinematics | speed vs distance, 1σ bars, axes at 0 | X/Y velocity vectors w/ arrowheads, +x reversed |
@@ -166,7 +166,7 @@ view selector is `dcc.Dropdown(id="view-picker")` sitting where the "Summary
 plots" `<h4>` was (relocated from the header radios — same id + value strings, so
 `_refresh_summary`, `_toggle_scale_row`, the click-selection callback and the
 clientside active-epoch marker are all unchanged). Its five values are the
-`build_summary_figure` views (`"PA"` label for `"Position Angle"`).
+`build_summary_figure` views (labels = view names as-is).
 
 **Right-pane mode selector.** A `dcc.Dropdown(id="right-pane-mode")` sits where
 the "Epoch overlay" `<h4>` was, mirroring the left selector. `"overlay"`

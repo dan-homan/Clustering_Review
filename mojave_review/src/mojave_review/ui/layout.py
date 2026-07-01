@@ -263,14 +263,11 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                     # value strings as the former header radios, so all
                     # consumers (_refresh_summary, _toggle_scale_row, the
                     # click-selection callback, the clientside active-epoch
-                    # marker) are unchanged. "PA" label keeps the value
-                    # "Position Angle".
+                    # marker) are unchanged. Labels are the view names as-is.
                     dcc.Dropdown(
                         id="view-picker",
-                        options=[{"label": ("PA" if v == "Position Angle"
-                                            else v),
-                                  "value": v}
-                                 for v in ("Position", "Position Angle", "Flux",
+                        options=[{"label": v, "value": v}
+                                 for v in ("Position", "Position (XY)", "Flux",
                                            "Polarization", "Kinematics")],
                         value="Position",
                         clearable=False,
@@ -397,15 +394,16 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
             # "overlay" shows the per-epoch FITS/cluster overlay (default,
             # unchanged behaviour); every other value is a build_summary_figure
             # view string, rendering a SECOND summary plot on the right so two
-            # views can be compared side-by-side. Value strings match the header
-            # view-picker exactly (incl. "Position Angle").
+            # views can be compared side-by-side. Value strings match the
+            # left-pane view-picker exactly (plus the extra "overlay" option).
             html.Div(
                 dcc.Dropdown(
                     id="right-pane-mode",
                     options=[
                         {"label": "Epoch overlay", "value": "overlay"},
                         {"label": "Summary: Position", "value": "Position"},
-                        {"label": "Summary: PA", "value": "Position Angle"},
+                        {"label": "Summary: Position (XY)",
+                         "value": "Position (XY)"},
                         {"label": "Summary: Flux", "value": "Flux"},
                         {"label": "Summary: Polarization",
                          "value": "Polarization"},

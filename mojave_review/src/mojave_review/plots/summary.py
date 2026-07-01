@@ -1,10 +1,10 @@
 """Plotly port of cluster_code.make_summary_plots.
 
 Renders per-cluster summary plots for one of five views (top/bottom pair,
-except "Position Angle" which is a single panel):
+except "Position (XY)" which is a single panel):
 
-    "Position"       -> distance vs epoch        |  XY position track (mas)
-    "Position Angle" -> PA vs epoch              (single panel)
+    "Position"       -> distance vs epoch        |  PA vs epoch
+    "Position (XY)"  -> XY centroid track (mas)  (single panel)
     "Flux"           -> I flux vs epoch          |  Tb obs vs epoch  (log y-axis)
     "Polarization"   -> P flux vs epoch (log y)  |  EVPA vs epoch
     "Kinematics"     -> speed vs distance        |  X/Y velocity vectors
@@ -47,7 +47,7 @@ _CL_FILL = ["none", "full", "none", "none", "full", "none", "full", "none", "ful
 
 _FREQ_GHZ = 15.4  # U-band
 
-VIEWS = ("Position", "Position Angle", "Flux", "Polarization", "Kinematics")
+VIEWS = ("Position", "Position (XY)", "Flux", "Polarization", "Kinematics")
 
 
 def _cluster_style(cid: int, robust: bool) -> tuple[str, str, bool]:
@@ -503,8 +503,8 @@ def build_summary_figure(
     if view not in VIEWS:
         view = "Position"
 
-    # Position Angle is a single plot; the other four views are top/bottom pairs.
-    is_single = view == "Position Angle"
+    # Position (XY) is a single plot; the other four views are top/bottom pairs.
+    is_single = view == "Position (XY)"
     if is_single:
         fig = make_subplots(rows=1, cols=1)
     else:
@@ -543,8 +543,7 @@ def build_summary_figure(
     motion_fits = {s.cid: _motion_fit(s) for s in slices}
 
     if view == "Position":
-        # Top: distance vs epoch (+ motion-fit overlay). Bottom: the XY
-        # centroid track (equal-aspect spatial plot).
+        # Top: distance vs epoch (+ motion-fit overlay). Bottom: PA vs epoch.
         for s in slices:
             mf = motion_fits.get(s.cid)
             show_fit = (mf.pred_dist
@@ -559,21 +558,26 @@ def build_summary_figure(
                 )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_yaxes(title_text="Distance from origin [mas]", row=1, col=1)
-        # Legend comes from the distance traces (row 1); XY (row 2) reuses the
-        # same legendgroups, so show_legend=False avoids duplicate entries.
-        _draw_xy(fig, slices, row=2, show_legend=False)
-
-    elif view == "Position Angle":
-        # PA vs epoch, on its own panel.
+        # Bottom: PA vs epoch. The core (cid 0) has no meaningful PA, so skip
+        # it (cid > 0). The legend already comes from the distance traces
+        # above; reuse the same legendgroups with show_legend=False to avoid
+        # duplicate entries.
         for s in slices:
             if s.cid > 0:
                 _add_cluster_traces(
-                    fig, s, row=1, col=1, ydata=s.pa,
-                    show_legend=True, ylabel_for_hover="PA",
+                    fig, s, row=2, col=1, ydata=s.pa,
+                    show_legend=False, ylabel_for_hover="PA",
                     error_y_arr=s.sig_pa,
                 )
-        fig.update_xaxes(title_text="Epoch", row=1, col=1)
-        fig.update_yaxes(title_text="PA [deg]", row=1, col=1)
+        fig.update_xaxes(title_text="Epoch", row=2, col=1)
+        fig.update_yaxes(title_text="PA [deg]", row=2, col=1)
+
+    elif view == "Position (XY)":
+        # The XY centroid track (per-cluster (x, y) mas vs core) on its own
+        # full panel — equal mas/pixel. Single-panel, so it gets the whole
+        # pane height and is resized freely via the left/right panel divider
+        # (the intra-pane split handle hides for single-panel views).
+        _draw_xy(fig, slices, row=1, show_legend=True)
 
     elif view == "Flux":
         # Plot raw I flux / Tb on log-scaled axes (10^x ticks); hover shows
