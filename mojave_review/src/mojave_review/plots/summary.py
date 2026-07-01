@@ -367,7 +367,7 @@ def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
     subplot ``row``: +x reversed, a black × at the core, and a 10%-padded range.
     The bottom panel of the Position view. The equal mas/pixel scale is NOT
     enforced here via ``scaleanchor`` (which would lock drag-zoom to the panel
-    aspect). Instead a clientside script (``assets/xy_equal_aspect.js``) keeps
+    aspect). Instead a clientside script (``assets/equal_aspect.js``) keeps
     equal units by letterboxing — it narrows the panel's ``xaxis<row>.domain``
     to match the current ranges after every draw/zoom, so circles stay round
     while the reviewer can still draw an arbitrary-shape zoom box. ``row``
@@ -550,7 +550,7 @@ def build_summary_figure(
     if view == "Position":
         # Top: distance vs epoch (+ motion-fit overlay). Bottom: the XY
         # centroid track (equal-aspect spatial plot; kept equal via the
-        # xy_equal_aspect.js letterbox, flagged below with layout.meta).
+        # equal_aspect.js letterbox, flagged below with layout.meta).
         for s in slices:
             mf = motion_fits.get(s.cid)
             show_fit = (mf.pred_dist

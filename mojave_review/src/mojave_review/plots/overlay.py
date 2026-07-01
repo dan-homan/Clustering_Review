@@ -433,11 +433,14 @@ def build_overlay_figure(
     )
 
     # Axes: +x reversed (astro convention) + equal mas/pixel scale (so a
-    # square in data is a square on screen) AND free-form drag-zoom. The
-    # combination is `scaleanchor` + `constrain="domain"` on both axes:
-    # Plotly preserves the dragged data range exactly and shrinks the
-    # drawable panel area to honor the equal scale (whitespace appears on
-    # the sides or top/bottom under non-square zooms — accepted).
+    # square in data is a square on screen) AND *arbitrary-shape* drag-zoom.
+    # `scaleanchor` would give equal scale but locks the zoom box to the panel
+    # aspect (can't isolate a tall-skinny / wide-flat region). Instead we drop
+    # scaleanchor here and keep equal units by LETTERBOXING: the figure is
+    # tagged `layout.meta = "overlay-equal"` and the clientside
+    # `assets/equal_aspect.js` narrows a *domain* after every draw/zoom so
+    # px/mas match the current ranges (beam + FWHM/3σ ellipses stay round at
+    # any zoom shape). See docs / CLAUDE.md "Equal mas/pixel".
     # ``uirevision`` (passed in by the caller) preserves the user's manual
     # zoom across epoch changes within a (source, model) session. Scoping
     # it to (source, model) — instead of a hard-coded constant — flushes
@@ -448,13 +451,10 @@ def build_overlay_figure(
     fig.update_xaxes(
         title_text="X [mas]",
         range=[x_hi_zoom, x_lo_zoom],     # reversed: +x to the left
-        constrain="domain",
     )
     fig.update_yaxes(
         title_text="Y [mas]",
         range=[y_lo_zoom, y_hi_zoom],
-        scaleanchor="x", scaleratio=1.0,
-        constrain="domain",
     )
     fig.update_layout(
         template="plotly_white",
@@ -462,6 +462,7 @@ def build_overlay_figure(
         margin=dict(l=60, r=20, t=52, b=50),  # room for the 3-line badge
         dragmode="zoom",
         uirevision=uirevision,
+        meta="overlay-equal",   # flag for equal_aspect.js (full-2D letterbox)
     )
 
     # Badge instead of a centered title, top-left, three lines:

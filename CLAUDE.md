@@ -189,29 +189,32 @@ resize on the right).
 ### Plotting conventions (spatial/sky plots) — also `docs/plot_conventions.md`
 
 - **+x to the left** (astronomical). Use explicit `range=[hi, lo]`, not
-  `autorange="reversed"`, so it composes with `scaleanchor`.
-- **Equal mas/pixel**: initial range from `plots/_extent.compute_source_extent`
-  on both axes + `scaleanchor="x"`, `scaleratio=1.0`, `constrain="domain"` on
-  **both** axes → ellipses stay round at every zoom. Trade-off
-  (reviewer-confirmed 2026-05-28): with `scaleanchor` on, drag-zoom is locked to
-  the panel aspect. Reviewer prefers locked-aspect over breaking equal scale —
-  **don't try to "fix" this by dropping `scaleanchor`.** This still holds for the
-  **overlay** and the **Kinematics** vector panel. The **Position view's XY
-  bottom panel** is the deliberate exception (reviewer-requested 2026-07-01): it
-  drops `scaleanchor` so drag-zoom is free-form, and keeps equal units by
-  **letterboxing** — `assets/xy_equal_aspect.js` hooks `plotly_afterplot` on the
-  two summary graphs and, for the figure tagged `layout.meta == "xy-bottom"`,
-  narrows **`xaxis2.domain`** so px/mas match the current ranges at whatever
-  height the top/bottom divider gives the panel (re-entrancy-guarded, like
-  `subplot_resize.js`). **Disjoint ownership:** `subplot_resize.js` owns the
-  vertical split (`yaxis`/`yaxis2.domain`), this script owns only
-  `xaxis2.domain` — no conflict. Horizontal-only letterbox → equal units hold
-  while the box has enough width (normal case); a wide-flat zoom may need the
-  reviewer to shrink the XY panel via the divider to stay equal. The `meta` flag
-  is required because Kinematics' bottom shares the `X/Y [mas]` axis titles but
-  keeps `scaleanchor`. Do NOT restore `scaleanchor` on the XY panel. (Overlay was
-  left on the old scheme on purpose; porting the letterbox there must coexist
-  with the beam relayout callback.)
+  `autorange="reversed"`, so it composes with `scaleanchor` and so the letterbox
+  (below) can read a concrete range.
+- **Equal mas/pixel**: keep px/mas equal so a square in data is a square on
+  screen and ellipses stay round at every zoom. Two mechanisms coexist:
+  - **`scaleanchor`** (`scaleratio=1.0` + `constrain="domain"`) — used by the
+    **Kinematics** vector panel. Equal scale, but drag-zoom is **locked to the
+    panel aspect** (can't isolate a tall-skinny / wide-flat region). Reviewer
+    accepted this there (2026-05-28) — **don't "fix" it by dropping
+    `scaleanchor`** without the letterbox below.
+  - **Letterbox** (`assets/equal_aspect.js`) — used by the **Position view's XY
+    bottom panel** and the **epoch overlay** (reviewer-requested 2026-07-01).
+    Those figures DROP `scaleanchor` (free-form / arbitrary-shape zoom) and the
+    script re-imposes equal units on `plotly_afterplot` by narrowing an axis
+    *domain* so px/mas match the current ranges (re-entrancy-guarded). Mode is
+    chosen by `layout.meta` (titles can't disambiguate — Kinematics' bottom
+    shares `X/Y [mas]` axes but keeps `scaleanchor`):
+    - `meta == "xy-bottom"` (Position bottom subplot): **horizontal-only** —
+      narrows `xaxis2.domain` only. `subplot_resize.js` owns the vertical split
+      (`yaxis`/`yaxis2.domain`); disjoint props → no conflict. Equal units hold
+      while the box has enough width; a wide-flat zoom may need a top/bottom
+      divider nudge to stay equal.
+    - `meta == "overlay-equal"` (overlay single panel): **full-2D** — narrows
+      whichever of `xaxis.domain` / `yaxis.domain` is roomier. Safe alongside the
+      beam callback: that uses `Plotly.restyle` (no relayout event) and ignores
+      domain-only relayouts (keys on `xaxis.range[*]`/`autorange`).
+    Do NOT restore `scaleanchor` on the XY or overlay panels.
 - Arrows: `fig.add_annotation(showarrow=True, arrowhead=2, ...)` — never
   line-mode + triangle-marker hacks.
 - Always show black `×` at `(0,0)` (core); include `(0,0)` in auto-range.
