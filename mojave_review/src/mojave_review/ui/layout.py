@@ -170,20 +170,10 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                         style={"marginLeft": "0.5em", "padding": "0.2em 0.6em",
                                "fontSize": "0.85em"},
                     ),
-                    html.Span("View:", style={"margin": "0 0.5em 0 1.5em"}),
-                    dcc.RadioItems(
-                        id="view-picker",
-                        # label kept short ("PA") to save a line; the value
-                        # stays "Position Angle" (used throughout summary.py /
-                        # callbacks.py).
-                        options=[{"label": ("PA" if v == "Position Angle" else v),
-                                  "value": v}
-                                 for v in ("Position", "Position Angle", "Flux",
-                                           "Polarization", "Kinematics")],
-                        value="Position",
-                        inline=True,
-                        inputStyle={"marginRight": "0.25em", "marginLeft": "0.5em"},
-                    ),
+                    # The left-pane view selector lives in the summary panel
+                    # header (a dropdown that replaces the "Summary plots"
+                    # title), mirroring the right-pane mode selector. It keeps
+                    # id="view-picker" so every consumer is unchanged.
                     # "Visualize recommendations": when ON + model=current, the
                     # summary + overlay are rendered with the user's pending
                     # edits applied to the underlying CSV. Auto-managed when
@@ -268,7 +258,24 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
         [
             html.Div(
                 [
-                    html.H4("Summary plots", style={"margin": "0.25em 0"}),
+                    # Left-pane view selector — replaces the old "Summary plots"
+                    # <h4>, mirroring the right-pane mode dropdown. Same id and
+                    # value strings as the former header radios, so all
+                    # consumers (_refresh_summary, _toggle_scale_row, the
+                    # click-selection callback, the clientside active-epoch
+                    # marker) are unchanged. "PA" label keeps the value
+                    # "Position Angle".
+                    dcc.Dropdown(
+                        id="view-picker",
+                        options=[{"label": ("PA" if v == "Position Angle"
+                                            else v),
+                                  "value": v}
+                                 for v in ("Position", "Position Angle", "Flux",
+                                           "Polarization", "Kinematics")],
+                        value="Position",
+                        clearable=False,
+                        style={"minWidth": "220px"},
+                    ),
                     # Hide the non-robust (slategray) clusters from both the
                     # plots and the legend. Unassigned (-1) / synthetic
                     # (>=1000) clusters are unaffected.
@@ -386,15 +393,65 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
 
     overlay_panel = html.Div(
         [
-            html.H4("Epoch overlay", style={"margin": "0.25em 0"}),
-            epoch_controls,
-            dcc.Loading(
-                dcc.Graph(
-                    id="overlay-graph",
-                    style={"height": "720px"},
-                    responsive=True,
+            # Right-pane mode selector — replaces the old "Epoch overlay" <h4>.
+            # "overlay" shows the per-epoch FITS/cluster overlay (default,
+            # unchanged behaviour); every other value is a build_summary_figure
+            # view string, rendering a SECOND summary plot on the right so two
+            # views can be compared side-by-side. Value strings match the header
+            # view-picker exactly (incl. "Position Angle").
+            html.Div(
+                dcc.Dropdown(
+                    id="right-pane-mode",
+                    options=[
+                        {"label": "Epoch overlay", "value": "overlay"},
+                        {"label": "Summary: Position", "value": "Position"},
+                        {"label": "Summary: PA", "value": "Position Angle"},
+                        {"label": "Summary: Flux", "value": "Flux"},
+                        {"label": "Summary: Polarization",
+                         "value": "Polarization"},
+                        {"label": "Summary: Kinematics", "value": "Kinematics"},
+                    ],
+                    value="overlay",
+                    clearable=False,
+                    style={"minWidth": "220px"},
                 ),
-                type="default",
+                style={"margin": "0.25em 0"},
+            ),
+            # Epoch-overlay mode (default). The epoch controls live inside this
+            # container so they hide together with the overlay graph when a
+            # summary view is selected on the right.
+            html.Div(
+                [
+                    epoch_controls,
+                    dcc.Loading(
+                        dcc.Graph(
+                            id="overlay-graph",
+                            style={"height": "720px"},
+                            responsive=True,
+                        ),
+                        type="default",
+                    ),
+                ],
+                id="overlay-mode-container",
+            ),
+            # Second-summary mode (hidden by default). Its figure is built by
+            # _refresh_summary_right, sharing the left summary's df resolution
+            # (so visualize/agg/selection-highlight all ride along for free).
+            html.Div(
+                dcc.Loading(
+                    dcc.Graph(
+                        id="summary-graph-right",
+                        style={"height": "720px"},
+                        responsive=True,
+                        config={
+                            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+                            "displaylogo": False,
+                        },
+                    ),
+                    type="default",
+                ),
+                id="summary-right-container",
+                style={"display": "none"},
             ),
         ],
         id="overlay-panel",

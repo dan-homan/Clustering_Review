@@ -756,26 +756,17 @@ def register_callbacks(
         return opts, (opts[0]["value"] if opts else None)
 
     # ---- summary figure --------------------------------------------------
-    @app.callback(
-        Output("summary-graph", "figure"),
-        Input("source-picker", "value"),
-        Input("model-picker", "value"),
-        Input("view-picker", "value"),
-        Input("vector-scale", "value"),
-        Input("selection-store", "data"),
-        Input("visualize-checkbox", "value"),
-        Input("cluster-feedback-table", "data"),
-        Input("edits-store", "data"),
-        Input("no-changes-checkbox", "value"),
-        Input("hide-non-robust-checkbox", "value"),
-        Input("only-3sigma-checkbox", "value"),
-        Input("reload-counter", "data"),
-        Input("agg-preview-rec", "data"),
-    )
-    def _refresh_summary(source_folder, model_key, view, vector_scale,
-                         selection, visualize_val, cluster_rows, edits,
-                         no_changes_val, hide_non_robust_val, only_3sigma_val,
-                         _reload_counter, agg_rec):
+    def _build_summary_fig(source_folder, model_key, view, vector_scale,
+                           selection, visualize_val, cluster_rows, edits,
+                           no_changes_val, hide_non_robust_val, only_3sigma_val,
+                           agg_rec, uirev_prefix):
+        """Resolve the plot dataframe and build a summary figure.
+
+        Shared by the left (header ``view-picker``) summary and the right-pane
+        second summary so their rec-application, position error bars and
+        gold-diamond selection highlight can never drift apart. ``uirev_prefix``
+        keeps the two graphs' zoom state independent.
+        """
         if not source_folder or not model_key:
             return go.Figure()
         src = _source_from_folder(source_folder)
@@ -829,9 +820,86 @@ def register_callbacks(
         # axes themselves. The key changes on (source, model, view) because
         # those genuinely swap the underlying data domain or the axis
         # identities (Position vs Kinematics, etc.), and reusing the old
-        # zoom there would just be confusing.
-        fig.update_layout(uirevision=f"summary:{source_folder}:{model_key}:{view}")
+        # zoom there would just be confusing. The prefix keeps the left and
+        # right summary graphs from sharing (and clobbering) each other's zoom.
+        fig.update_layout(
+            uirevision=f"{uirev_prefix}:{source_folder}:{model_key}:{view}")
         return fig
+
+    @app.callback(
+        Output("summary-graph", "figure"),
+        Input("source-picker", "value"),
+        Input("model-picker", "value"),
+        Input("view-picker", "value"),
+        Input("vector-scale", "value"),
+        Input("selection-store", "data"),
+        Input("visualize-checkbox", "value"),
+        Input("cluster-feedback-table", "data"),
+        Input("edits-store", "data"),
+        Input("no-changes-checkbox", "value"),
+        Input("hide-non-robust-checkbox", "value"),
+        Input("only-3sigma-checkbox", "value"),
+        Input("reload-counter", "data"),
+        Input("agg-preview-rec", "data"),
+    )
+    def _refresh_summary(source_folder, model_key, view, vector_scale,
+                         selection, visualize_val, cluster_rows, edits,
+                         no_changes_val, hide_non_robust_val, only_3sigma_val,
+                         _reload_counter, agg_rec):
+        return _build_summary_fig(
+            source_folder, model_key, view, vector_scale, selection,
+            visualize_val, cluster_rows, edits, no_changes_val,
+            hide_non_robust_val, only_3sigma_val, agg_rec, "summary")
+
+    # ---- second summary (right pane) -------------------------------------
+    # Renders a second summary view in place of the epoch overlay when the
+    # right-pane-mode selector is set to a view (not "overlay"). Same inputs as
+    # the left summary EXCEPT the view comes from right-pane-mode; the right
+    # pane does not originate selections (read-only), but the gold-diamond
+    # highlight still shows because ``select`` rides along in the resolved df.
+    @app.callback(
+        Output("summary-graph-right", "figure"),
+        Input("source-picker", "value"),
+        Input("model-picker", "value"),
+        Input("right-pane-mode", "value"),
+        Input("vector-scale", "value"),
+        Input("selection-store", "data"),
+        Input("visualize-checkbox", "value"),
+        Input("cluster-feedback-table", "data"),
+        Input("edits-store", "data"),
+        Input("no-changes-checkbox", "value"),
+        Input("hide-non-robust-checkbox", "value"),
+        Input("only-3sigma-checkbox", "value"),
+        Input("reload-counter", "data"),
+        Input("agg-preview-rec", "data"),
+    )
+    def _refresh_summary_right(source_folder, model_key, mode, vector_scale,
+                               selection, visualize_val, cluster_rows, edits,
+                               no_changes_val, hide_non_robust_val,
+                               only_3sigma_val, _reload_counter, agg_rec):
+        # "overlay" → the epoch overlay is showing; the right summary is hidden,
+        # so do no work.
+        if mode == "overlay":
+            return go.Figure()
+        return _build_summary_fig(
+            source_folder, model_key, mode, vector_scale, selection,
+            visualize_val, cluster_rows, edits, no_changes_val,
+            hide_non_robust_val, only_3sigma_val, agg_rec, "summary-right")
+
+    # ---- right-pane mode toggle (overlay ⇄ second summary) ----------------
+    @app.callback(
+        Output("overlay-mode-container", "style"),
+        Output("summary-right-container", "style"),
+        Input("right-pane-mode", "value"),
+    )
+    def _toggle_right_pane(mode):
+        # Hiding overlay-mode-container also hides the epoch controls (◀/▶,
+        # slider, label, montage) it wraps — satisfies "hide epoch controls in
+        # alt modes". The epoch buttons stay in the DOM so ←/→ resolve
+        # harmlessly; keyboard.js is untouched.
+        if mode == "overlay":
+            return {}, {"display": "none"}
+        return {"display": "none"}, {}
 
     # ---- selection store: click toggles -----------------------------------
     # Click-only on purpose. Box-select / lasso-select have been stripped
@@ -932,10 +1000,13 @@ def register_callbacks(
     @app.callback(
         Output("vector-scale-row", "style"),
         Input("view-picker", "value"),
+        Input("right-pane-mode", "value"),
     )
-    def _toggle_scale_row(view):
+    def _toggle_scale_row(view, right_mode):
         base = {"alignItems": "center", "padding": "0.25em 1em", "fontSize": "0.9em"}
-        return {**base, "display": "flex" if view == "Kinematics" else "none"}
+        # Show the slider when either pane is on Kinematics (it drives both).
+        show = view == "Kinematics" or right_mode == "Kinematics"
+        return {**base, "display": "flex" if show else "none"}
 
     # ---- epoch slider population (depends on source + model) -------------
     @app.callback(
