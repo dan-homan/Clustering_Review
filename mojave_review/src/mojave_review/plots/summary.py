@@ -1,10 +1,10 @@
 """Plotly port of cluster_code.make_summary_plots.
 
 Renders per-cluster summary plots for one of five views (top/bottom pair,
-except "Position (XY)" which is a single panel):
+except "Position Angle" which is a single panel):
 
-    "Position"       -> distance vs epoch        |  PA vs epoch
-    "Position (XY)"  -> XY centroid track (mas)  (single panel)
+    "Position"       -> distance vs epoch        |  XY centroid track (mas)
+    "Position Angle" -> PA vs epoch              (single panel)
     "Flux"           -> I flux vs epoch          |  Tb obs vs epoch  (log y-axis)
     "Polarization"   -> P flux vs epoch (log y)  |  EVPA vs epoch
     "Kinematics"     -> speed vs distance        |  X/Y velocity vectors
@@ -47,7 +47,7 @@ _CL_FILL = ["none", "full", "none", "none", "full", "none", "full", "none", "ful
 
 _FREQ_GHZ = 15.4  # U-band
 
-VIEWS = ("Position", "Position (XY)", "Flux", "Polarization", "Kinematics")
+VIEWS = ("Position", "Position Angle", "Flux", "Polarization", "Kinematics")
 
 
 def _cluster_style(cid: int, robust: bool) -> tuple[str, str, bool]:
@@ -364,11 +364,14 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
 def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
              show_legend: bool) -> None:
     """Draw the XY centroid-track panel (per-cluster (x, y) mas vs core) on
-    subplot ``row``: +x reversed, equal mas/pixel (scaleanchor + constrain),
-    a black × at the core, and a 10%-padded range. Used as the bottom panel of
-    the Position view. ``row`` selects the axis pair (1 -> x/y, 2 -> x2/y2)."""
-    suf = "" if row == 1 else str(row)
-    xaxis = f"x{suf}"
+    subplot ``row``: +x reversed, a black × at the core, and a 10%-padded range.
+    The bottom panel of the Position view. The equal mas/pixel scale is NOT
+    enforced here via ``scaleanchor`` (which would lock drag-zoom to the panel
+    aspect). Instead a clientside script (``assets/xy_equal_aspect.js``) keeps
+    equal units by letterboxing — it narrows the panel's ``xaxis<row>.domain``
+    to match the current ranges after every draw/zoom, so circles stay round
+    while the reviewer can still draw an arbitrary-shape zoom box. ``row``
+    selects the axis pair (1 -> x/y, 2 -> x2/y2)."""
     all_x: list[float] = [0.0]
     all_y: list[float] = [0.0]
     for s in slices:
@@ -391,15 +394,17 @@ def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
     ay = np.asarray(all_y, dtype=float)
     x_span = float(ax.max() - ax.min()) or 1.0
     y_span = float(ay.max() - ay.min()) or 1.0
+    # No scaleanchor/constrain: equal units come from the letterbox script
+    # (see docstring). The explicit reversed x-range + padded y-range set the
+    # initial framing; the script then equalizes px/mas by shrinking a domain.
     fig.update_xaxes(title_text="X [mas]",
                      range=[float(ax.max()) + 0.1 * x_span,
                             float(ax.min()) - 0.1 * x_span],   # reversed
-                     constrain="domain", row=row, col=1)
+                     row=row, col=1)
     fig.update_yaxes(title_text="Y [mas]",
                      range=[float(ay.min()) - 0.1 * y_span,
                             float(ay.max()) + 0.1 * y_span],
-                     scaleanchor=xaxis, scaleratio=1.0,
-                     constrain="domain", row=row, col=1)
+                     row=row, col=1)
 
 
 # ---------------------------------------------------------------------------
@@ -503,8 +508,8 @@ def build_summary_figure(
     if view not in VIEWS:
         view = "Position"
 
-    # Position (XY) is a single plot; the other four views are top/bottom pairs.
-    is_single = view == "Position (XY)"
+    # Position Angle is a single plot; the other four views are top/bottom pairs.
+    is_single = view == "Position Angle"
     if is_single:
         fig = make_subplots(rows=1, cols=1)
     else:
@@ -543,7 +548,9 @@ def build_summary_figure(
     motion_fits = {s.cid: _motion_fit(s) for s in slices}
 
     if view == "Position":
-        # Top: distance vs epoch (+ motion-fit overlay). Bottom: PA vs epoch.
+        # Top: distance vs epoch (+ motion-fit overlay). Bottom: the XY
+        # centroid track (equal-aspect spatial plot; kept equal via the
+        # xy_equal_aspect.js letterbox, flagged below with layout.meta).
         for s in slices:
             mf = motion_fits.get(s.cid)
             show_fit = (mf.pred_dist
@@ -558,26 +565,25 @@ def build_summary_figure(
                 )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_yaxes(title_text="Distance from origin [mas]", row=1, col=1)
-        # Bottom: PA vs epoch. The core (cid 0) has no meaningful PA, so skip
-        # it (cid > 0). The legend already comes from the distance traces
-        # above; reuse the same legendgroups with show_legend=False to avoid
-        # duplicate entries.
+        # Legend comes from the distance traces (row 1); XY (row 2) reuses the
+        # same legendgroups, so show_legend=False avoids duplicate entries.
+        _draw_xy(fig, slices, row=2, show_legend=False)
+        # Tell the letterbox script that THIS figure's bottom panel is the
+        # equal-aspect XY track (Kinematics' bottom shares the "X/Y [mas]" axis
+        # titles but keeps scaleanchor, so titles can't disambiguate).
+        fig.update_layout(meta="xy-bottom")
+
+    elif view == "Position Angle":
+        # PA vs epoch, on its own panel.
         for s in slices:
             if s.cid > 0:
                 _add_cluster_traces(
-                    fig, s, row=2, col=1, ydata=s.pa,
-                    show_legend=False, ylabel_for_hover="PA",
+                    fig, s, row=1, col=1, ydata=s.pa,
+                    show_legend=True, ylabel_for_hover="PA",
                     error_y_arr=s.sig_pa,
                 )
-        fig.update_xaxes(title_text="Epoch", row=2, col=1)
-        fig.update_yaxes(title_text="PA [deg]", row=2, col=1)
-
-    elif view == "Position (XY)":
-        # The XY centroid track (per-cluster (x, y) mas vs core) on its own
-        # full panel — equal mas/pixel. Single-panel, so it gets the whole
-        # pane height and is resized freely via the left/right panel divider
-        # (the intra-pane split handle hides for single-panel views).
-        _draw_xy(fig, slices, row=1, show_legend=True)
+        fig.update_xaxes(title_text="Epoch", row=1, col=1)
+        fig.update_yaxes(title_text="PA [deg]", row=1, col=1)
 
     elif view == "Flux":
         # Plot raw I flux / Tb on log-scaled axes (10^x ticks); hover shows

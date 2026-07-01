@@ -13,7 +13,7 @@
 // the graph div's plotly_afterplot event — the analogue of the beam callback's
 // "re-apply on figure change" discipline.
 //
-// Single-plot views (Position (XY)) have no yaxis2; the handle hides itself
+// Single-plot views (Position Angle) have no yaxis2; the handle hides itself
 // and the relayout is skipped.
 
 (function () {

@@ -778,11 +778,11 @@ def register_callbacks(
             edits=edits, no_changes_val=no_changes_val, agg_rec=agg_rec,
         )
         # 1-sigma centroid-position uncertainties from the clean components,
-        # for error bars on the Position view (distance + PA panels) and the
-        # Position (XY) view (x/y error bars). Other views don't use them, so
+        # for error bars on the Position view (distance + XY panels) and the
+        # Position Angle view (PA error bars). Other views don't use them, so
         # skip the work. Computed on the plotted (rec-applied) df so CC→cluster
         # membership matches what's shown. Decoration only — never break the plot.
-        if view in ("Position", "Position (XY)"):
+        if view in ("Position", "Position Angle"):
             try:
                 eff_bundle = load_bundle(
                     source_folder, _effective_model_for_load(model_key))
@@ -1252,9 +1252,9 @@ def register_callbacks(
     # user's zoom is preserved (uirevision untouched). Re-fires on summary-figure
     # rebuilds too (a fresh figure comes back with no shapes). Shapes are
     # exclusively ours, so a blanket reset to [] on the non-epoch views is safe.
-    # Per-view epoch axes: Position is distance (x) over PA (x2), both epoch, so
-    # both get the line; Position (XY) is the spatial centroid track (NO epoch
-    # axis), so it gets none; Flux/Polarization are both-epoch (x + x2).
+    # Per-view epoch axes: Position's bottom (x2) is the XY mas plot (NOT epoch),
+    # so only its top (x) gets the line; Position Angle is a single epoch panel
+    # (x); Flux/Polarization are both-epoch (x + x2).
     app.clientside_callback(
         """
         function(epoch, view, _figure) {
@@ -1264,7 +1264,8 @@ def register_callbacks(
             if (!gd || !window.Plotly) return window.dash_clientside.no_update;
 
             var epochAxes = {
-                'Position': ['x', 'x2'],
+                'Position': ['x'],
+                'Position Angle': ['x'],
                 'Flux': ['x', 'x2'],
                 'Polarization': ['x', 'x2']
             };

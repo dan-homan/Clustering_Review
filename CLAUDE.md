@@ -120,12 +120,12 @@ http://www.cv.nrao.edu/2cmVLBA/data/<source>/<epoch_name>/<source>.<band>.<epoch
 ## Web app: views and conventions
 
 `build_summary_figure(view=...)` → a 2-row figure for four views, single-plot
-for `Position (XY)`:
+for `Position Angle`:
 
 | View | Top | Bottom |
 |---|---|---|
-| Position | distance vs epoch (+ polyfit), 1σ bars | PA vs epoch, 1σ bars (core skipped) |
-| Position (XY) | *(single)* centroid track (x,y) mas vs core, +x reversed, equal scale, 1σ bars | — |
+| Position | distance vs epoch (+ polyfit), 1σ bars | centroid track (x,y) mas vs core, +x reversed, equal scale (letterbox), 1σ bars |
+| Position Angle | *(single)* PA vs epoch, 1σ bars | — |
 | Flux | I flux vs epoch (log y) | Tb vs epoch (log y; 15.4 GHz, z) |
 | Polarization | P flux vs epoch (log y) | EVPA vs epoch |
 | Kinematics | speed vs distance, 1σ bars, axes at 0 | X/Y velocity vectors w/ arrowheads, +x reversed |
@@ -195,7 +195,23 @@ resize on the right).
   **both** axes → ellipses stay round at every zoom. Trade-off
   (reviewer-confirmed 2026-05-28): with `scaleanchor` on, drag-zoom is locked to
   the panel aspect. Reviewer prefers locked-aspect over breaking equal scale —
-  **don't try to "fix" this by dropping `scaleanchor`.**
+  **don't try to "fix" this by dropping `scaleanchor`.** This still holds for the
+  **overlay** and the **Kinematics** vector panel. The **Position view's XY
+  bottom panel** is the deliberate exception (reviewer-requested 2026-07-01): it
+  drops `scaleanchor` so drag-zoom is free-form, and keeps equal units by
+  **letterboxing** — `assets/xy_equal_aspect.js` hooks `plotly_afterplot` on the
+  two summary graphs and, for the figure tagged `layout.meta == "xy-bottom"`,
+  narrows **`xaxis2.domain`** so px/mas match the current ranges at whatever
+  height the top/bottom divider gives the panel (re-entrancy-guarded, like
+  `subplot_resize.js`). **Disjoint ownership:** `subplot_resize.js` owns the
+  vertical split (`yaxis`/`yaxis2.domain`), this script owns only
+  `xaxis2.domain` — no conflict. Horizontal-only letterbox → equal units hold
+  while the box has enough width (normal case); a wide-flat zoom may need the
+  reviewer to shrink the XY panel via the divider to stay equal. The `meta` flag
+  is required because Kinematics' bottom shares the `X/Y [mas]` axis titles but
+  keeps `scaleanchor`. Do NOT restore `scaleanchor` on the XY panel. (Overlay was
+  left on the old scheme on purpose; porting the letterbox there must coexist
+  with the beam relayout callback.)
 - Arrows: `fig.add_annotation(showarrow=True, arrowhead=2, ...)` — never
   line-mode + triangle-marker hacks.
 - Always show black `×` at `(0,0)` (core); include `(0,0)` in auto-range.
