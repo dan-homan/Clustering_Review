@@ -300,6 +300,20 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                         style={"marginLeft": "1.5em", "fontSize": "0.85em",
                                "color": "#444"},
                     ),
+                    # Force a full axis re-init on BOTH summary panes (bumps
+                    # summary-reset-counter, folded into their uirevision) — the
+                    # summary's equivalent of the overlay's Reset view. Also the
+                    # one-click flush if an equal-aspect letterbox ever leaves a
+                    # panel's zoom/domain in a stuck state (double-click / the
+                    # modebar home can't clear that, since they don't change
+                    # uirevision).
+                    html.Button(
+                        "↺ Reset view",
+                        id="summary-reset", n_clicks=0,
+                        title="Reset both summary panels to the default zoom",
+                        style={"marginLeft": "1.5em", "padding": "0.2em 0.6em",
+                               "fontSize": "0.85em"},
+                    ),
                 ],
                 style={"display": "flex", "alignItems": "center"},
             ),
@@ -482,6 +496,10 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
             # the overlay's uirevision key so a click forces a complete
             # redraw + axis reset.
             dcc.Store(id="overlay-reset-counter", data=0),
+            # Same idea for the two SUMMARY graphs: bumped by the summary
+            # "Reset view" button, folded into both summary panes' uirevision
+            # for a one-click axis re-init (flushes any stuck letterbox domain).
+            dcc.Store(id="summary-reset-counter", data=0),
             # Increments whenever the user clicks "↻ Reload"; participates
             # as an Input on every callback that reads load_bundle, so a
             # click forces a re-render with freshly-read data. Pairs with

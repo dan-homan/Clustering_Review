@@ -759,13 +759,16 @@ def register_callbacks(
     def _build_summary_fig(source_folder, model_key, view, vector_scale,
                            selection, visualize_val, cluster_rows, edits,
                            no_changes_val, hide_non_robust_val, only_3sigma_val,
-                           agg_rec, uirev_prefix):
+                           agg_rec, uirev_prefix, reset_counter=0):
         """Resolve the plot dataframe and build a summary figure.
 
         Shared by the left (header ``view-picker``) summary and the right-pane
         second summary so their rec-application, position error bars and
         gold-diamond selection highlight can never drift apart. ``uirev_prefix``
-        keeps the two graphs' zoom state independent.
+        keeps the two graphs' zoom state independent; ``reset_counter`` folds
+        into the key so the "Reset view" button forces a full axis re-init
+        (the summary's equivalent of the overlay's Reset view — a one-click
+        flush for any stale axis/domain state, e.g. a letterbox that got stuck).
         """
         if not source_folder or not model_key:
             return go.Figure()
@@ -823,7 +826,8 @@ def register_callbacks(
         # zoom there would just be confusing. The prefix keeps the left and
         # right summary graphs from sharing (and clobbering) each other's zoom.
         fig.update_layout(
-            uirevision=f"{uirev_prefix}:{source_folder}:{model_key}:{view}")
+            uirevision=(f"{uirev_prefix}:{source_folder}:{model_key}:{view}"
+                        f":{reset_counter or 0}"))
         return fig
 
     @app.callback(
@@ -841,15 +845,17 @@ def register_callbacks(
         Input("only-3sigma-checkbox", "value"),
         Input("reload-counter", "data"),
         Input("agg-preview-rec", "data"),
+        Input("summary-reset-counter", "data"),
     )
     def _refresh_summary(source_folder, model_key, view, vector_scale,
                          selection, visualize_val, cluster_rows, edits,
                          no_changes_val, hide_non_robust_val, only_3sigma_val,
-                         _reload_counter, agg_rec):
+                         _reload_counter, agg_rec, summary_reset):
         return _build_summary_fig(
             source_folder, model_key, view, vector_scale, selection,
             visualize_val, cluster_rows, edits, no_changes_val,
-            hide_non_robust_val, only_3sigma_val, agg_rec, "summary")
+            hide_non_robust_val, only_3sigma_val, agg_rec, "summary",
+            reset_counter=summary_reset)
 
     # ---- second summary (right pane) -------------------------------------
     # Renders a second summary view in place of the epoch overlay when the
@@ -872,11 +878,13 @@ def register_callbacks(
         Input("only-3sigma-checkbox", "value"),
         Input("reload-counter", "data"),
         Input("agg-preview-rec", "data"),
+        Input("summary-reset-counter", "data"),
     )
     def _refresh_summary_right(source_folder, model_key, mode, vector_scale,
                                selection, visualize_val, cluster_rows, edits,
                                no_changes_val, hide_non_robust_val,
-                               only_3sigma_val, _reload_counter, agg_rec):
+                               only_3sigma_val, _reload_counter, agg_rec,
+                               summary_reset):
         # "overlay" → the epoch overlay is showing; the right summary is hidden,
         # so do no work.
         if mode == "overlay":
@@ -884,7 +892,22 @@ def register_callbacks(
         return _build_summary_fig(
             source_folder, model_key, mode, vector_scale, selection,
             visualize_val, cluster_rows, edits, no_changes_val,
-            hide_non_robust_val, only_3sigma_val, agg_rec, "summary-right")
+            hide_non_robust_val, only_3sigma_val, agg_rec, "summary-right",
+            reset_counter=summary_reset)
+
+    # ---- summary Reset view button ---------------------------------------
+    # Bumps a counter folded into BOTH summary graphs' uirevision, forcing a
+    # full axis re-init on click — the summary's equivalent of the overlay's
+    # Reset view. One-click flush for stale axis / domain state (e.g. an
+    # equal-aspect letterbox that got stuck), covering either pane.
+    @app.callback(
+        Output("summary-reset-counter", "data"),
+        Input("summary-reset", "n_clicks"),
+        State("summary-reset-counter", "data"),
+        prevent_initial_call=True,
+    )
+    def _bump_summary_reset(_n, current):
+        return int(current or 0) + 1
 
     # ---- right-pane mode toggle (overlay ⇄ second summary) ----------------
     @app.callback(

@@ -201,10 +201,10 @@ resize on the right).
   - **Letterbox** (`assets/equal_aspect.js`) — used by the **Position view's XY
     bottom panel** and the **epoch overlay** (reviewer-requested 2026-07-01).
     Those figures DROP `scaleanchor` (free-form / arbitrary-shape zoom) and the
-    script re-imposes equal units on `plotly_afterplot` by narrowing an axis
-    *domain* so px/mas match the current ranges (re-entrancy-guarded). Mode is
-    chosen by `layout.meta` (titles can't disambiguate — Kinematics' bottom
-    shares `X/Y [mas]` axes but keeps `scaleanchor`):
+    script re-imposes equal units by narrowing an axis *domain* so px/mas match
+    the current ranges. Mode is chosen by `layout.meta` (titles can't
+    disambiguate — Kinematics' bottom shares `X/Y [mas]` axes but keeps
+    `scaleanchor`):
     - `meta == "xy-bottom"` (Position bottom subplot): **horizontal-only** —
       narrows `xaxis2.domain` only. `subplot_resize.js` owns the vertical split
       (`yaxis`/`yaxis2.domain`); disjoint props → no conflict. Equal units hold
@@ -215,6 +215,20 @@ resize on the right).
       beam callback: that uses `Plotly.restyle` (no relayout event) and ignores
       domain-only relayouts (keys on `xaxis.range[*]`/`autorange`).
     Do NOT restore `scaleanchor` on the XY or overlay panels.
+    - **Self-healing (why a stuck zoom can't survive):** the written domains are
+      preserved by the figure's constant `uirevision` (for zoom persistence), so
+      a bad domain would otherwise stick — and the modebar **home / double-click
+      reset ranges but NOT domains** and don't bump `uirevision`, so they can't
+      clear it. The script therefore recomputes on **both** `plotly_afterplot`
+      AND `plotly_relayout` (the latter fires once with the *settled* ranges
+      after any interaction, incl. a reset), rejects non-finite/transient inputs,
+      and the re-entrancy guard is bulletproofed (try/catch + `finally` +
+      watchdog) so it can never latch on. So the letterbox always re-converges
+      and `uirevision` only ever preserves a *good* domain. Belt-and-braces: the
+      **"Reset view"** buttons bump a counter folded into `uirevision`
+      (`overlay-reset-counter`; `summary-reset-counter` for BOTH summary panes)
+      → full axis re-init, the only one-click flush that also survives a stuck
+      domain since it changes the key.
 - Arrows: `fig.add_annotation(showarrow=True, arrowhead=2, ...)` — never
   line-mode + triangle-marker hacks.
 - Always show black `×` at `(0,0)` (core); include `(0,0)` in auto-range.
