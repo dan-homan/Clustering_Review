@@ -30,7 +30,7 @@ from plotly.subplots import make_subplots
 
 _MPL_COLOR = {
     "b": "blue", "g": "green", "r": "red", "m": "magenta",
-    "y": "goldenrod", "gray": "gray", "c": "cyan", "k": "black",
+    "y": "goldenrod", "gray": "darkorange", "c": "cyan", "k": "black",
 }
 _CL_COLORS = ["b", "g", "r", "m", "y", "gray"]
 
