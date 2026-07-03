@@ -721,6 +721,7 @@ def auto_balance(
     current_assignments: dict[str, list[str]],
     submitted_by: dict[str, set[str]],
     review_target: int = DEFAULT_REVIEW_TARGET,
+    only_sources: set[str] | None = None,
 ) -> dict[str, list[str]]:
     """Greedy longest-processing-time-first (LPT) load balancer.
 
@@ -728,6 +729,12 @@ def auto_balance(
     existing assignments — existing records are never removed or moved
     by this function. (Bulk reassignment is a separate explicit
     operation; see :func:`reassign_queue`.)
+
+    ``only_sources`` restricts which sources get slots FILLED (e.g. the
+    dashboard's "only unassigned sources" mode) — but every entry in
+    ``scored_sources`` still seeds reviewer load, so assignments to
+    out-of-scope sources still count against a reviewer's share. Pass
+    the full scored open-source list either way.
 
     Rules (in order):
 
@@ -767,6 +774,8 @@ def auto_balance(
         key=lambda d: (-d.balance_weight, d.source),
     )
     for sd in sources_sorted:
+        if only_sources is not None and sd.source not in only_sources:
+            continue
         committed = committed_per_source.get(sd.source, set())
         slots = review_target - len(committed)
         if slots <= 0:

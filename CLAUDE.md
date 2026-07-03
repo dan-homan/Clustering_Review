@@ -623,6 +623,9 @@ In `dashboard_callbacks.py`; each writes only `store.assignments`, navigates via
 `url.href` (prefix-aware):
 - **🔀 Auto-balance** — fill open slots (LPT on `balance_weight`); additions
   only. `credit_prior_submissions` pre-seeds completed load. Admin excluded.
+  **"Only unassigned sources"** checkbox → `auto_balance(only_sources=)`:
+  fills slots only on open sources with no outstanding (non-`submitted`)
+  assignment; full scored list still seeds load.
 - **⚖ Top-up rebalance** — *move* pending to even out load. "Consider completed"
   checkbox → `rebalance_pending(base_load=)`.
 - **🏖 Redistribute (break)** — spread one queue across the pool, optional cap +

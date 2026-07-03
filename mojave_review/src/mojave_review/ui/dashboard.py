@@ -1202,6 +1202,17 @@ def _admin_controls_panel(
                         style={"color": "#666", "fontSize": "0.85em",
                                "marginBottom": "0.4em"},
                     ),
+                    dcc.Checklist(
+                        id="dashboard-ab-only-new",
+                        options=[{"label": " Only unassigned sources "
+                                           "(assign newly ready-to-review "
+                                           "sources; don't top up "
+                                           "partially-assigned ones)",
+                                  "value": "only_new"}],
+                        value=[],
+                        style={"fontSize": "0.85em",
+                               "marginBottom": "0.4em"},
+                    ),
                     html.Div(
                         id="dashboard-ab-preview-body",
                         style={"maxHeight": "44vh", "overflowY": "auto",

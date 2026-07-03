@@ -108,14 +108,26 @@ def register_dashboard_callbacks(
         Output("dashboard-ab-preview-body", "children"),
         Output("dashboard-ab-preview-store", "data"),
         Input("dashboard-auto-balance-btn", "n_clicks"),
+        Input("dashboard-ab-only-new", "value"),
         Input("dashboard-ab-close", "n_clicks"),
         Input("dashboard-ab-cancel", "n_clicks"),
+        State("dashboard-ab-modal", "style"),
         prevent_initial_call=True,
     )
-    def _ab_open_or_close(open_n, close_n, cancel_n):
+    def _ab_open_or_close(open_n, only_new_value, close_n, cancel_n,
+                          modal_style):
         from dash import ctx
-        if not ctx.triggered_id or ctx.triggered_id != "dashboard-auto-balance-btn":
+        if ctx.triggered_id not in ("dashboard-auto-balance-btn",
+                                    "dashboard-ab-only-new"):
             return {"display": "none"}, no_update, None
+        # Toggling the "only unassigned" checkbox re-runs the preview in
+        # place — but only while the modal is open. A checkbox Input on a
+        # dynamically-rendered page can fire spuriously on render; the
+        # hidden-modal check keeps that from popping the modal open.
+        if ctx.triggered_id == "dashboard-ab-only-new" and (
+                not modal_style or modal_style.get("display") == "none"):
+            return no_update, no_update, no_update
+        only_new = bool(only_new_value) and "only_new" in only_new_value
 
         all_sources = list_sources(results_dir)
         # Pre-credit pass first: every source the team has ever
@@ -144,6 +156,27 @@ def register_dashboard_callbacks(
         ]
         scored = score_all(open_sources)
 
+        # "Only unassigned" mode: fill slots only on sources nobody is
+        # currently slated to review — a source counts as assigned when
+        # any reviewer holds it with an OUTSTANDING (not-yet-submitted)
+        # record. Credit records (prior submissions) read as submitted,
+        # so a source covered only by an unsolicited submission stays
+        # eligible for its remaining slot. The full scored list still
+        # feeds auto_balance so out-of-scope assignments count as load.
+        only_sources = None
+        if only_new:
+            open_names = {s.source for s in open_sources}
+            outstanding: set[str] = set()
+            for rname, records in store.assignments.items():
+                for rec in records:
+                    if rec.source in outstanding or rec.source not in open_names:
+                        continue
+                    if assignment_status(
+                            recommendations_dir, rec.source, rname,
+                    ) != "submitted":
+                        outstanding.add(rec.source)
+            only_sources = open_names - outstanding
+
         # The admin drives Stage 1/2 baseline work, not Stage-3 reviews,
         # so exclude them from the auto-balance pool (item 4).
         me = current_reviewer(reviewer)
@@ -165,6 +198,7 @@ def register_dashboard_callbacks(
             reviewers=reviewers,
             current_assignments=current_map,
             submitted_by=sub_map,
+            only_sources=only_sources,
         )
 
         total_new = sum(len(v) for v in additions.values())
@@ -181,6 +215,17 @@ def register_dashboard_callbacks(
                 style={"color": "#555", "fontSize": "0.85em",
                        "marginBottom": "0.3em"},
             ),
+        ]
+        if only_sources is not None:
+            header_lines.append(html.Div(
+                f"Only unassigned sources: {len(only_sources)} of "
+                f"{len(open_sources)} open sources are eligible "
+                f"(sources with an outstanding assignment are skipped; "
+                f"existing assignments still count as load).",
+                style={"color": "#555", "fontSize": "0.85em",
+                       "marginBottom": "0.3em"},
+            ))
+        header_lines += [
             html.Div(
                 f"Credited {n_credited} prior submission(s) as "
                 f"completed assignments — these will be saved when "
@@ -191,9 +236,11 @@ def register_dashboard_callbacks(
         ]
 
         if total_new == 0:
+            scope = ("unassigned open source"
+                     if only_sources is not None else "open source")
             body_inner = html.Div(
-                "No new assignments needed — every open source already "
-                "has enough committed reviewers.",
+                f"No new assignments needed — every {scope} already "
+                f"has enough committed reviewers.",
                 style={"color": "#666", "padding": "0.4em"},
             )
         else:

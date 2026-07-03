@@ -201,7 +201,12 @@ no need to edit anything directly on the server:
 **Assignment tools (all preview-then-apply, all move only `assignments`):**
 
 - **🔀 Auto-balance** — fill open review slots across the active pool
-  (additions only; won't move existing work).
+  (additions only; won't move existing work). An **"Only unassigned
+  sources"** checkbox restricts it to sources nobody currently holds an
+  outstanding (not-yet-submitted) assignment for — use it to hand out
+  newly Stage-2-done sources without also topping up the second slot on
+  partially-assigned ones. Existing assignments still count as load
+  either way.
 - **⚖ Top-up rebalance** — *move* PENDING assignments to even out load,
   so a reviewer added *after* seeding (the common case) gets a fair share
   instead of nothing. Minimal churn; submitted / in-progress work never

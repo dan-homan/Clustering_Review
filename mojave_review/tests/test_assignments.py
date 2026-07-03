@@ -291,6 +291,38 @@ def test_auto_balance_idempotent_when_fully_committed():
     assert all(srcs == [] for srcs in additions.values())
 
 
+def test_auto_balance_only_sources_restricts_slot_filling():
+    # X is already partially assigned; with only_sources={"Y"} the
+    # balancer must not top up X — only the unassigned Y gets slots.
+    srcs = [_sd("X", 100.0), _sd("Y", 50.0)]
+    additions = auto_balance(
+        scored_sources=srcs,
+        reviewers=["alice", "bob", "chris"],
+        current_assignments={"alice": ["X"]},
+        submitted_by={},
+        only_sources={"Y"},
+    )
+    assert all("X" not in v for v in additions.values())
+    assigned_to_Y = [r for r, v in additions.items() if "Y" in v]
+    assert len(assigned_to_Y) == 2
+
+
+def test_auto_balance_only_sources_still_counts_out_of_scope_load():
+    # Alice already holds the heavy out-of-scope source A. Even though
+    # A gets no new slots, her load must reflect it — so both slots of
+    # the in-scope B go to the unloaded reviewers, not to alice.
+    srcs = [_sd("A", 400.0), _sd("B", 100.0)]
+    additions = auto_balance(
+        scored_sources=srcs,
+        reviewers=["alice", "bob", "chris"],
+        current_assignments={"alice": ["A"]},
+        submitted_by={},
+        only_sources={"B"},
+    )
+    assert additions["alice"] == []
+    assert "B" in additions["bob"] and "B" in additions["chris"]
+
+
 def test_auto_balance_load_uses_balance_weight_not_raw():
     # Two sources: one monster (score 2300, bw≈48), one tiny (score 25, bw=5).
     # With raw-score balancing the monster would skew everything to one
