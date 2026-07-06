@@ -199,7 +199,8 @@ def register_callbacks(
     )
     def _refresh_source_badges(_reload_counter, _submit_trigger):
         return build_source_options(
-            results_dir, recommendations_dir, current_reviewer(reviewer))
+            results_dir, recommendations_dir, current_reviewer(reviewer),
+            admin=admin)
 
     # ---- read-only source notes panel ------------------------------------
     # Renders notes/<source>.md (Stages 1-2 + ledger) plus the live

@@ -347,6 +347,12 @@ discussion** flag (bold-orange) overrides all per-reviewer status. Badge
 (`store.source_badge`): `[N]` / `[final]` / `[final − M]` / `[stage 1]` /
 `[stage 2]`.
 
+**Ordering.** Reviewers: their outstanding (unsubmitted) assignments first
+(`★`-prefixed), then the rest, each group alphabetical. Admin
+(`build_source_options(admin=True)`): triage queue — **needs discussion**
+(`‼`) first, then **open + ≥2 submitted reviews** (`★`, ready to aggregate),
+then everything else, each group alphabetical.
+
 ### Panel layout (4 tabs)
 
 `Robustness` (default) — `ID / use-in-fit Edits` — `Source Notes` — `Epoch

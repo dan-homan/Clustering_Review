@@ -9,7 +9,7 @@ from dash import dcc, html
 from ..data.loader import list_sources
 from ..recommendations.store import (
     source_badge, source_phase, source_needs_discussion,
-    is_submitted, load_recommendation)
+    is_submitted, load_recommendation, count_submissions)
 from .nwin_panel import build_nwin_panel
 from .recommendations_panel import build_recommendations_panel
 from .urls import rel
@@ -47,7 +47,8 @@ def _reviewer_status(recommendations_dir: Path, source: str,
 
 
 def build_source_options(results_dir: Path, recommendations_dir: Path,
-                         reviewer: str | None = None) -> list[dict]:
+                         reviewer: str | None = None,
+                         admin: bool = False) -> list[dict]:
     """Source-picker options. Each label is ``<source>  <reviewer-status>  [badge]``:
 
     - the source name only (the date range is dropped — it's the same for every
@@ -71,7 +72,14 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
     not yet submitted) are listed **first** and prefixed with ``★`` so they
     can dive straight in. (This Dash version's ``dcc.Dropdown`` only accepts
     plain-string option labels — a component there throws React error #31 —
-    so the marker stands in for true bold text.)"""
+    so the marker stands in for true bold text.)
+
+    With ``admin=True`` the ordering is triage-oriented instead: sources the
+    admin flagged **needs discussion** come first (``‼`` marker), then sources
+    that are open for recommendations with **≥ 2 submitted reviews** already
+    (``★`` marker — ready for Stage-3 aggregation), then everything else in
+    source order. Same plain-string-label constraint, so markers stand in for
+    bold text here too."""
     # Which sources are this reviewer's outstanding (unsubmitted) assignments?
     outstanding: set[str] = set()
     if recommendations_dir is not None and reviewer:
@@ -93,22 +101,36 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
             parts.append(text)
         if recommendations_dir is not None:
             parts.append(source_badge(recommendations_dir, s.source))
-        mine = s.source in outstanding
-        label = ("★ " if mine else "") + "   ".join(parts)
+
+        # Triage rank + marker. For admins the picker is a work queue: flagged
+        # sources first, then ones ready to aggregate (open with ≥2 reviews),
+        # then the rest. For reviewers it's their own outstanding assignments.
+        if admin and recommendations_dir is not None:
+            if source_needs_discussion(recommendations_dir, s.source):
+                rank, marker = 0, "‼ "
+            elif (source_phase(recommendations_dir, s.source) == "open"
+                  and count_submissions(recommendations_dir, s.source) >= 2):
+                rank, marker = 1, "★ "
+            else:
+                rank, marker = 2, ""
+        else:
+            rank = 0 if s.source in outstanding else 1
+            marker = "★ " if rank == 0 else ""
+
+        label = marker + "   ".join(parts)
         out.append({"label": label, "value": str(s.folder),
-                    "search": s.source, "_mine": mine})
-    # Outstanding assignments first (then everything else), each group
-    # alphabetical by source name.
-    out.sort(key=lambda o: (0 if o["_mine"] else 1, o["search"]))
+                    "search": s.source, "_rank": rank})
+    # Priority groups first (see above), each group alphabetical by source.
+    out.sort(key=lambda o: (o["_rank"], o["search"]))
     for o in out:
-        o.pop("_mine", None)
+        o.pop("_rank", None)
     return out
 
 
 def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                  recommendations_dir: Path | None = None) -> html.Div:
     source_options = build_source_options(results_dir, recommendations_dir,
-                                          reviewer)
+                                          reviewer, admin=admin)
     initial = source_options[0]["value"] if source_options else None
 
     header = html.Div(
