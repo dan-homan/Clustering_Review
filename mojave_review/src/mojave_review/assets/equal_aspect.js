@@ -1,6 +1,7 @@
 // Equal mas/pixel WITHOUT locking drag-zoom to the panel aspect, for the
 // spatial plots that want it: the "Position" view's XY centroid track (bottom
-// subplot) and the epoch overlay (single panel).
+// subplot), the epoch overlay (single panel), and the admin Window-N review
+// overlay (same single-panel overlay figure).
 //
 // Plotly's usual way to keep equal units is `scaleanchor`, but that forces the
 // zoom box to a fixed aspect — you can't isolate a tall-skinny or wide-flat
@@ -39,7 +40,13 @@
 // xaxis.range[*] / autorange), so our domain writes never drive it.
 
 (function () {
-    const GRAPH_IDS = ["summary-graph", "summary-graph-right", "overlay-graph"];
+    // "overlay-graph" is the standard-view epoch overlay; "nwin-overlay-graph"
+    // is the admin Window-N review overlay — same overlay_figure_for_epoch
+    // (meta == "overlay-equal"), so it wants the identical full-2D letterbox.
+    // Both nwin beam callbacks ignore domain-only relayouts, so our domain
+    // writes never disturb them.
+    const GRAPH_IDS = ["summary-graph", "summary-graph-right",
+                       "overlay-graph", "nwin-overlay-graph"];
     const MIN_DOM = 0.03;          // floor so an extreme zoom can't collapse a
                                    // domain to zero (unusable)
     const GUARD_MS = 1500;         // watchdog: force-clear the guard if a
@@ -131,9 +138,14 @@
     }
 
     function wire(gid) {
+        if (wired[gid]) return true;
+        // Wrapper absent from the DOM = this graph isn't on the current page
+        // (e.g. nwin-overlay-graph without --admin). Treat as "done" so the
+        // init poll can still settle; a present-but-not-yet-rendered wrapper
+        // (Plotly hasn't drawn the figure) returns false and keeps polling.
+        if (!document.getElementById(gid)) return true;
         const gd = gdOf(gid);
         if (!gd || !gd.on) return false;
-        if (wired[gid]) return true;
         wired[gid] = true;
         // afterplot: initial render, view switch, server react, resize.
         // relayout: fires once with the SETTLED ranges after any interaction
@@ -148,10 +160,15 @@
         let tries = 0;
         (function attempt() {
             // A graph div only exists once its callback first renders; keep
-            // retrying a bounded while for whichever is still absent.
+            // retrying for whichever is still absent. The admin Window-N
+            // overlay lives in a collapsed <details> and can render a beat
+            // later, so poll fast at first, then back off to 1 Hz for a
+            // bounded while rather than giving up at 8 s.
             const done = GRAPH_IDS.map(wire);
-            if (done.every(Boolean) || tries++ > 40) return;
-            setTimeout(attempt, 200);
+            if (done.every(Boolean)) return;
+            tries++;
+            if (tries > 340) return;                 // ~8 s fast + ~5 min slow
+            setTimeout(attempt, tries < 40 ? 200 : 1000);
         })();
         window.addEventListener("resize", function () {
             GRAPH_IDS.forEach(equalize);

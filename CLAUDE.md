@@ -199,7 +199,8 @@ resize on the right).
     accepted this there (2026-05-28) — **don't "fix" it by dropping
     `scaleanchor`** without the letterbox below.
   - **Letterbox** (`assets/equal_aspect.js`) — used by the **Position view's XY
-    bottom panel** and the **epoch overlay** (reviewer-requested 2026-07-01).
+    bottom panel**, the **epoch overlay** (reviewer-requested 2026-07-01), and
+    the **admin Window-N overlay** (`nwin-overlay-graph`, same overlay figure).
     Those figures DROP `scaleanchor` (free-form / arbitrary-shape zoom) and the
     script re-imposes equal units by narrowing an axis *domain* so px/mas match
     the current ranges. Mode is chosen by `layout.meta` (titles can't
@@ -210,10 +211,14 @@ resize on the right).
       (`yaxis`/`yaxis2.domain`); disjoint props → no conflict. Equal units hold
       while the box has enough width; a wide-flat zoom may need a top/bottom
       divider nudge to stay equal.
-    - `meta == "overlay-equal"` (overlay single panel): **full-2D** — narrows
-      whichever of `xaxis.domain` / `yaxis.domain` is roomier. Safe alongside the
-      beam callback: that uses `Plotly.restyle` (no relayout event) and ignores
-      domain-only relayouts (keys on `xaxis.range[*]`/`autorange`).
+    - `meta == "overlay-equal"` (overlay single panel — standard **and** admin
+      Window-N overlay): **full-2D** — narrows whichever of `xaxis.domain` /
+      `yaxis.domain` is roomier. Safe alongside the beam callback: that uses
+      `Plotly.restyle` (no relayout event) and ignores domain-only relayouts
+      (keys on `xaxis.range[*]`/`autorange`). `equal_aspect.js`'s `GRAPH_IDS`
+      must list every such graph; `nwin-overlay-graph` renders inside a
+      collapsed `<details>` so the wiring poll backs off to 1 Hz instead of
+      giving up at 8 s. `wire` skips graph ids absent from the DOM (non-admin).
     Do NOT restore `scaleanchor` on the XY or overlay panels.
     - **Self-healing (why a stuck zoom can't survive):** the written domains are
       preserved by the figure's constant `uirevision` (for zoom persistence), so
