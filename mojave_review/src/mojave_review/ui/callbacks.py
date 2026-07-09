@@ -254,8 +254,8 @@ def register_callbacks(
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
                 return "No source selected.", no_update
-            status = ("Stage 2 done" if ctx.triggered_id == "save-stage2-done-btn"
-                      else "Stage 2 in progress")
+            done = ctx.triggered_id == "save-stage2-done-btn"
+            status = "Stage 2 done" if done else "Stage 2 in progress"
             content = content or ""
             try:
                 md = read_note(notes_dir, src.source)
@@ -269,8 +269,23 @@ def register_callbacks(
                 write_note(notes_dir, src.source, md)
             except Exception as e:  # never lose the file on a bad write
                 return f"Save failed: {e}", no_update
-            from datetime import datetime
-            return (f"Saved {datetime.now().strftime('%H:%M:%S')} ({status})",
+            from datetime import datetime, timedelta, date
+            note = ""
+            if done:
+                # Standard: opening a source for review gives reviewers a
+                # two-week window — set the target date to today + 14 days.
+                from ..data.assignments import (
+                    load_store, save_store, set_source_target_date)
+                target = (date.today() + timedelta(days=14)).isoformat()
+                try:
+                    store = load_store(recommendations_dir)
+                    set_source_target_date(store, src.source, target)
+                    save_store(recommendations_dir, store)
+                    note = f", target {target}"
+                except Exception as e:
+                    note = f", target-date update failed: {e}"
+            return (f"Saved {datetime.now().strftime('%H:%M:%S')} "
+                    f"({status}{note})",
                     int(counter or 0) + 1)
 
         # ---- Stage 2: seed the notes editor from the builder's own

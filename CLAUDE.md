@@ -577,7 +577,9 @@ write + rotating snapshot to `_admin/backups/` (last 10). Schema versioned (v5);
 Fields:
 - `assignments: {reviewer_name: [AssignmentRecord]}` — keyed by full reviewer
   **name** (from `tokens.yaml` `name:`); must match deployed tokens.
-- `source_target_dates: {source: "YYYY-MM-DD"}`.
+- `source_target_dates: {source: "YYYY-MM-DD"}`. **"Save & set Stage 2 done"**
+  (`_save_stage2`) auto-sets this to **today + 14 days** — opening a source for
+  review gives reviewers a standard two-week window.
 - `team_members: [name]` (v4) — manual roster (`prune_collision_reviewers`
   strips phantom `<base>_<N>`).
 - `manual_reviews: {reviewer_name: [source]}` (v5) — explicit Stage-2 credit for
