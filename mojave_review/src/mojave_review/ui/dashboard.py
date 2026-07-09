@@ -1213,6 +1213,18 @@ def _admin_controls_panel(
                         style={"fontSize": "0.85em",
                                "marginBottom": "0.4em"},
                     ),
+                    dcc.Checklist(
+                        id="dashboard-ab-credit-completed",
+                        options=[{"label": " Consider completed reviews "
+                                           "(credit prior submissions as "
+                                           "load so past contributors get a "
+                                           "lighter share — for the first "
+                                           "round)",
+                                  "value": "credit"}],
+                        value=[],
+                        style={"fontSize": "0.85em",
+                               "marginBottom": "0.4em"},
+                    ),
                     html.Div(
                         id="dashboard-ab-preview-body",
                         style={"maxHeight": "44vh", "overflowY": "auto",

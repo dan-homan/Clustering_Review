@@ -77,7 +77,9 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
     With ``admin=True`` the ordering is triage-oriented instead: sources the
     admin flagged **needs discussion** come first (``‼`` marker), then sources
     that are open for recommendations with **≥ 2 submitted reviews** already
-    (``★`` marker — ready for Stage-3 aggregation), then everything else in
+    (``★`` marker — ready for Stage-3 aggregation), then **Stage 1 / Stage 2**
+    sources (baseline work not yet open for recommendations), then the remaining
+    **open** sources still needing reviews, then everything else (finalized) in
     source order. Same plain-string-label constraint, so markers stand in for
     bold text here too."""
     # Which sources are this reviewer's outstanding (unsubmitted) assignments?
@@ -106,13 +108,23 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
         # sources first, then ones ready to aggregate (open with ≥2 reviews),
         # then the rest. For reviewers it's their own outstanding assignments.
         if admin and recommendations_dir is not None:
+            phase = source_phase(recommendations_dir, s.source)
             if source_needs_discussion(recommendations_dir, s.source):
                 rank, marker = 0, "‼ "
-            elif (source_phase(recommendations_dir, s.source) == "open"
+            elif (phase == "open"
                   and count_submissions(recommendations_dir, s.source) >= 2):
                 rank, marker = 1, "★ "
-            else:
+            elif phase in ("stage1", "stage2"):
+                # Baseline work not yet open for reviewer recommendations —
+                # kept ahead of the "needs review" open set so admins see
+                # in-progress baselines first.
                 rank, marker = 2, ""
+            elif phase == "open":
+                # Open for recommendations but still short of reviews —
+                # the "needs review" set.
+                rank, marker = 3, ""
+            else:                                       # final / everything else
+                rank, marker = 4, ""
         else:
             rank = 0 if s.source in outstanding else 1
             marker = "★ " if rank == 0 else ""

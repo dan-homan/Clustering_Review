@@ -109,32 +109,38 @@ def register_dashboard_callbacks(
         Output("dashboard-ab-preview-store", "data"),
         Input("dashboard-auto-balance-btn", "n_clicks"),
         Input("dashboard-ab-only-new", "value"),
+        Input("dashboard-ab-credit-completed", "value"),
         Input("dashboard-ab-close", "n_clicks"),
         Input("dashboard-ab-cancel", "n_clicks"),
         State("dashboard-ab-modal", "style"),
         prevent_initial_call=True,
     )
-    def _ab_open_or_close(open_n, only_new_value, close_n, cancel_n,
-                          modal_style):
+    def _ab_open_or_close(open_n, only_new_value, credit_value, close_n,
+                          cancel_n, modal_style):
         from dash import ctx
         if ctx.triggered_id not in ("dashboard-auto-balance-btn",
-                                    "dashboard-ab-only-new"):
+                                    "dashboard-ab-only-new",
+                                    "dashboard-ab-credit-completed"):
             return {"display": "none"}, no_update, None
-        # Toggling the "only unassigned" checkbox re-runs the preview in
-        # place — but only while the modal is open. A checkbox Input on a
+        # Toggling a checkbox re-runs the preview in place — but only
+        # while the modal is open. A checkbox Input on a
         # dynamically-rendered page can fire spuriously on render; the
         # hidden-modal check keeps that from popping the modal open.
-        if ctx.triggered_id == "dashboard-ab-only-new" and (
+        if ctx.triggered_id in ("dashboard-ab-only-new",
+                                "dashboard-ab-credit-completed") and (
                 not modal_style or modal_style.get("display") == "none"):
             return no_update, no_update, no_update
         only_new = bool(only_new_value) and "only_new" in only_new_value
+        credit_completed = bool(credit_value) and "credit" in credit_value
 
         all_sources = list_sources(results_dir)
-        # Pre-credit pass first: every source the team has ever
+        # Optional pre-credit pass: every source the team has ever
         # submitted (including those folded into Stage 3 / archived to
         # considered/) counts as completed work. This must include
         # finalized sources, so use the full source list — not the
-        # phase-open subset.
+        # phase-open subset. Off by default — only past-contributor
+        # credit for a first-round balance; normal balancing ignores
+        # completed work and schedules on current load alone.
         store = load_store(recommendations_dir)
         nfs = _name_for_slug(
             tokens_path, recommendations_dir,
@@ -144,7 +150,7 @@ def register_dashboard_callbacks(
             recommendations_dir=recommendations_dir,
             sources=[s.source for s in all_sources],
             name_for_slug=nfs,
-        )
+        ) if credit_completed else 0
 
         # Auto-balance candidates: only sources that are open for
         # reviewer recommendations (Stage 2 done). Stage 1/2-in-progress
@@ -225,15 +231,14 @@ def register_dashboard_callbacks(
                 style={"color": "#555", "fontSize": "0.85em",
                        "marginBottom": "0.3em"},
             ))
-        header_lines += [
-            html.Div(
+        if credit_completed:
+            header_lines.append(html.Div(
                 f"Credited {n_credited} prior submission(s) as "
                 f"completed assignments — these will be saved when "
                 f"you Apply.",
                 style={"color": "#1a7" if n_credited else "#888",
                        "fontSize": "0.85em", "marginBottom": "0.5em"},
-            ),
-        ]
+            ))
 
         if total_new == 0:
             scope = ("unassigned open source"
@@ -288,6 +293,7 @@ def register_dashboard_callbacks(
             "additions": additions,
             "credited_store": store.to_dict(),
             "n_credited": n_credited,
+            "credit_completed": credit_completed,
         }
         return {"display": "block",
                 "position": "fixed", "top": 0, "left": 0,
@@ -313,16 +319,18 @@ def register_dashboard_callbacks(
         # but a fresh credit pass is idempotent and avoids stale-state
         # surprises.)
         store = load_store(recommendations_dir)
-        all_sources = list_sources(results_dir)
-        nfs = _name_for_slug(
-            tokens_path, recommendations_dir,
-            current_reviewer(reviewer))
-        n_credited = credit_prior_submissions(
-            store,
-            recommendations_dir=recommendations_dir,
-            sources=[s.source for s in all_sources],
-            name_for_slug=nfs,
-        )
+        n_credited = 0
+        if preview.get("credit_completed"):
+            all_sources = list_sources(results_dir)
+            nfs = _name_for_slug(
+                tokens_path, recommendations_dir,
+                current_reviewer(reviewer))
+            n_credited = credit_prior_submissions(
+                store,
+                recommendations_dir=recommendations_dir,
+                sources=[s.source for s in all_sources],
+                name_for_slug=nfs,
+            )
         n_added = apply_additions(
             store, preview["additions"],
             assigned_by=current_reviewer(reviewer))

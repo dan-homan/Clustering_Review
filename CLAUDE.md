@@ -351,7 +351,8 @@ discussion** flag (bold-orange) overrides all per-reviewer status. Badge
 (`★`-prefixed), then the rest, each group alphabetical. Admin
 (`build_source_options(admin=True)`): triage queue — **needs discussion**
 (`‼`) first, then **open + ≥2 submitted reviews** (`★`, ready to aggregate),
-then everything else, each group alphabetical.
+then **stage 1 / stage 2** (baseline work), then the remaining **open** sources
+(needs review), then everything else (finalized), each group alphabetical.
 
 ### Panel layout (4 tabs)
 
@@ -628,7 +629,10 @@ draft reads as done. Only `pending` is eligible to move in a rebalance.
 In `dashboard_callbacks.py`; each writes only `store.assignments`, navigates via
 `url.href` (prefix-aware):
 - **🔀 Auto-balance** — fill open slots (LPT on `balance_weight`); additions
-  only. `credit_prior_submissions` pre-seeds completed load. Admin excluded.
+  only. Schedules on current load alone by default. **"Consider completed
+  reviews"** checkbox (off by default) → `credit_prior_submissions` pre-seeds
+  completed load (past contributors get a lighter share; first-round only).
+  Admin excluded.
   **"Only unassigned sources"** checkbox → `auto_balance(only_sources=)`:
   fills slots only on open sources with no outstanding (non-`submitted`)
   assignment; full scored list still seeds load.
