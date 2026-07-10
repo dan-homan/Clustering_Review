@@ -139,11 +139,12 @@
 
     function wire(gid) {
         if (wired[gid]) return true;
-        // Wrapper absent from the DOM = this graph isn't on the current page
-        // (e.g. nwin-overlay-graph without --admin). Treat as "done" so the
-        // init poll can still settle; a present-but-not-yet-rendered wrapper
-        // (Plotly hasn't drawn the figure) returns false and keeps polling.
-        if (!document.getElementById(gid)) return true;
+        // Absent OR not-yet-drawn → not ready; keep polling. Do NOT short-
+        // circuit "wrapper absent" to done here: Dash mounts its layout
+        // asynchronously AFTER this script's init() runs, so on the first poll
+        // attempt EVERY graph wrapper (incl. overlay-graph) is still absent. An
+        // "absent = done" shortcut made the poll settle at t=0 having wired
+        // nothing → the letterbox never ran → the overlay lost equal aspect.
         const gd = gdOf(gid);
         if (!gd || !gd.on) return false;
         wired[gid] = true;
@@ -159,15 +160,18 @@
     function init() {
         let tries = 0;
         (function attempt() {
-            // A graph div only exists once its callback first renders; keep
-            // retrying for whichever is still absent. The admin Window-N
-            // overlay lives in a collapsed <details> and can render a beat
-            // later, so poll fast at first, then back off to 1 Hz for a
-            // bounded while rather than giving up at 8 s.
-            const done = GRAPH_IDS.map(wire);
-            if (done.every(Boolean)) return;
-            tries++;
-            if (tries > 340) return;                 // ~8 s fast + ~5 min slow
+            // A graph div only exists once its callback first renders, and Dash
+            // mounts the layout after this script starts, so wire whatever has
+            // appeared and keep polling for the rest. We DON'T early-terminate
+            // on "all wired": graphs that never appear on this page (e.g.
+            // nwin-overlay-graph without --admin, or summary-graph-right until
+            // the right pane shows a summary) would otherwise either stall the
+            // stop condition or — worse, if treated as done — let the poll quit
+            // at t=0 before anything mounted. The admin Window-N overlay lives
+            // in a collapsed <details> and can render a beat later, so poll fast
+            // at first, then back off to 1 Hz for a bounded while.
+            GRAPH_IDS.forEach(wire);
+            if (tries++ > 340) return;               // ~8 s fast + ~5 min slow
             setTimeout(attempt, tries < 40 ? 200 : 1000);
         })();
         window.addEventListener("resize", function () {
