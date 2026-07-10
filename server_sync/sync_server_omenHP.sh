@@ -35,12 +35,12 @@ DATA_DIR="${DATA_DIR:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXCLUDE_FILE="$SCRIPT_DIR/server_update_exclude.txt"
 
-REMOTE="homand@webby.cc.denison.edu"
+REMOTE="homand@74.140.113.72"
 REMOTE_BASE="/home/homand/mojave-review/data"
-SSH="ssh"
+SSH="ssh -i /Users/homand/.ssh/id_ed25519 -o StrictHostKeyChecking=no -p 2121"
 # Unison profile (~/.unison/mojave-recs.prf). Its LOCAL root is relative
 # ("recommendations"), resolved against DATA_DIR because we cd there below.
-UNISON_PROFILE="mojave-recs-webby"
+UNISON_PROFILE="mojave-recs"
 
 # === Mode ===
 MODE="${1:-preview}"
