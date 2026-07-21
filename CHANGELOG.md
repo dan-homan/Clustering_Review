@@ -4,6 +4,30 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-07-21 — XVIII comparison page
+
+- **New `/compare` page** (read-only, header link on the review page): the old
+  MOJAVE Paper XVIII Gaussian fits side-by-side with the current clustering
+  fits. Two panels, each a clone of the main page's right pane — a view
+  selector (Position / Position Angle / Flux / Kinematics / Epoch overlay; no
+  Polarization). Sources offered = present in both datasets **and** finalized
+  (Stage 3 done).
+- Both panels share **one epoch stepper** (same epoch shown on both sides; a
+  side lacking that epoch shows a blank map) and an **identical XY zoom box**.
+  The shared epoch draws a vertical marker on each side's summary epoch-axis
+  views.
+- The XVIII table (`MOJAVE_XVIII_apjac230ft4_mrt.txt`) is bundled with the
+  package and parsed into our cluster-DataFrame schema (`data/xviii.py`), so the
+  existing summary + overlay renderers work unchanged. `--xviii-table` overrides
+  the bundled copy.
+- The XVIII overlay reuses the same clean-component (or FITS) background image
+  as the clustering side, with the XVIII Gaussian FWHM ellipses drawn on top and
+  the clean components shown as faint grey context dots.
+- **Active-epoch vertical marker**: added to the main page's right-hand summary
+  pane (it already existed on the left pane) for the epoch-axis views.
+
+---
+
 ## 2026-07-09 — Admin workflow polish
 
 - **Auto-balance**: crediting prior completed reviews is now opt-in (unchecked

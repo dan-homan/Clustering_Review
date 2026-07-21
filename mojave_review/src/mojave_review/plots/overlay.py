@@ -204,8 +204,13 @@ def build_overlay_figure(
     image_source_label: str = "",
     source_label: str = "",
     uirevision: str = "overlay",
+    extent_override: tuple | None = None,
 ) -> go.Figure:
     """Build the FITS-overlay figure for one epoch.
+
+    ``extent_override`` — when given (``((x_lo, x_hi), (y_lo, y_hi))``) — is
+    used verbatim as the initial zoom box instead of the cluster footprint.
+    The comparison page passes a shared extent so both panels frame identically.
 
     ``epoch_axes`` is the pre-built Stokes I image + mas-coord axes. The
     caller picks how it was produced (loaded from a CLEAN FITS via
@@ -406,7 +411,7 @@ def build_overlay_figure(
     x_hi_fits = float(np.max(ax.x_mas))
     y_lo_fits = float(np.min(ax.y_mas))
     y_hi_fits = float(np.max(ax.y_mas))
-    extent = compute_source_extent(cluster_df)
+    extent = extent_override or compute_source_extent(cluster_df)
     if extent is not None:
         (x_lo_zoom, x_hi_zoom), (y_lo_zoom, y_hi_zoom) = extent
     else:
@@ -532,6 +537,7 @@ def overlay_figure_for_epoch(
     stacked: bool = False,
     uirevision: str = "overlay",
     source_label: str = "",
+    extent: tuple | None = None,
 ) -> tuple[go.Figure, dict | None]:
     """Higher-level wrapper: prepares the Stokes I image (either by
     synthesizing it from clean components or by fetching the CLEAN FITS),
@@ -649,6 +655,7 @@ def overlay_figure_for_epoch(
         image_source_label=image_source_label,
         source_label=source_label,
         uirevision=uirevision,
+        extent_override=extent,
     )
 
     # Locate the beam trace by name. x_extent / y_extent are the initial
@@ -658,7 +665,7 @@ def overlay_figure_for_epoch(
                      if getattr(t, "name", None) == "beam"), None)
     if beam_idx is None or not fig.data:
         return fig, None
-    extent = compute_source_extent(bundle.cluster_df)
+    extent = extent or compute_source_extent(bundle.cluster_df)
     if extent is not None:
         (x_lo_e, x_hi_e), (y_lo_e, y_hi_e) = extent
     else:

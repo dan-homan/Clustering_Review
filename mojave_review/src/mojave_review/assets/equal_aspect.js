@@ -46,7 +46,12 @@
     // Both nwin beam callbacks ignore domain-only relayouts, so our domain
     // writes never disturb them.
     const GRAPH_IDS = ["summary-graph", "summary-graph-right",
-                       "overlay-graph", "nwin-overlay-graph"];
+                       "overlay-graph", "nwin-overlay-graph",
+                       // Comparison page: both panels' epoch overlays
+                       // (meta "overlay-equal") + summaries (Position's
+                       // XY bottom, meta "xy-bottom").
+                       "cmp-x-overlay-graph", "cmp-c-overlay-graph",
+                       "cmp-x-summary-graph", "cmp-c-summary-graph"];
     const MIN_DOM = 0.03;          // floor so an extreme zoom can't collapse a
                                    // domain to zero (unusable)
     const GUARD_MS = 1500;         // watchdog: force-clear the guard if a

@@ -9,6 +9,8 @@ from dash import Dash, Input, Output, dcc, html
 
 from .auth.middleware import install_token_middleware
 from .auth.runtime import current_reviewer
+from .ui.compare import build_compare_page
+from .ui.compare_callbacks import register_compare_callbacks
 from .ui.dashboard import build_dashboard_page
 from .ui.dashboard_callbacks import register_dashboard_callbacks
 from .ui.layout import build_layout
@@ -37,6 +39,7 @@ def create_app(
     cookie_secure: bool = True,
     admin_contact: str = "the admin",
     url_base_prefix: str | None = None,
+    xviii_path: str | None = None,
 ) -> Dash:
     """Build the Dash app.
 
@@ -128,6 +131,14 @@ def create_app(
                 admin=admin,
                 tokens_path=tokens_path,
             )
+        if pathname and pathname.rstrip("/").endswith("/compare"):
+            return build_compare_page(
+                results_dir=results_dir,
+                recommendations_dir=recommendations_dir,
+                reviewer=rev,
+                admin=admin,
+                xviii_path=xviii_path,
+            )
         return build_layout(
             results_dir=results_dir,
             reviewer=rev,
@@ -160,6 +171,20 @@ def create_app(
         recommendations_dir=recommendations_dir,
         tokens_path=tokens_path,
         reviewer=reviewer,
+    )
+
+    # Comparison page (XVIII Gaussian fits vs current clustering). Registered
+    # unconditionally — components exist only when /compare is mounted, so the
+    # callbacks are inert on the other pages (suppress_callback_exceptions).
+    register_compare_callbacks(
+        app,
+        results_dir=results_dir,
+        recommendations_dir=recommendations_dir,
+        cache_dir=cache_dir,
+        reviewer=reviewer,
+        admin=admin,
+        fits_data_dir=fits_data_dir,
+        xviii_path=xviii_path,
     )
 
     # Prevent the browser from caching the index HTML.

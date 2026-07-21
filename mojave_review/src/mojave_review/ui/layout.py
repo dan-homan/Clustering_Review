@@ -165,6 +165,15 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                         title="Open the assignments & progress dashboard "
                               "(new tab)",
                     ),
+                    html.A(
+                        "⚖ XVIII Comparison",
+                        href=rel("/compare"), target="_blank",
+                        style={"marginLeft": "1.5em", "color": "#1f77b4",
+                               "textDecoration": "none", "fontSize": "0.9em",
+                               "verticalAlign": "middle"},
+                        title="Compare the old MOJAVE XVIII Gaussian fits with "
+                              "the current clustering (new tab)",
+                    ),
                 ],
                 style={"display": "flex", "alignItems": "baseline"},
             ),
@@ -526,6 +535,8 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
             # is just that callback's no-op output target.
             dcc.Store(id="active-epoch", data=None),
             dcc.Store(id="epoch-line-dummy", data=None),
+            # Same marker on the right pane when it shows a summary view.
+            dcc.Store(id="epoch-line-dummy-right", data=None),
             # Increments whenever the user clicks "Reset view"; folds into
             # the overlay's uirevision key so a click forces a complete
             # redraw + axis reset.

@@ -1331,6 +1331,47 @@ def register_callbacks(
         prevent_initial_call=True,
     )
 
+    # ---- clientside: same "active epoch" marker on the RIGHT summary pane ---
+    # Only fires when the right pane is showing a summary view (right-pane-mode
+    # != "overlay"); mode "overlay" or any non-epoch view resets shapes to [].
+    # Mirrors the left-pane callback exactly, reading the right graph + mode.
+    app.clientside_callback(
+        """
+        function(epoch, mode, _figure) {
+            var wrapper = document.getElementById('summary-graph-right');
+            if (!wrapper) return window.dash_clientside.no_update;
+            var gd = wrapper.querySelector('.js-plotly-plot');
+            if (!gd || !window.Plotly) return window.dash_clientside.no_update;
+
+            var epochAxes = {
+                'Position': ['x'],
+                'Position Angle': ['x'],
+                'Flux': ['x', 'x2'],
+                'Polarization': ['x', 'x2']
+            };
+            var axes = epochAxes[mode];
+            if (!axes || epoch === null || epoch === undefined) {
+                window.Plotly.relayout(gd, {shapes: []});
+                return window.dash_clientside.no_update;
+            }
+            var lineStyle = {color: 'rgba(90,90,90,0.65)', width: 1.5};
+            var shapes = axes.map(function(ax) {
+                var ysuf = ax === 'x' ? 'y' : ax.replace('x', 'y');
+                return {type: 'line', xref: ax, yref: ysuf + ' domain',
+                        x0: epoch, x1: epoch, y0: 0, y1: 1,
+                        line: lineStyle, layer: 'below'};
+            });
+            window.Plotly.relayout(gd, {shapes: shapes});
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("epoch-line-dummy-right", "data"),
+        Input("active-epoch", "data"),
+        Input("right-pane-mode", "value"),
+        Input("summary-graph-right", "figure"),
+        prevent_initial_call=True,
+    )
+
 
 def _source_from_folder(folder_str: str) -> SourceRef | None:
     folder = Path(folder_str)

@@ -73,6 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
              "falls back to fetching from NRAO when a file is missing. "
              "Defaults to $MOJAVE_REVIEW_FITS_DATA_DIR (alias: $MOJAVE_DATA).",
     )
+    p.add_argument(
+        "--xviii-table",
+        type=Path,
+        default=None,
+        help="Override the MOJAVE Paper XVIII MRT table used by the "
+             "comparison page (/compare). Defaults to the copy bundled "
+             "with the package.",
+    )
     p.add_argument("--host", default=None,
                    help="Bind address. Default 127.0.0.1.")
     p.add_argument("--port", type=int, default=None,
@@ -195,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         cookie_secure=cfg.cookie_secure,
         admin_contact=cfg.admin_contact,
         url_base_prefix=cfg.url_base_prefix,
+        xviii_path=str(args.xviii_table) if args.xviii_table else None,
     )
 
     # The launcher hits the bound port directly (root), even when a public

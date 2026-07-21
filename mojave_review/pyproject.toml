@@ -38,4 +38,4 @@ mojave-review-difficulty   = "mojave_review.cli.difficulty:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mojave_review = ["assets/*"]
+mojave_review = ["assets/*", "data/*.txt"]

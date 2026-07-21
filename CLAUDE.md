@@ -41,10 +41,13 @@ Clustering_Review/
         │   ├── fits_cache.py    # MOJAVE URL + on-disk FITS cache
         │   ├── source_params.py # per-source redshift from source_run_param.csv
         │   ├── difficulty.py    # per-source difficulty score + stars
-        │   └── assignments.py   # _admin/assignments.json store + balancer
+        │   ├── assignments.py   # _admin/assignments.json store + balancer
+        │   ├── xviii.py         # Paper XVIII MRT parser → our cluster_df schema
+        │   └── MOJAVE_XVIII_apjac230ft4_mrt.txt  # bundled XVIII Gaussian-fit table
         ├── plots/
         │   ├── summary.py       # Plotly port of make_summary_plots
         │   ├── overlay.py       # FITS + cluster + beam overlay per epoch
+        │   ├── compare_overlay.py # XVIII overlay on the shared CC/FITS image
         │   ├── synthesize_fits.py # single-epoch + stacked Stokes-I synthesis
         │   ├── uncertainty.py   # CC-derived 1σ position/PA error bars
         │   └── _extent.py       # initial zoom-box from cluster footprint
@@ -59,6 +62,7 @@ Clustering_Review/
             ├── callbacks.py     # source/model/view + selection + summary/overlay
             ├── urls.py          # rel(): prefix-aware in-app links (reverse proxy)
             ├── dashboard.py / dashboard_callbacks.py  # Assignment Dashboard page
+            ├── compare.py / compare_callbacks.py      # /compare XVIII-vs-clustering page
             ├── nwin_panel.py / nwin_callbacks.py      # admin Window-N review
             ├── aggregation.py                          # Stage-3 aggregate panel body
             └── recommendations_panel.py / *_callbacks.py  # 4-tab bottom panel
@@ -649,6 +653,60 @@ In `dashboard_callbacks.py`; each writes only `store.assignments`, navigates via
   auto-pause.
 - **↔ Move source**, **↪ Reassign queue**, **📅 Set target dates**, **👥 Manage
   team**, **✓ Credit my Stage-2 reviews**.
+
+## XVIII Comparison page (`/compare`)
+
+Read-only third page (header link on the review page, `target="_blank"`),
+router in `app.py` on `pathname.endswith("/compare")`. Shows the old **MOJAVE
+Paper XVIII** Gaussian fits (left) beside the current **clustering** fits
+(right). Two panels, each a right-pane clone: a mode dropdown (Position /
+Position Angle / Flux / Kinematics / Epoch overlay — **no Polarization**, XVIII
+has none). Panel id prefixes `cmp-x` (XVIII) / `cmp-c` (clustering). Callbacks
+registered unconditionally in `ui/compare_callbacks.py` (built per-prefix in a
+loop; inert off-page).
+
+- **Shared epoch axis.** ONE stepper (`cmp-epoch-slider` + ◀/▶ above both
+  panels) drives both sides so they always show the same epoch. The master
+  list is the **union** of both sides' epochs (`_master_epochs`; clustering
+  names win); a side missing the selected epoch renders a **blank map**
+  (clustering is the superset, so blanks fall on the XVIII side past ~2013).
+  `cmp-active-epoch` publishes the decimal year → a per-panel **clientside
+  vertical marker** (`_MARKER_JS`) on the summary epoch-axis views (Position /
+  PA / Flux; none on Kinematics/overlay), mirroring the main page's marker.
+- **Shared XY extent.** `_shared_extent` = union of both sides' cluster
+  footprints, passed as `extent`/`extent_override` to both overlays (new param
+  on `overlay_figure_for_epoch` / `build_overlay_figure` / `build_xviii_overlay`)
+  so both panels frame identically. Per-panel `Reset view` + `Use FITS` stay
+  independent.
+- **Source list** (`compare.compare_source_options`): XVIII sources ∩ current
+  Results ∩ **phase == `final`** (`store.source_phase`). One shared
+  `cmp-source-picker` drives both panels.
+- **XVIII → our schema** (`data/xviii.py`, `build_xviii_cluster_df`): parses the
+  bundled MRT (`data/MOJAVE_XVIII_apjac230ft4_mrt.txt`, `--xviii-table`
+  overrides) into the *exact* cluster_df columns `build_summary_figure` reads.
+  `F`→`clusterID` (0=core), `I`/1000→`iflux`, `r,PA`→`avg_x/avg_y`
+  (`x=r·sinPA, y=r·cosPA`), `MajAxis`→`fwhm_maj`, `MajAxis·Ratio`→`fwhm_min`,
+  `MajPA`→`cpa/sizePA`, `f_F=='a'`→`use_in_fit=False`, `Robust?`→`robust`
+  (per-feature, earliest non-blank). **Registration (MRT Note 3):** the core
+  feature's `r,PA` is from the **map center** (= our `core_x/core_y`), non-core
+  from the **core**. So `avg_x/avg_y` hold absolute map positions
+  `X0 = (r0·sinPA0, r0·cosPA0)` for the core and `X0 + (rk·sinPAk, rk·cosPAk)`
+  for feature k; `core_x/core_y = X0` (the *summary* frame — `avg−core` = the
+  pure XVIII core-relative offset, core at 0). Each epoch is snapped to the
+  nearest MOJAVE observation in the npz (shared background image). `pflux/evpa
+  = NaN`.
+- **XVIII overlay** (`plots/compare_overlay.build_xviii_overlay`): reuses
+  `overlay.build_overlay_figure` with `cc_labels=None` — background = our clean
+  components synthesized (default) or real FITS (`Use FITS` checkbox), our CCs
+  drawn as faint grey context dots, **ellipses/labels from the XVIII df**. It
+  **re-registers** by overriding the df's `core_x/core_y` with the fitted
+  clustering core, so the Gaussians sit on the clustering-core-centered image
+  at their true `X0−core` offset (the small XVIII-vs-clustering core-fit
+  registration difference is preserved, not zeroed). The clustering side just
+  calls `overlay.overlay_figure_for_epoch` unchanged. Both
+  overlay graphs (`cmp-x-overlay-graph`, `cmp-c-overlay-graph`) are added to
+  `equal_aspect.js` `GRAPH_IDS` and get the beam-reposition clientside callback
+  (`_BEAM_JS` templated per graph id).
 
 ### Reverse-proxy path prefix
 
