@@ -673,6 +673,10 @@ loop; inert off-page).
   list is the **union** of both sides' epochs (`_master_epochs`; clustering
   names win); a side missing the selected epoch renders a **blank map**
   (clustering is the superset, so blanks fall on the XVIII side past ~2013).
+  The blank map carries the panel's **overlay `uirevision`** (`_blank` /
+  `_empty_overlay` both take one) so stepping THROUGH a blank epoch doesn't make
+  Plotly discard the retained zoom — a locked, zoomed view survives across
+  epochs instead of resetting when a side goes blank.
   `cmp-active-epoch` publishes the decimal year → a per-panel **clientside
   vertical marker** (`_MARKER_JS`) on the summary epoch-axis views (Position /
   PA / Flux; none on Kinematics/overlay), mirroring the main page's marker.
@@ -680,13 +684,18 @@ loop; inert off-page).
   footprints, passed as `extent`/`extent_override` to both overlays (new param
   on `overlay_figure_for_epoch` / `build_overlay_figure` / `build_xviii_overlay`)
   so both panels frame identically. Per-panel `Reset view` stays independent.
-- **Shared Kinematics vector scale.** Both panels draw velocity arrows at ONE
-  absolute scale (mas of arrow per mas/yr) so equal speeds are equal-length on
-  both sides (independent per-panel auto-scales were confusing). `_summary`
-  computes it over BOTH sides' fits via `summary.kinematics_vector_stats` +
-  `shared_vector_scale_abs`, passed as `build_summary_figure(vector_scale_abs=)`.
-  None (either side lacking a fit) → each panel auto-scales as before. The
-  per-panel vector-scale slider is a multiplier ON TOP (both default 1.0).
+- **Shared Kinematics vector scale + frame.** Both panels draw velocity arrows
+  at ONE absolute scale AND frame the X/Y vector panel to ONE shared box, so
+  equal speeds read as equal-length vectors on both sides — always, independent
+  of the display-lock (per-panel auto-scale + auto-frame were confusing). Scale:
+  `_summary` computes it over BOTH sides' fits via
+  `summary.kinematics_vector_stats` + `shared_vector_scale_abs`, passed as
+  `build_summary_figure(vector_scale_abs=)`. Frame: `_shared_extent(source)`
+  passed as `build_summary_figure(kin_extent=)` → explicit reversed x / y range
+  on the vector subplot (keeps scaleanchor + constrain="domain"; the letterbox
+  is inert for Kinematics — no `meta`). Both None (either side lacking a fit)
+  → each panel auto-scales/autoranges as before (also the main page's default).
+  Per-panel vector-scale slider still multiplies ON TOP (both default 1.0).
 - **Shared display controls** (`controls_bar`, above both panels — NOT per-panel):
   - `cmp-use-fits` — one FITS toggle drives BOTH overlays.
   - `cmp-lock-axes` — mirror zoom/pan between the two panels so they always show

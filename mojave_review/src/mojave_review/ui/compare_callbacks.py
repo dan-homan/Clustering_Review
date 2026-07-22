@@ -251,7 +251,7 @@ def register_compare_callbacks(
         y_hi = max(e[1][1] for e in exts)
         return ((x_lo, x_hi), (y_lo, y_hi))
 
-    def _blank(msg: str) -> go.Figure:
+    def _blank(msg: str, uirevision: str | None = None) -> go.Figure:
         fig = go.Figure()
         fig.update_layout(template="plotly_white", height=640,
                           margin=dict(l=40, r=20, t=40, b=40),
@@ -260,6 +260,10 @@ def register_compare_callbacks(
                                             xref="paper", yref="paper",
                                             x=0.5, y=0.5,
                                             font=dict(color="#999", size=14))])
+        # Matching uirevision preserves the retained zoom across a blank epoch
+        # (see _empty_overlay) so locked panels stay framed as you step epochs.
+        if uirevision is not None:
+            fig.update_layout(uirevision=uirevision)
         return fig
 
     # ---- shared epoch slider population -------------------------------
@@ -361,6 +365,7 @@ def register_compare_callbacks(
             # differ — confusing). None for other views / when neither side has
             # a motion fit (then each panel auto-scales as before).
             vscale_abs = None
+            kin_extent = None
             if mode == "Kinematics":
                 stats = []
                 for k in ("clust", "xviii"):
@@ -369,11 +374,17 @@ def register_compare_callbacks(
                             and not other.summary_df.empty:
                         stats.append(kinematics_vector_stats(other.summary_df))
                 vscale_abs = shared_vector_scale_abs(stats)
+                # Frame both vector panels identically (shared footprint box) so
+                # the shared arrow scale actually reads the same on screen —
+                # otherwise each side autoranges to its own footprint and equal
+                # speeds look different. Independent of the display-lock button.
+                kin_extent = _shared_extent(source_folder)
             fig = build_summary_figure(
                 side.summary_df, view=mode, z=z,
                 vector_scale_factor=vector_scale or 1.0,
                 source_label=side.src.source,
                 vector_scale_abs=vscale_abs,
+                kin_extent=kin_extent,
             )
             fig.update_layout(uirevision=f"{prefix}:{source_folder}:{mode}")
             return fig
@@ -423,7 +434,7 @@ def register_compare_callbacks(
             j = next((k for k, (e, _) in enumerate(side.epochs)
                       if abs(e - ev) <= _EV_TOL), None)
             if j is None:
-                return _blank("No clustering data for this epoch."), None
+                return _blank("No clustering data for this epoch.", uirev), None
             return overlay_figure_for_epoch(
                 side.bundle, j, cache_dir,
                 source_no_band=no_band, band=band,

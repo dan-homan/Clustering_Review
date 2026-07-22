@@ -49,9 +49,11 @@ def build_xviii_overlay(
     """Render the XVIII overlay for one epoch (matched to the nearest MOJAVE
     observation in ``bundle``'s npz for the background image)."""
     if bundle.plotdata is None:
-        return _empty_overlay("XVIII overlay needs the current model's npz."), None
+        return _empty_overlay("XVIII overlay needs the current model's npz.",
+                              uirevision), None
     if xviii_df is None or xviii_df.empty:
-        return _empty_overlay("No XVIII Gaussian fits for this source."), None
+        return _empty_overlay("No XVIII Gaussian fits for this source.",
+                              uirevision), None
 
     pd_ = bundle.plotdata
     ep_vals = np.asarray(pd_.epoch_info["epoch_val"], dtype=float)
@@ -62,7 +64,8 @@ def build_xviii_overlay(
 
     if not (epoch_match_mask(xviii_df["epoch"].to_numpy(), ev)
             & (xviii_df["clusterID"] >= 0)).any():
-        return _empty_overlay(f"No XVIII features at {epoch_name}."), None
+        return _empty_overlay(f"No XVIII features at {epoch_name}.",
+                              uirevision), None
 
     # Re-register onto the clustering map. ``xviii_df`` carries absolute
     # map positions in ``avg_x``/``avg_y`` with ``core_x``/``core_y`` = the
@@ -95,7 +98,7 @@ def build_xviii_overlay(
         try:
             fits_path = fetch_fits(ref, cache_dir, fits_data_dir=fits_data_dir)
         except Exception as e:  # noqa: BLE001 — surface the fetch error to the UI
-            return _empty_overlay(f"Could not fetch FITS:\n{e}"), None
+            return _empty_overlay(f"Could not fetch FITS:\n{e}", uirevision), None
         epoch_axes = _load_fits_image(fits_path, core_x=core_x, core_y=core_y)
         image_source_label = "FITS Image"
     else:

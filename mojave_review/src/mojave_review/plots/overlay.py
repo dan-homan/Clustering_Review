@@ -717,7 +717,7 @@ def overlay_figure_for_epoch(
     return fig, beam_params
 
 
-def _empty_overlay(message: str) -> go.Figure:
+def _empty_overlay(message: str, uirevision: str | None = None) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
         template="plotly_white",
@@ -728,4 +728,9 @@ def _empty_overlay(message: str) -> go.Figure:
                           showarrow=False, font=dict(size=14, color="#666"),
                           align="center")],
     )
+    # A matching uirevision lets a caller step THROUGH a blank epoch without
+    # Plotly discarding the retained zoom, so returning to a real epoch keeps
+    # the same view (compare page: XVIII goes blank past ~2013).
+    if uirevision is not None:
+        fig.update_layout(uirevision=uirevision)
     return fig

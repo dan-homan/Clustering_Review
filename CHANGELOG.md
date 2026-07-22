@@ -4,6 +4,23 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-07-22 — Compare page: consistent vector frame + zoom across epochs
+
+- **Kinematics vector panels now share a frame, not just a scale.** Sharing only
+  the arrow scale (previous entry) wasn't enough: each panel still autoranged to
+  its own footprint, so equal speeds rendered at different on-screen lengths
+  (and a large shared scale could overflow a small panel). Both panels are now
+  framed to the same shared box (`build_summary_figure(kin_extent=)` =
+  `_shared_extent`), so a vector of a given length means the same speed on both
+  sides — always, with or without the display-lock.
+- **Locked zoom survives blank epochs.** Stepping through an epoch where one side
+  has no data (XVIII goes blank past ~2013) used to reset the zoom, because the
+  blank map had no `uirevision`. `_blank` / `_empty_overlay` now carry the
+  panel's overlay `uirevision`, so a locked, zoomed-in view stays put as you
+  step from epoch to epoch.
+
+---
+
 ## 2026-07-22 — Compare page: shared Kinematics vector scale
 
 - **Both compare panels now use one velocity-vector scale.** A vector of a

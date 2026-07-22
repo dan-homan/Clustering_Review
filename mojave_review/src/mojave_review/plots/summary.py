@@ -510,6 +510,7 @@ def build_summary_figure(
     only_3sigma: bool = False,
     source_label: str = "",
     vector_scale_abs: float | None = None,
+    kin_extent: "tuple | None" = None,
 ) -> go.Figure:
     """Build a 2-row (top/bottom) summary figure for one of the four views.
 
@@ -527,6 +528,12 @@ def build_summary_figure(
     shared value (see `shared_vector_scale_abs`) to make vector length mean the
     same speed across several panels. None → auto (median speed at ~1/5th of
     the panel span, floored at 0.05 mas/yr).
+
+    `kin_extent` = ``((x_lo, x_hi), (y_lo, y_hi))`` frames the Kinematics vector
+    (X/Y) subplot to an explicit box instead of autoranging. Pass a shared box
+    to several panels so equal-length vectors read as equal speeds regardless of
+    each side's own footprint (compare page). None → autorange. Ignored by other
+    views.
 
     `hide_non_robust` drops the non-robust (slategray) clusters from both the
     plots and the legend. The unassigned cluster (-1) is treated as non-robust
@@ -667,19 +674,28 @@ def build_summary_figure(
                          rangemode="tozero", row=1, col=1)
         fig.update_yaxes(title_text="Apparent speed [mas/yr]",
                          rangemode="tozero", row=1, col=1)
-        # +x to the left (astro convention). We DON'T set an explicit range
-        # here: letting Plotly autorange (reversed for x) reproduces exactly
-        # what the toolbar "home"/reset button gives — a snug, equal-aspect
-        # fit to the markers (cluster tails + core). scaleanchor +
-        # constrain="domain" keep mas/pixel equal while still allowing a
-        # free-form drag-zoom (panel shrinks instead of expanding the data
-        # range to match aspect). autorange="reversed" is what flips +x left
-        # without an explicit range to fight it.
-        fig.update_xaxes(title_text="X [mas]", row=2, col=1,
-                         autorange="reversed", constrain="domain")
-        fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
-                         scaleanchor="x2", scaleratio=1.0,
-                         constrain="domain")
+        # +x to the left (astro convention). scaleanchor + constrain="domain"
+        # keep mas/pixel equal while allowing a free-form drag-zoom (the panel
+        # letterboxes instead of expanding the data range to match aspect).
+        #   * kin_extent given (compare page): frame BOTH panels to the same
+        #     explicit box so a vector of a given length means the same speed on
+        #     both sides even without the display-lock. Explicit reversed x
+        #     range flips +x left; constrain="domain" honours both ranges.
+        #   * kin_extent None (main page): autorange="reversed" gives the snug
+        #     equal-aspect fit the toolbar "home"/reset reproduces.
+        if kin_extent is not None:
+            (kx_lo, kx_hi), (ky_lo, ky_hi) = kin_extent
+            fig.update_xaxes(title_text="X [mas]", row=2, col=1,
+                             range=[kx_hi, kx_lo], constrain="domain")
+            fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
+                             scaleanchor="x2", scaleratio=1.0,
+                             range=[ky_lo, ky_hi], constrain="domain")
+        else:
+            fig.update_xaxes(title_text="X [mas]", row=2, col=1,
+                             autorange="reversed", constrain="domain")
+            fig.update_yaxes(title_text="Y [mas]", row=2, col=1,
+                             scaleanchor="x2", scaleratio=1.0,
+                             constrain="domain")
 
     fig.update_layout(
         template="plotly_white",
