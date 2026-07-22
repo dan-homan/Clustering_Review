@@ -103,6 +103,81 @@ function(epoch, mode, _figure) {
 """
 
 
+# Axis-lock: when "Lock display areas" is on, mirror one panel's zoom/pan onto
+# the other so both always frame the same plotting area. Parameterized by the
+# SOURCE and TARGET graph ids.
+#
+# We do NOT read ranges out of relayoutData: the overlay's equal-aspect
+# letterbox (equal_aspect.js) fires its own domain-only Plotly.relayout right
+# after the user's zoom, and Dash's relayoutData prop keeps only the LATEST
+# event — so the domain event clobbers the range event and a payload-based
+# filter sees nothing. Instead, on ANY genuine relayout we read the source
+# graph's CURRENT axis ranges from _fullLayout (which the letterbox never
+# touches) and copy them to the target. Domains are left alone so each panel
+# keeps its own letterbox. A global guard + a near-equal check break the echo
+# loop (the target's own relayout, and the letterbox's follow-up domain event).
+_SYNC_JS = """
+function(relayoutData, lockVal) {
+    var ns = window.dash_clientside;
+    if (!lockVal || lockVal.length === 0) return ns.no_update;
+    if (!relayoutData || window.__cmpAxisSync || !window.Plotly)
+        return ns.no_update;
+    var sw = document.getElementById('%(source)s');
+    var tw = document.getElementById('%(target)s');
+    if (!sw || !tw) return ns.no_update;
+    var sgd = sw.querySelector('.js-plotly-plot');
+    var tgd = tw.querySelector('.js-plotly-plot');
+    if (!sgd || !tgd || !sgd._fullLayout || !tgd._fullLayout)
+        return ns.no_update;
+    var sfl = sgd._fullLayout, tfl = tgd._fullLayout, patch = {}, changed = false;
+    Object.keys(sfl).forEach(function (k) {
+        if ((k.indexOf('xaxis') === 0 || k.indexOf('yaxis') === 0)
+            && sfl[k] && sfl[k].range) {
+            var nw = sfl[k].range;
+            patch[k + '.range'] = nw.slice();
+            var cur = tfl[k] && tfl[k].range;
+            if (!cur || Math.abs(cur[0] - nw[0]) > 1e-6
+                || Math.abs(cur[1] - nw[1]) > 1e-6) changed = true;
+        }
+    });
+    if (!changed || Object.keys(patch).length === 0) return ns.no_update;
+    window.__cmpAxisSync = true;
+    setTimeout(function () { window.__cmpAxisSync = false; }, 400);
+    var p = window.Plotly.relayout(tgd, patch);
+    if (p && p.finally) p.finally(function () { window.__cmpAxisSync = false; });
+    return ns.no_update;
+}
+"""
+
+# On toggling the lock ON, immediately copy the LEFT (XVIII) panels' current
+# ranges to the RIGHT (clustering) panels so they start out identical.
+_SYNC_ENABLE_JS = """
+function(lockVal) {
+    var ns = window.dash_clientside;
+    if (!lockVal || lockVal.length === 0 || !window.Plotly) return ns.no_update;
+    var pairs = [['cmp-x-overlay-graph', 'cmp-c-overlay-graph'],
+                 ['cmp-x-summary-graph', 'cmp-c-summary-graph']];
+    window.__cmpAxisSync = true;
+    setTimeout(function () { window.__cmpAxisSync = false; }, 500);
+    pairs.forEach(function (pr) {
+        var sw = document.getElementById(pr[0]);
+        var tw = document.getElementById(pr[1]);
+        if (!sw || !tw) return;
+        var sgd = sw.querySelector('.js-plotly-plot');
+        var tgd = tw.querySelector('.js-plotly-plot');
+        if (!sgd || !tgd || !sgd._fullLayout) return;
+        var fl = sgd._fullLayout, patch = {};
+        Object.keys(fl).forEach(function (k) {
+            if ((k.indexOf('xaxis') === 0 || k.indexOf('yaxis') === 0)
+                && fl[k] && fl[k].range) patch[k + '.range'] = fl[k].range.slice();
+        });
+        if (Object.keys(patch).length) window.Plotly.relayout(tgd, patch);
+    });
+    return ns.no_update;
+}
+"""
+
+
 @dataclass
 class _Side:
     src: object
@@ -300,7 +375,7 @@ def register_compare_callbacks(
             Output(f"{prefix}-beam-params", "data"),
             Input("cmp-source-picker", "value"),
             Input("cmp-epoch-slider", "value"),
-            Input(f"{prefix}-use-fits", "value"),
+            Input("cmp-use-fits", "value"),
             Input(f"{prefix}-reset-counter", "data"),
         )
         def _overlay(source_folder, epoch_int, use_fits_val, reset_counter):
@@ -359,3 +434,25 @@ def register_compare_callbacks(
 
     _register_panel(XVIII, "xviii")
     _register_panel(CLUST, "clust")
+
+    # ---- axis lock: mirror zoom/pan between the two panels ------------
+    for src_gid, tgt_gid, dummy in (
+        ("cmp-x-overlay-graph", "cmp-c-overlay-graph", "cmp-sync-x-ov"),
+        ("cmp-c-overlay-graph", "cmp-x-overlay-graph", "cmp-sync-c-ov"),
+        ("cmp-x-summary-graph", "cmp-c-summary-graph", "cmp-sync-x-sum"),
+        ("cmp-c-summary-graph", "cmp-x-summary-graph", "cmp-sync-c-sum"),
+    ):
+        app.clientside_callback(
+            _SYNC_JS % {"source": src_gid, "target": tgt_gid},
+            Output(dummy, "data"),
+            Input(src_gid, "relayoutData"),
+            State("cmp-lock-axes", "value"),
+            prevent_initial_call=True,
+        )
+
+    app.clientside_callback(
+        _SYNC_ENABLE_JS,
+        Output("cmp-sync-enable", "data"),
+        Input("cmp-lock-axes", "value"),
+        prevent_initial_call=True,
+    )

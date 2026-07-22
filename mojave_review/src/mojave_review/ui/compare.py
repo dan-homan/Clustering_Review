@@ -88,12 +88,6 @@ def _panel(prefix: str, title: str, subtitle: str, accent: str) -> html.Div:
                         clearable=False,
                         style={"minWidth": "180px", "flex": "1 1 0"},
                     ),
-                    dcc.Checklist(
-                        id=f"{prefix}-use-fits",
-                        options=[{"label": " Use FITS image", "value": "fits"}],
-                        value=[],
-                        style={"fontSize": "0.85em", "marginLeft": "0.6em"},
-                    ),
                     html.Button("Reset view", id=f"{prefix}-reset", n_clicks=0,
                                 title="Redraw and reset the overlay zoom",
                                 style={"marginLeft": "0.6em",
@@ -229,6 +223,30 @@ def build_compare_page(
                "padding": "0.4em 1em", "borderBottom": "1px solid #eee"},
     )
 
+    # Shared display controls — apply to BOTH panels at once. FITS toggle,
+    # deeper (3σ) contour (only meaningful on real FITS, so disabled until FITS
+    # is on), and a lock that mirrors the zoom/pan between the two panels.
+    controls_bar = html.Div(
+        [
+            dcc.Checklist(
+                id="cmp-use-fits",
+                options=[{"label": " Use FITS images", "value": "fits"}],
+                value=[],
+                style={"fontSize": "0.9em"},
+            ),
+            dcc.Checklist(
+                id="cmp-lock-axes",
+                options=[{"label": " Lock display areas (both panels zoom "
+                          "together)", "value": "lock"}],
+                value=[],
+                style={"fontSize": "0.9em", "marginLeft": "1.2em"},
+            ),
+        ],
+        style={"display": "flex", "alignItems": "center",
+               "padding": "0.35em 1em", "borderBottom": "1px solid #eee",
+               "flexWrap": "wrap", "gap": "0.2em"},
+    )
+
     body = html.Div(
         [
             _panel(XVIII, "MOJAVE XVIII", "Gaussian fits (Lister et al.)",
@@ -248,6 +266,12 @@ def build_compare_page(
             dcc.Store(id="cmp-active-epoch", data=None),
             dcc.Store(id="cmp-x-epoch-line-dummy", data=None),
             dcc.Store(id="cmp-c-epoch-line-dummy", data=None),
+            # Dummy outputs for the axis-lock clientside sync callbacks.
+            dcc.Store(id="cmp-sync-x-ov", data=None),
+            dcc.Store(id="cmp-sync-c-ov", data=None),
+            dcc.Store(id="cmp-sync-x-sum", data=None),
+            dcc.Store(id="cmp-sync-c-sum", data=None),
+            dcc.Store(id="cmp-sync-enable", data=None),
             html.Div(
                 f"No finalized sources are present in both the XVIII table "
                 f"and the current results."
@@ -257,6 +281,7 @@ def build_compare_page(
             ),
             header,
             epoch_bar,
+            controls_bar,
             body,
         ]
     )

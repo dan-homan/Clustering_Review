@@ -8,7 +8,7 @@ two axes share data-per-pixel scale.
 A reasonable Plotly substitute for matplotlib's `contour()` is harder to
 get than it sounds — `go.Contour` has no `levels=[...]` arg, only
 start/end/size. We work around that by transforming z into log2-units of a
-chosen contour base (`cbase = 3.5 * inoise`), then asking for unit-step
+chosen contour base (`cbase = 3.0 * inoise`), then asking for unit-step
 contours.
 """
 
@@ -55,6 +55,12 @@ def _rgba(named_color: str, alpha: float) -> str:
 #   sigma = FWHM / (2 sqrt(2 ln 2)) = FWHM / 2.3548
 #   3-sigma diameter = 6 sigma = 6 * FWHM / 2.3548 = 2.548 * FWHM
 SIGMA3_OVER_FWHM = 2.548
+
+# A fit whose size (geometric-mean FWHM) is below this is effectively a point
+# — its ellipse would be invisible — so we draw a bold "+" in the cluster
+# colour at its location instead. XVIII Gaussian fits are occasionally exactly
+# point-like (size 0); this also catches any sub-resolution component.
+POINT_SIZE_MAS = 0.05
 
 
 # Tight tolerance for matching the floating-point ``epoch`` column to
@@ -198,7 +204,7 @@ def build_overlay_figure(
     bmaj: float,
     bmin: float,
     bpa: float,
-    cbase_factor: float = 3.5,
+    cbase_factor: float = 3.0,
     n_levels: int = 10,
     show_3sigma: bool = False,
     image_source_label: str = "",
@@ -329,7 +335,10 @@ def build_overlay_figure(
             # scatter at every epoch.
             rob = robust_by_cluster_map.get(int(cid), True)
             color, _, _ = _cluster_style(int(cid), bool(rob))
-            if np.isfinite(maj) and np.isfinite(minor) and maj > 0 and minor > 0:
+            has_size = (np.isfinite(maj) and np.isfinite(minor)
+                        and maj > 0 and minor > 0)
+            size_mas = np.sqrt(maj * minor) if has_size else 0.0
+            if size_mas >= POINT_SIZE_MAS:
                 pa_use = float(pa) if np.isfinite(pa) else 0.0
                 # Draw the 3-sigma inclusion outline FIRST (larger, lighter)
                 # so the FWHM ellipse overlays it cleanly — Plotly composites
@@ -365,6 +374,22 @@ def build_overlay_figure(
                                        f"maj {maj:.3f} mas<br>"
                                        f"min {minor:.3f} mas<br>"
                                        f"pa {pa:.1f}°<extra></extra>"),
+                    )
+                )
+            else:
+                # Point-like fit (size 0 or < POINT_SIZE_MAS): the ellipse
+                # would be invisible, so mark the location with a bold "+" in
+                # the cluster colour.
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x], y=[y], mode="markers",
+                        marker=dict(color=color, symbol="cross", size=13,
+                                    line=dict(width=1, color=color)),
+                        showlegend=False,
+                        hovertemplate=(f"cluster {cid} (point)<br>"
+                                       f"size {size_mas:.3f} mas<br>"
+                                       "center (%{x:.3f}, %{y:.3f}) mas"
+                                       "<extra></extra>"),
                     )
                 )
             # Non-core clusters: black number at center. Core (clusterID == 0)
@@ -538,6 +563,7 @@ def overlay_figure_for_epoch(
     uirevision: str = "overlay",
     source_label: str = "",
     extent: tuple | None = None,
+    cbase_factor: float = 3.0,
 ) -> tuple[go.Figure, dict | None]:
     """Higher-level wrapper: prepares the Stokes I image (either by
     synthesizing it from clean components or by fetching the CLEAN FITS),
@@ -656,6 +682,7 @@ def overlay_figure_for_epoch(
         source_label=source_label,
         uirevision=uirevision,
         extent_override=extent,
+        cbase_factor=cbase_factor,
     )
 
     # Locate the beam trace by name. x_extent / y_extent are the initial

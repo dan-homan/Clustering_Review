@@ -259,7 +259,10 @@ resize on the right).
    features flicker while scrubbing.
 3. 3σ ellipse `2.548 × FWHM`, dotted, faint fill. Gated by `show_3sigma`
    (default False, no UI toggle).
-4. FWHM ellipse: solid outline, faint fill.
+4. FWHM ellipse: solid outline, faint fill. A **point-like** fit — size
+   (`√(fwhm_maj·fwhm_min)`) 0 or `< POINT_SIZE_MAS` (0.05 mas) — draws a bold
+   `+` (`symbol="cross"`) in the cluster colour instead (its ellipse would be
+   invisible; XVIII Gaussian fits are occasionally exactly point-like).
 5. Black cluster-number labels (skip core).
 6. Black `×` at core.
 7. Beam ellipse (lower-left) — **clientside callback** tracks the viewport on
@@ -676,8 +679,27 @@ loop; inert off-page).
 - **Shared XY extent.** `_shared_extent` = union of both sides' cluster
   footprints, passed as `extent`/`extent_override` to both overlays (new param
   on `overlay_figure_for_epoch` / `build_overlay_figure` / `build_xviii_overlay`)
-  so both panels frame identically. Per-panel `Reset view` + `Use FITS` stay
-  independent.
+  so both panels frame identically. Per-panel `Reset view` stays independent.
+- **Shared display controls** (`controls_bar`, above both panels — NOT per-panel):
+  - `cmp-use-fits` — one FITS toggle drives BOTH overlays.
+  - `cmp-lock-axes` — mirror zoom/pan between the two panels so they always show
+    the same plotting area. Clientside `_SYNC_JS` (per source→target graph;
+    overlay↔overlay + summary↔summary). **It reads the SOURCE graph's live
+    `_fullLayout` axis ranges — NOT `relayoutData`** — because the overlay's
+    equal-aspect letterbox (`equal_aspect.js`) fires a domain-only
+    `Plotly.relayout` right after a zoom and Dash keeps only the LATEST
+    relayout event, so a payload-based range filter sees nothing (this was the
+    "lock doesn't work on overlays" bug). Only ranges are copied (domains left
+    alone → each panel keeps its own letterbox). A global `window.__cmpAxisSync`
+    guard (400 ms) + a per-axis near-equal check break the echo loop (the
+    target's own relayout and the letterbox's follow-up domain event).
+    `_SYNC_ENABLE_JS` mirrors left→right on toggle-on. Dummy `cmp-sync-*` stores
+    are the outputs.
+- **Contour base is 3σ everywhere.** `cbase_factor` defaults to **3.0**
+  (`cbase = 3.0 × inoise`) in `build_overlay_figure` /
+  `overlay_figure_for_epoch` / `build_xviii_overlay` — used by the main page and
+  both compare panels. (Was 3.5; a per-page 3× toggle was tried and dropped as
+  needless — 3.0 is close enough and now universal.)
 - **Source list** (`compare.compare_source_options`): XVIII sources ∩ current
   Results ∩ **phase == `final`** (`store.source_phase`). One shared
   `cmp-source-picker` drives both panels.

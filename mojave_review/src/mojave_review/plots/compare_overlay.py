@@ -44,6 +44,7 @@ def build_xviii_overlay(
     uirevision: str = "xviii-overlay",
     source_label: str = "",
     extent: tuple | None = None,
+    cbase_factor: float = 3.0,
 ) -> tuple[go.Figure, dict | None]:
     """Render the XVIII overlay for one epoch (matched to the nearest MOJAVE
     observation in ``bundle``'s npz for the background image)."""
@@ -124,6 +125,7 @@ def build_xviii_overlay(
         source_label=source_label,
         uirevision=uirevision,
         extent_override=extent,
+        cbase_factor=cbase_factor,
     )
 
     beam_idx = next((i for i, t in enumerate(fig.data)

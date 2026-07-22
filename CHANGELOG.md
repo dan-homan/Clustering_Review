@@ -4,6 +4,27 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-07-22 — XVIII comparison page: shared controls + point markers
+
+- **Point-like fits render as a bold `+`.** Any component whose size
+  (`√(fwhm_maj·fwhm_min)`) is 0 or below 0.05 mas now draws a bold `+` in the
+  cluster colour at its location instead of an invisible collapsed ellipse
+  (`plots/overlay.POINT_SIZE_MAS`). Applies to every overlay; XVIII Gaussian
+  fits are occasionally exactly point-like.
+- **Shared FITS toggle.** The per-panel "Use FITS" checkboxes are replaced by a
+  single `cmp-use-fits` above both panels, so the choice drives both sides at
+  once.
+- **Contour base set to 3σ everywhere.** `cbase_factor` default is now 3.0
+  (`cbase = 3.0 × inoise`) in every overlay path — main page and both compare
+  panels. Close enough to the previous 3.5×, so the short-lived per-page 3×
+  toggle was removed.
+- **Lock display areas.** New `cmp-lock-axes` mirrors zoom/pan between the two
+  panels (clientside), so a change to one produces the same change on the other
+  and they always frame the same plotting area. Ranges are synced by reading the
+  source graph's live `_fullLayout` (not the `relayoutData` payload, which the
+  equal-aspect letterbox clobbers with a domain-only event) — the fix for the
+  lock not working on the Epoch overlay panels. Domains are left per-panel.
+
 ## 2026-07-21 — XVIII comparison page
 
 - **New `/compare` page** (read-only, header link on the review page): the old
