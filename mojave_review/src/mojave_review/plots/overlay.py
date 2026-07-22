@@ -39,6 +39,7 @@ _NAMED_RGB = {
     "red": (255, 0, 0),
     "magenta": (255, 0, 255),
     "goldenrod": (218, 165, 32),
+    "darkorange": (255, 140, 0),
     "gray": (128, 128, 128),
     "cyan": (0, 255, 255),
     "slategray": (112, 128, 144),
@@ -379,12 +380,14 @@ def build_overlay_figure(
             else:
                 # Point-like fit (size 0 or < POINT_SIZE_MAS): the ellipse
                 # would be invisible, so mark the location with a bold "+" in
-                # the cluster colour.
+                # the cluster colour, lightened with the same 0.6 alpha the CC
+                # markers use so it doesn't read heavier than the ellipses.
+                pt_color = _rgba(color, 0.6)
                 fig.add_trace(
                     go.Scatter(
                         x=[x], y=[y], mode="markers",
-                        marker=dict(color=color, symbol="cross", size=13,
-                                    line=dict(width=1, color=color)),
+                        marker=dict(color=pt_color, symbol="cross", size=13,
+                                    line=dict(width=1, color=pt_color)),
                         showlegend=False,
                         hovertemplate=(f"cluster {cid} (point)<br>"
                                        f"size {size_mas:.3f} mas<br>"
