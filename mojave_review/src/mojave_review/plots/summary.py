@@ -228,7 +228,7 @@ def _add_cluster_traces(
     fig: go.Figure, s: _Slice, row: int, col: int, ydata: np.ndarray,
     show_legend: bool, show_fit: np.ndarray | None = None,
     ylabel_for_hover: str = "y", error_y_arr: np.ndarray | None = None,
-    yunit: str = "",
+    yunit: str = "", hover_extra: str = "",
 ) -> None:
     color, symbol, filled = _cluster_style(s.cid, s.robust)
     marker = _marker_style(color, symbol, filled)
@@ -253,7 +253,8 @@ def _add_cluster_traces(
             hovertemplate=(
                 f"cluster %{{customdata[0]:.0f}}<br>"
                 f"epoch %{{customdata[2]}}<br>"
-                f"{ylabel_for_hover} %{{y:.4g}}{yunit}<extra></extra>"
+                f"{ylabel_for_hover} %{{y:.4g}}{yunit}{hover_extra}"
+                "<extra></extra>"
             ),
         ),
         row=row, col=col,
@@ -468,6 +469,32 @@ def _motion_fit(s: _Slice) -> _MotionFit | None:
     )
 
 
+def _beta_str(speed: float, speed_err: float, z: float) -> str:
+    """β_app (apparent speed in units of c) with propagated 1-sigma error, as a
+    hover string, or "" when z is unknown. ``beta_app`` is linear in the angular
+    speed, so the error simply scales: β_err = beta_app(speed_err)."""
+    from ..data.source_params import beta_app as _beta_app
+    b = _beta_app(speed, z)
+    if b is None:
+        return ""
+    b_err = _beta_app(speed_err, z) or 0.0
+    return f"β_app = {b:.2f} ± {b_err:.2f} c (z = {z:g})"
+
+
+def _motion_hover_extra(mf: "_MotionFit | None", z: float) -> str:
+    """Hover suffix describing a cluster's fitted proper motion: fitted speed in
+    mas/yr (1-sigma error) and, when z is known, apparent speed in c (also with
+    a 1-sigma error). Returns "" when there is no fit. Prefixed with ``<br>`` so
+    it can be appended straight into a hovertemplate."""
+    if mf is None:
+        return ""
+    lines = [f"fitted speed {mf.speed:.3f} ± {mf.speed_err:.3f} mas/yr"]
+    beta = _beta_str(mf.speed, mf.speed_err, z)
+    if beta:
+        lines.append(beta)
+    return "<br>" + "<br>".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Public figure builder
 # ---------------------------------------------------------------------------
@@ -562,6 +589,7 @@ def build_summary_figure(
                     show_legend=True,
                     show_fit=show_fit,
                     ylabel_for_hover="dist", error_y_arr=s.sig_dist,
+                    hover_extra=_motion_hover_extra(mf, z),
                 )
         fig.update_xaxes(title_text="Epoch", row=1, col=1)
         fig.update_yaxes(title_text="Distance from origin [mas]", row=1, col=1)
@@ -695,15 +723,10 @@ def _draw_kinematics(
     if not fits:
         return
 
-    # beta_app (apparent speed in units of c) for the hovers, when z is known.
-    from ..data.source_params import beta_app as _beta_app
-    z_known = z is not None and np.isfinite(z) and z > 0
-
-    def _beta_line(speed: float) -> str:
-        if not z_known:
-            return ""
-        b = _beta_app(speed, z)
-        return f"β_app = {b:.2f} c for z = {z:g}<br>" if b is not None else ""
+    # beta_app (apparent speed in units of c, with 1-sigma error) for the hovers.
+    def _beta_line(mf: "_MotionFit") -> str:
+        b = _beta_str(mf.speed, mf.speed_err, z)
+        return f"{b}<br>" if b else ""
 
     # speed vs distance scatter, with 1-sigma speed error bars
     for mf in fits:
@@ -720,7 +743,7 @@ def _draw_kinematics(
                                "median dist %{x:.2f} mas<br>"
                                f"speed {mf.speed:.3f} ± {mf.speed_err:.3f} "
                                "mas/yr<br>"
-                               f"{_beta_line(mf.speed)}<extra></extra>"),
+                               f"{_beta_line(mf)}<extra></extra>"),
             ),
             row=1, col=1,
         )
@@ -768,7 +791,7 @@ def _draw_kinematics(
                 hovertemplate=(f"cluster {mf.cid}<br>"
                                "tail (%{x:.2f}, %{y:.2f}) mas<br>"
                                f"vx {sx:.3f} mas/yr<br>vy {sy:.3f} mas/yr<br>"
-                               f"{_beta_line(mf.speed)}<extra></extra>"),
+                               f"{_beta_line(mf)}<extra></extra>"),
             ),
             row=2, col=1,
         )

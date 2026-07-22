@@ -4,6 +4,18 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-07-22 — Position hover shows fitted speed
+
+- **Distance-vs-epoch tooltips now report the fitted proper motion.** Hovering a
+  point in the Position view's top panel appends the cluster's fitted speed in
+  `mas/yr` (± 1σ) and, when the source redshift is known, the apparent speed in
+  units of `c` (β_app ± 1σ) — the same information the Kinematics speed-vs-
+  distance plot already shows. Shared `_beta_str` / `_motion_hover_extra`
+  helpers in `plots/summary.py`; the β line now carries its propagated 1σ error
+  in the Kinematics hovers too.
+
+---
+
 ## 2026-07-22 — XVIII comparison page: shared controls + point markers
 
 - **Point-like fits render as a bold `+`.** Any component whose size
