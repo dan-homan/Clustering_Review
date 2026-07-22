@@ -680,6 +680,13 @@ loop; inert off-page).
   footprints, passed as `extent`/`extent_override` to both overlays (new param
   on `overlay_figure_for_epoch` / `build_overlay_figure` / `build_xviii_overlay`)
   so both panels frame identically. Per-panel `Reset view` stays independent.
+- **Shared Kinematics vector scale.** Both panels draw velocity arrows at ONE
+  absolute scale (mas of arrow per mas/yr) so equal speeds are equal-length on
+  both sides (independent per-panel auto-scales were confusing). `_summary`
+  computes it over BOTH sides' fits via `summary.kinematics_vector_stats` +
+  `shared_vector_scale_abs`, passed as `build_summary_figure(vector_scale_abs=)`.
+  None (either side lacking a fit) → each panel auto-scales as before. The
+  per-panel vector-scale slider is a multiplier ON TOP (both default 1.0).
 - **Shared display controls** (`controls_bar`, above both panels — NOT per-panel):
   - `cmp-use-fits` — one FITS toggle drives BOTH overlays.
   - `cmp-lock-axes` — mirror zoom/pan between the two panels so they always show

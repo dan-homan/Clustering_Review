@@ -27,7 +27,11 @@ from ..data.xviii import build_xviii_cluster_df, xviii_epoch_options
 from ..plots._extent import compute_source_extent
 from ..plots.compare_overlay import build_xviii_overlay
 from ..plots.overlay import overlay_figure_for_epoch
-from ..plots.summary import build_summary_figure
+from ..plots.summary import (
+    build_summary_figure,
+    kinematics_vector_stats,
+    shared_vector_scale_abs,
+)
 from .compare import CLUST, XVIII
 from .callbacks import _source_from_folder
 
@@ -351,10 +355,25 @@ def register_compare_callbacks(
             if side is None or side.summary_df is None or side.summary_df.empty:
                 return _blank("No data for this view.")
             z = redshift_for(_redshift_map, side.src.source) or 0.0
+            # Kinematics: use ONE absolute arrow scale computed over BOTH sides'
+            # fits, so a vector of a given length means the same speed on the
+            # XVIII and clustering panels (their independent auto-scales used to
+            # differ — confusing). None for other views / when neither side has
+            # a motion fit (then each panel auto-scales as before).
+            vscale_abs = None
+            if mode == "Kinematics":
+                stats = []
+                for k in ("clust", "xviii"):
+                    other = _resolve(k, source_folder)
+                    if other is not None and other.summary_df is not None \
+                            and not other.summary_df.empty:
+                        stats.append(kinematics_vector_stats(other.summary_df))
+                vscale_abs = shared_vector_scale_abs(stats)
             fig = build_summary_figure(
                 side.summary_df, view=mode, z=z,
                 vector_scale_factor=vector_scale or 1.0,
                 source_label=side.src.source,
+                vector_scale_abs=vscale_abs,
             )
             fig.update_layout(uirevision=f"{prefix}:{source_folder}:{mode}")
             return fig

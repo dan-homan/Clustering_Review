@@ -4,6 +4,20 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-07-22 — Compare page: shared Kinematics vector scale
+
+- **Both compare panels now use one velocity-vector scale.** A vector of a
+  given length means the same speed on the XVIII and clustering sides — the two
+  panels previously auto-scaled independently (off each side's own median
+  speed), so identical motions drew at different lengths, which was confusing.
+  The shared absolute scale is computed over BOTH sides' motion fits
+  (`summary.kinematics_vector_stats` + `shared_vector_scale_abs`) and passed as
+  `build_summary_figure(vector_scale_abs=)`. New `vector_scale_abs` param fixes
+  the base arrow scale (mas per mas/yr) instead of per-panel auto-fitting; the
+  per-panel scale slider still multiplies on top.
+
+---
+
 ## 2026-07-22 — Position hover shows fitted speed
 
 - **Distance-vs-epoch tooltips now report the fitted proper motion.** Hovering a

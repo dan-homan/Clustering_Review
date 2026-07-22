@@ -509,6 +509,7 @@ def build_summary_figure(
     hide_non_robust: bool = False,
     only_3sigma: bool = False,
     source_label: str = "",
+    vector_scale_abs: float | None = None,
 ) -> go.Figure:
     """Build a 2-row (top/bottom) summary figure for one of the four views.
 
@@ -518,10 +519,14 @@ def build_summary_figure(
     that carried extra meaning — the Kinematics velocity-vector panel — is
     re-added as a single targeted annotation below.
 
-    `vector_scale_factor` multiplies the auto-computed arrow length in the
-    Kinematics view. The auto scale draws the *median* speed (floored at
-    0.05 mas/yr) at ~1/5th of the panel span. 1.0 = default; <1 shrinks,
-    >1 enlarges. Ignored by other views.
+    `vector_scale_factor` multiplies the arrow length in the Kinematics view.
+    1.0 = default; <1 shrinks, >1 enlarges. Ignored by other views.
+
+    `vector_scale_abs` fixes the base arrow scale (mas of arrow per mas/yr of
+    speed) instead of auto-fitting it to this panel's median speed. Pass a
+    shared value (see `shared_vector_scale_abs`) to make vector length mean the
+    same speed across several panels. None → auto (median speed at ~1/5th of
+    the panel span, floored at 0.05 mas/yr).
 
     `hide_non_robust` drops the non-robust (slategray) clusters from both the
     plots and the legend. The unassigned cluster (-1) is treated as non-robust
@@ -652,7 +657,8 @@ def build_summary_figure(
     elif view == "Kinematics":
         _draw_kinematics(fig, slices, motion_fits,
                          vector_scale_factor=vector_scale_factor,
-                         only_3sigma=only_3sigma, z=z)
+                         only_3sigma=only_3sigma, z=z,
+                         vector_scale_abs=vector_scale_abs)
         # Always show the (0 distance, 0 speed) corner so the reader can see
         # where each feature sits relative to the core and to zero motion.
         # Distances and speeds are non-negative, so rangemode="tozero" anchors
@@ -709,6 +715,63 @@ def build_summary_figure(
 # ---------------------------------------------------------------------------
 
 
+def _auto_arrow_scale(speeds: np.ndarray, xs: np.ndarray,
+                      ys: np.ndarray) -> float:
+    """Base arrow scale (mas of drawn arrow per mas/yr of speed): draws the
+    MEDIAN speed at ~1/5th of the data span, with the core (0,0) always in the
+    extent and the reference speed floored at 0.05 mas/yr so a near-stationary
+    source doesn't blow the arrows up."""
+    all_xs = np.append(np.asarray(xs, float), 0.0)
+    all_ys = np.append(np.asarray(ys, float), 0.0)
+    span = max(float(np.ptp(all_xs)) or 1.0, float(np.ptp(all_ys)) or 1.0)
+    speeds = np.asarray(speeds, float)
+    ref_speed = max(float(np.median(speeds)) if speeds.size else 0.0, 0.05)
+    return 0.2 * span / ref_speed
+
+
+def kinematics_vector_stats(
+    cluster_df: pd.DataFrame, z: float = 0.0,
+    only_3sigma: bool = False, hide_non_robust: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(speeds, xs, ys)`` for the qualifying Kinematics vector fits — the
+    per-cluster |velocity| (mas/yr) and median (x, y) position (mas). Lets a
+    caller derive ONE shared absolute arrow scale across several panels (e.g.
+    the XVIII-vs-clustering compare page), so equal speeds draw equal-length
+    vectors everywhere. Empty arrays when there are no fits."""
+    if cluster_df is None or cluster_df.empty:
+        return np.array([]), np.array([]), np.array([])
+    shift_pa = _shift_pa_flag(cluster_df)
+    slices = _build_slices(cluster_df, z=z, shift_pa=shift_pa,
+                           flux_threshold=0.0)
+    if hide_non_robust:
+        slices = [s for s in slices
+                  if not (s.cid == -1 or (not s.robust and 0 <= s.cid < 1000))]
+    fits = [mf for mf in (_motion_fit(s) for s in slices)
+            if mf is not None and mf.cid > 0
+            and (not only_3sigma or mf.significant)]
+    speeds = np.array([mf.speed for mf in fits])
+    xs = np.array([mf.median_x for mf in fits])
+    ys = np.array([mf.median_y for mf in fits])
+    return speeds, xs, ys
+
+
+def shared_vector_scale_abs(
+    stats: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+) -> float | None:
+    """One absolute arrow scale (mas per mas/yr) computed over the UNION of
+    several panels' ``kinematics_vector_stats`` — pass it as ``vector_scale_abs``
+    to each ``build_summary_figure`` so vector length means the same thing on
+    every panel. None when no panel has a fit."""
+    if not stats:
+        return None
+    speeds = np.concatenate([s[0] for s in stats]) if stats else np.array([])
+    xs = np.concatenate([s[1] for s in stats]) if stats else np.array([])
+    ys = np.concatenate([s[2] for s in stats]) if stats else np.array([])
+    if speeds.size == 0:
+        return None
+    return _auto_arrow_scale(speeds, xs, ys)
+
+
 def _draw_kinematics(
     fig: go.Figure,
     slices: list[_Slice],
@@ -716,6 +779,7 @@ def _draw_kinematics(
     vector_scale_factor: float = 1.0,
     only_3sigma: bool = False,
     z: float = 0.0,
+    vector_scale_abs: float | None = None,
 ) -> None:
     fits = [mf for mf in motion_fits.values()
             if mf is not None and mf.cid > 0
@@ -753,19 +817,13 @@ def _draw_kinematics(
     ys = np.array([mf.median_y for mf in fits])
     vx = np.array([mf.px[0] for mf in fits])
     vy = np.array([mf.py[0] for mf in fits])
-    all_xs = np.append(xs, 0.0)
-    all_ys = np.append(ys, 0.0)
-    xspan = float(np.ptp(all_xs)) or 1.0
-    yspan = float(np.ptp(all_ys)) or 1.0
-    span = max(xspan, yspan)
-    # Auto-fit on the MEDIAN speed: draw the typical arrow at ~1/5th of the
-    # panel span, so most vectors are legible regardless of one fast outlier.
-    # Floor the reference speed at 0.05 mas/yr so a near-stationary source
-    # doesn't blow the arrows up to absurd lengths. User multiplier on top.
     speeds = np.sqrt(vx**2 + vy**2)
-    median_speed = float(np.median(speeds)) if speeds.size else 0.0
-    ref_speed = max(median_speed, 0.05)
-    arrow_scale = 0.2 * span / ref_speed * float(vector_scale_factor)
+    # Base scale (mas per mas/yr): an explicit ``vector_scale_abs`` (shared
+    # across panels, e.g. the compare page) wins; otherwise auto-fit on THIS
+    # panel's median speed so the typical arrow is ~1/5th of the data span.
+    base_scale = (float(vector_scale_abs) if vector_scale_abs is not None
+                  else _auto_arrow_scale(speeds, xs, ys))
+    arrow_scale = base_scale * float(vector_scale_factor)
 
     # Core marker at (0,0)
     fig.add_trace(
