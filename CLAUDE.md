@@ -128,7 +128,7 @@ for `Position Angle`:
 
 | View | Top | Bottom |
 |---|---|---|
-| Position | distance vs epoch (+ polyfit), 1σ bars | centroid track (x,y) mas vs core, +x reversed, equal scale (letterbox), 1σ bars |
+| Position | distance vs epoch (+ polyfit), 1σ bars | centroid track (x,y) mas vs core, +x reversed, equal scale (letterbox), 1σ bars, epoch-linked (below) |
 | Position Angle | *(single)* PA vs epoch, 1σ bars | — |
 | Flux | I flux vs epoch (log y) | Tb vs epoch (log y; 15.4 GHz, z) |
 | Polarization | P flux vs epoch (log y) | EVPA vs epoch |
@@ -146,6 +146,32 @@ cheap, preserves zoom). A per-view `epochAxes` map picks subplots: Position/PA �
 `[x]`, Flux/Polarization → `[x, x2]`, Kinematics → none (resets shapes to `[]`).
 Also keys on `summary-graph.figure` to re-apply after server rebuilds. Shapes
 are exclusively this callback's.
+
+**Epoch-linked XY panel (`assets/xy_epoch.js`).** The Position view's XY panel
+has no epoch axis, so instead of the vertical line it gets two browser-side
+behaviours, both `Plotly.restyle` on an already-drawn figure (never a server
+rebuild — cheap enough to scrub epochs with, and `uirevision`/zoom and the
+letterboxed domains survive):
+- **Active-epoch squares** — the track points at the overlay's epoch get a cyan
+  (`summary.XY_EPOCH_COLOR`) open square. An empty placeholder trace
+  (`meta={"xy": "highlight"}`, last trace in `_draw_xy`) is filled in by the
+  script; the epoch reaches it from the epoch-line clientside callbacks, which
+  call `window.mojaveXY.setEpoch(<graph id>, epoch)`.
+- **Epoch-range filter** — points outside the epoch range **visible in the
+  distance-vs-epoch panel above** are hidden by nulling x/y, so zooming that
+  panel in time thins a cluttered XY plot. No UI toggle and no opt-out: the top
+  panel autoranges over every point when unzoomed, so it's a no-op until the
+  reviewer zooms. Filters on **x (epoch) only** — a y (distance) zoom hides
+  nothing — and XY axis ranges still span every point, so the frame is fixed
+  and survivors don't move (reviewer decisions, 2026-08-05).
+
+Every XY trace therefore carries `meta = {"xy": "track"|"overlay", "ep", "x0",
+"y0"}` (`summary._xy_meta`): the drawn arrays are lossy once masked, so the
+originals + epochs ride along in `meta`, which keeps the script **stateless**
+(a rebuild ships fresh originals — no cache to invalidate). `"track"` traces
+also seed the highlight; `"overlay"` (use-in-fit slash / selection halo) are
+masked only. Applies to both main panes and both `/compare` Position panels
+(`GRAPH_IDS`).
 
 **No subplot/figure titles** (they duplicated axes + ate space). Instead
 top-left badges:
@@ -798,6 +824,17 @@ prefix /mojave-review/`. For Drive data: use Google Drive for Desktop and point
 - **Clientside callbacks that "patch" a figure must call `Plotly.restyle/
   relayout` directly and return `no_update`**, not a modified figure — returning
   a figure resets `uirevision` zoom. (Beam + active-epoch callbacks do this.)
+- **`gd.data[i].x` is NOT what's drawn — read `gd._fullData[i].x`.** plotly 6
+  ships numeric arrays base64-encoded (`{dtype, bdata}`) and leaves them encoded
+  in `gd.data`, decoding only into `_fullData` (nulls → `NaN`, so treat null and
+  NaN alike). `xy_epoch.js` compared against `gd.data` at first and every trace
+  looked changed after each rebuild → a full pointless restyle of the panel.
+- **A skipped clientside pass must be REMEMBERED, not dropped.** Scripts that
+  guard against re-entering on their own `Plotly.*` call (`xy_epoch.js`,
+  `equal_aspect.js`) will swallow a real zoom/epoch change that lands inside
+  that window, and nothing re-fires afterwards → stale render until the next
+  interaction. Set a `pending` flag and re-run on release (`xy_epoch.release`);
+  it converges because a pass with nothing to change issues no call.
 - **Dash `assets_folder` defaults to `./assets` relative to CWD** — `app.py`
   sets it to the package dir so `pip install` ships the JS/CSS.
 - **`*-open` markers use `marker.color` as the outline** — transparent color

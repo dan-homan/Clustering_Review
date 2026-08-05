@@ -1302,6 +1302,11 @@ def register_callbacks(
             var gd = wrapper.querySelector('.js-plotly-plot');
             if (!gd || !window.Plotly) return window.dash_clientside.no_update;
 
+            // The Position view's XY panel has no epoch axis to put a line on,
+            // so assets/xy_epoch.js squares the points AT this epoch instead.
+            // Hand it the value (it ignores every other view).
+            if (window.mojaveXY) window.mojaveXY.setEpoch('summary-graph', epoch);
+
             var epochAxes = {
                 'Position': ['x'],
                 'Position Angle': ['x'],
@@ -1342,6 +1347,10 @@ def register_callbacks(
             if (!wrapper) return window.dash_clientside.no_update;
             var gd = wrapper.querySelector('.js-plotly-plot');
             if (!gd || !window.Plotly) return window.dash_clientside.no_update;
+
+            if (window.mojaveXY) {
+                window.mojaveXY.setEpoch('summary-graph-right', epoch);
+            }
 
             var epochAxes = {
                 'Position': ['x'],

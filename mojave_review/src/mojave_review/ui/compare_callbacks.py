@@ -87,6 +87,9 @@ function(epoch, mode, _figure) {
     if (!wrapper) return window.dash_clientside.no_update;
     var gd = wrapper.querySelector('.js-plotly-plot');
     if (!gd || !window.Plotly) return window.dash_clientside.no_update;
+    // Position's XY panel has no epoch axis; assets/xy_epoch.js squares the
+    // points at this epoch there instead (ignored by the other modes).
+    if (window.mojaveXY) window.mojaveXY.setEpoch('%(gid)s', epoch);
     var epochAxes = {'Position': ['x'], 'Position Angle': ['x'],
                      'Flux': ['x', 'x2']};
     var axes = epochAxes[mode];

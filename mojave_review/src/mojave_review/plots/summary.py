@@ -206,6 +206,42 @@ def _customdata(s: _Slice) -> list[list]:
     return [[int(s.cid), float(t), str(n)] for t, n in zip(s.time, s.ep_name)]
 
 
+#: Colour of the "this epoch" square in the XY panel. Cyan is deliberately
+#: outside the cluster palette (_CL_COLORS has no "c") and distinct from the
+#: gold selection ring / black core ×.
+XY_EPOCH_COLOR = "#00b8d4"
+
+
+def _xy_meta(kind: str, ep: np.ndarray, xs: np.ndarray,
+             ys: np.ndarray) -> dict:
+    """Per-trace payload that ``assets/xy_epoch.js`` reads.
+
+    The XY panel is filtered in the BROWSER to the epoch range currently
+    visible in the distance-vs-epoch panel above it, and the points at the
+    overlay's active epoch get a cyan square. Both are per-point operations on
+    an already-drawn figure, so the script rewrites ``x``/``y`` via
+    ``Plotly.restyle`` (cheap, keeps zoom) — which means it needs each point's
+    epoch AND its unmasked position, since the drawn arrays are lossy once
+    hidden points are nulled. Carrying them in ``meta`` keeps the script
+    stateless: a server figure rebuild ships fresh originals, so there is no
+    cache to invalidate.
+
+    ``kind``: ``"track"`` (the cluster's centroid track — the only traces the
+    epoch highlight is derived from), ``"overlay"`` (the use-in-fit slash /
+    selection-halo subsets, masked but not highlighted), or ``"highlight"``
+    (the highlight trace itself; no arrays).
+
+    Plain Python floats / None, never numpy — same plotly-6 typed-array
+    hygiene as ``_customdata``.
+    """
+    def _vals(arr: np.ndarray) -> list[float | None]:
+        return [float(v) if np.isfinite(v) else None
+                for v in np.asarray(arr, dtype=float)]
+
+    return {"xy": kind, "ep": [float(t) for t in np.asarray(ep, dtype=float)],
+            "x0": _vals(xs), "y0": _vals(ys)}
+
+
 def _err_dict(arr: np.ndarray | None, color: str) -> dict | None:
     """Build a Plotly error-bar spec from a 1-sigma array, or None.
 
@@ -329,6 +365,7 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
             legendgroup=f"cid_{s.cid}",
             showlegend=show_legend and in_legend,
             customdata=_customdata(s),
+            meta=_xy_meta("track", s.time, s.xpos, s.ypos),
             hovertemplate=(
                 "cluster %{customdata[0]:.0f}<br>"
                 "epoch %{customdata[2]}<br>"
@@ -346,6 +383,8 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
                 marker={"color": "black", "symbol": "line-ne",
                         "size": 12, "line": {"width": 2, "color": "black"}},
                 showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
+                meta=_xy_meta("overlay", s.time[excl],
+                              s.xpos[excl], s.ypos[excl]),
             ),
             row=row, col=col,
         )
@@ -357,6 +396,8 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
                 marker={"color": "gold", "symbol": "circle-open",
                         "size": 22, "line": {"width": 3, "color": "gold"}},
                 showlegend=False, legendgroup=f"cid_{s.cid}", hoverinfo="skip",
+                meta=_xy_meta("overlay", s.time[s.selected],
+                              s.xpos[s.selected], s.ypos[s.selected]),
             ),
             row=row, col=col,
         )
@@ -372,7 +413,14 @@ def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
     equal units by letterboxing — it narrows the panel's ``xaxis<row>.domain``
     to match the current ranges after every draw/zoom, so circles stay round
     while the reviewer can still draw an arbitrary-shape zoom box. ``row``
-    selects the axis pair (1 -> x/y, 2 -> x2/y2)."""
+    selects the axis pair (1 -> x/y, 2 -> x2/y2).
+
+    Two more browser-side behaviours ride on the per-point ``meta`` attached
+    here (see ``_xy_meta`` and ``assets/xy_epoch.js``): points outside the
+    epoch range visible in the panel above are hidden, and the points at the
+    overlay's active epoch get the cyan square added at the end of this
+    function. The axis ranges below span EVERY point regardless, so the frame
+    stays fixed while points come and go."""
     all_x: list[float] = [0.0]
     all_y: list[float] = [0.0]
     for s in slices:
@@ -388,6 +436,20 @@ def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
                     "line": {"width": 2, "color": "black"}},
             name="core", showlegend=False,
             hovertemplate="core (0, 0)<extra></extra>",
+        ),
+        row=row, col=1,
+    )
+    # "This epoch" marker: an EMPTY placeholder that assets/xy_epoch.js fills
+    # (Plotly.restyle) with the track points at the overlay's active epoch —
+    # the XY counterpart of the vertical epoch line on the epoch-axis panels.
+    # Last trace, so it draws over the cluster markers.
+    fig.add_trace(
+        go.Scatter(
+            x=[], y=[], mode="markers",
+            marker={"color": XY_EPOCH_COLOR, "symbol": "square-open",
+                    "size": 18, "line": {"width": 2.5,
+                                         "color": XY_EPOCH_COLOR}},
+            showlegend=False, hoverinfo="skip", meta={"xy": "highlight"},
         ),
         row=row, col=1,
     )

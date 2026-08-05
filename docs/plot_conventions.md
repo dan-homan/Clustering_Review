@@ -47,6 +47,23 @@ velocity vectors, ...). Apply them by default when adding new plots.
    has vectors too small to see at auto-fit scale. Expose a slider /
    keyboard shortcut for the multiplier.
 
+6. **Keep spatial panels linked to the epoch axis beside them.** A sky-plane
+   panel paired with an epoch-axis panel must show *which* points belong to
+   the epoch being scrubbed in the Epoch overlay, since it has no epoch axis
+   of its own to carry the vertical epoch line. In the Position view's XY
+   panel that is a **cyan (`#00b8d4`) open square, size 18** around the
+   active epoch's points — cyan is outside the cluster palette and distinct
+   from the gold selection ring and the black core `×`.
+
+   The same pairing runs the other way: the XY panel shows **only the epochs
+   currently visible in the distance-vs-epoch panel above it**, so zooming
+   that panel in time thins a cluttered track plot (reviewer request,
+   2026-08-05). Only the **epoch (x) range** filters — a distance (y) zoom
+   deliberately does not hide points, and the XY axis **ranges stay framed on
+   every point** so survivors don't move when the frame above changes.
+   Implementation: `assets/xy_epoch.js` (browser-side `Plotly.restyle`, never
+   a server rebuild — see `mojave_review` CLAUDE.md).
+
 ## Layout preference (broader)
 
 Prefer larger, fewer panels over dense 2×2 / 3×2 grids. Reviewers are
