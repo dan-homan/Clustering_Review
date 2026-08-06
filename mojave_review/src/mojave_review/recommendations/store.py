@@ -468,14 +468,23 @@ def drafting_by_slug(
 
 
 def _source_dirs(recommendations_dir: Path):
-    """Yield the per-source subdirs of ``recommendations_dir``, skipping
-    the ``_admin`` (and any other ``_``-prefixed) bookkeeping dir."""
+    """Yield the per-source subdirs of ``recommendations_dir``, skipping the
+    ``_admin`` (and any other ``_``-prefixed) bookkeeping dir and any DOT-dir.
+
+    Dot-dirs are sync scratch, not sources: unison leaves
+    ``.unison.<source>.<hash>.unison.tmp`` directories holding partial copies of
+    a source's ``submitted/`` / ``current/`` when a sync is interrupted. Those
+    were being enumerated as sources of their own — phantom entries in reviewer
+    stats and in the notes audit."""
     rd = Path(recommendations_dir)
     if not rd.is_dir():
         return
     for src_dir in rd.iterdir():
-        if src_dir.is_dir() and not src_dir.name.startswith("_"):
-            yield src_dir
+        if not src_dir.is_dir():
+            continue
+        if src_dir.name.startswith(("_", ".")):
+            continue
+        yield src_dir
 
 
 def reviewer_submitted_sources(

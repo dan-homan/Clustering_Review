@@ -17,6 +17,7 @@ from ..data.fits_cache import mojave_montage_url, split_source_band
 from ..data.loader import (
     _SOURCE_DIR_RE, SourceRef, clear_bundle_cache, list_models, load_bundle,
 )
+from ..notes.audit import builder_comments_missing
 from ..notes import (
     combined_markdown, notes_dir_for,
     read_note, write_note, get_section, set_section, scaffold,
@@ -244,6 +245,8 @@ def register_callbacks(
         @app.callback(
             Output("stage2-save-status", "children"),
             Output("notes-saved-counter", "data"),
+            Output("stage2-comment-warning", "style"),
+            Output("stage2-comment-warning-text", "children"),
             Input("save-stage2-btn", "n_clicks"),
             Input("save-stage2-done-btn", "n_clicks"),
             State("stage2-editor", "value"),
@@ -252,9 +255,10 @@ def register_callbacks(
             prevent_initial_call=True,
         )
         def _save_stage2(_n_prog, _n_done, content, source_folder, counter):
+            hide = {"display": "none"}
             src = _source_from_folder(source_folder) if source_folder else None
             if src is None:
-                return "No source selected.", no_update
+                return "No source selected.", no_update, hide, ""
             done = ctx.triggered_id == "save-stage2-done-btn"
             status = "Stage 2 done" if done else "Stage 2 in progress"
             content = content or ""
@@ -269,7 +273,23 @@ def register_callbacks(
                     md = set_status(md, status)
                 write_note(notes_dir, src.source, md)
             except Exception as e:  # never lose the file on a bad write
-                return f"Save failed: {e}", no_update
+                return f"Save failed: {e}", no_update, hide, ""
+            # Marking Stage 2 done opens the source for review, and the Stage-2
+            # apply leaves no ledger entry — so this is the last natural moment
+            # to notice the builder's own comments never made it into the prose.
+            # Non-blocking: the save has already happened; the warning just
+            # offers to append them.
+            warn_style, warn_text = hide, ""
+            if done:
+                missing = builder_comments_missing(
+                    recommendations_dir, src.source, current_reviewer(reviewer), md)
+                if missing:
+                    warn_style = _STAGE2_WARN_STYLE
+                    warn_text = (
+                        f"⚠ {len(missing)} of your submission's comment(s) "
+                        f"are not in the notes — the Stage 2 apply won't "
+                        f"record them anywhere:\n"
+                        + "\n".join(f"  · {e.where}: {e.text}" for e in missing))
             from datetime import datetime, timedelta, date
             note = ""
             if done:
@@ -287,7 +307,49 @@ def register_callbacks(
                     note = f", target-date update failed: {e}"
             return (f"Saved {datetime.now().strftime('%H:%M:%S')} "
                     f"({status}{note})",
-                    int(counter or 0) + 1)
+                    int(counter or 0) + 1, warn_style, warn_text)
+
+        # ---- Stage 2: one-click "add my missing comments to the notes" -----
+        # Appends the builder's unrecorded comments to the Stage 2 section, in
+        # the canonical bullet form so every later "already recorded?" check
+        # (Stage-3 folding, mojave-review-audit-notes) recognizes them.
+        @app.callback(
+            Output("stage2-editor", "value", allow_duplicate=True),
+            Output("stage2-save-status", "children", allow_duplicate=True),
+            Output("stage2-comment-warning", "style", allow_duplicate=True),
+            Output("notes-saved-counter", "data", allow_duplicate=True),
+            Input("stage2-add-comments-btn", "n_clicks"),
+            State("stage2-editor", "value"),
+            State("source-picker", "value"),
+            State("notes-saved-counter", "data"),
+            prevent_initial_call=True,
+        )
+        def _stage2_add_comments(_n, content, source_folder, counter):
+            hide = {"display": "none"}
+            src = _source_from_folder(source_folder) if source_folder else None
+            if src is None:
+                return no_update, "No source selected.", no_update, no_update
+            try:
+                md = read_note(notes_dir, src.source)
+                missing = builder_comments_missing(
+                    recommendations_dir, src.source,
+                    current_reviewer(reviewer), md)
+                if not missing:
+                    return no_update, "Nothing to add.", hide, no_update
+                body = (content or "").rstrip()
+                block = "\n".join(e.line for e in missing)
+                body = (f"{body}\n\nComments from the baseline submission:\n"
+                        f"{block}").lstrip()
+                if md is None:
+                    md = scaffold(src.source, src.epoch_min, src.epoch_max,
+                                  status="Stage 2 done", stage2=body)
+                else:
+                    md = set_section(md, "stage2", body)
+                write_note(notes_dir, src.source, md)
+            except Exception as e:
+                return no_update, f"Add failed: {e}", no_update, no_update
+            return (body, f"Added {len(missing)} comment(s) to Stage 2.",
+                    hide, int(counter or 0) + 1)
 
         # ---- Stage 2: seed the notes editor from the builder's own
         #      submission summary (cleaned for markdown) -------------------
@@ -1391,6 +1453,14 @@ def register_callbacks(
         Input("summary-graph-right", "figure"),
         prevent_initial_call=True,
     )
+
+
+#: The Stage-2 "your comments aren't in the notes" warning box.
+_STAGE2_WARN_STYLE = {
+    "display": "block", "margin": "0 1.25em 0.6em",
+    "padding": "0.5em 0.75em", "border": "1px solid #e0a800",
+    "borderRadius": "4px", "background": "#fff8e1", "color": "#7a5c00",
+}
 
 
 def _source_from_folder(folder_str: str) -> SourceRef | None:

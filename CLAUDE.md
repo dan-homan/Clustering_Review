@@ -560,13 +560,32 @@ them in — hence the "inconsistent" symptom).
   command-generation time, so a submission arriving between generating and
   running the command isn't in it — the audit below catches that.
 
+**Stage 2 is the other half.** The Stage-2 apply writes **no** ledger entry (the
+ledger is Stage-3 only) and the Stage-2 prose is hand-written, so a builder who
+skips "Seed from submission summary" leaves their own comments only in
+`applied/<date>__<slug>.json`. That is how 46 comments went unrecorded in
+production — every one the builder's own. **"Save & set Stage 2 done" now warns**
+(`notes.audit.builder_comments_missing` → `#stage2-comment-warning`) listing the
+builder's comments that aren't in the notes, with an **"Add them to Stage 2
+notes"** button that appends them in the canonical bullet form. Non-blocking: the
+save already happened. Reviewer decision 2026-08-05 — prompt at the deciding
+moment, don't auto-write prose and don't add a Stage-2 ledger entry.
+
+**Open ≠ lost.** A comment in a live `submitted/` rec is in flight: the notes
+panel renders it under "Open suggestions (live)" and the Stage-3 ending will
+record it. `SourceAudit` splits `missing` (archived → lost) from `open_only`
+(in flight); the CLI lists only the former, summarizes the latter, and `--apply`
+never writes an in-flight comment (Stage 3 will, alongside the decisions it
+informed). Late submissions on a `final` source are just ordinary open work.
+
 **Recovery** — `mojave-review-audit-notes` (`cli/audit_notes.py`, logic in
 `notes/audit.py`) rebuilds the comment set from every submission on disk
 (`submitted/`, `considered/<date>/`, Stage-2 `applied/<date>__<slug>.json`;
 `__aggregated` skipped — those are the admin's own decision reasons) and reports
-each comment whose text is nowhere in the notes file. `--apply` appends a dated
-"Recovered reviewer comments" entry per source, with the origin as a **suffix**
-(prefixes would break re-run recognition), so it's idempotent.
+each ARCHIVED comment whose text is nowhere in the notes file (`--include-open`
+adds the in-flight ones). `--apply` appends a dated "Recovered reviewer
+comments" entry per source, with the origin as a **suffix** (prefixes would
+break re-run recognition), so it's idempotent.
 
 ### Stage 2 vs Stage 3 apply — two distinct admin paths
 
@@ -913,7 +932,10 @@ mojave-review-audit-robust --results-dir ./Results [--apply]
 
 # Reviewer comments missing from notes/<source>.md (lost by pre-2026-08-05
 # Stage-3 applies); --apply appends a dated recovery entry. Safe to re-run.
-mojave-review-audit-notes --recommendations-dir ./recommendations [--apply]
+# Open submissions are in flight, not lost: summarized only (--include-open
+# to list them), and never written by --apply.
+mojave-review-audit-notes --recommendations-dir ./recommendations \
+    [--include-open] [--apply]
 
 # Per-source difficulty scores + star distribution
 mojave-review-difficulty --results-dir ./Results

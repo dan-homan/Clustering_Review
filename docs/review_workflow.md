@@ -100,6 +100,17 @@ Cross-ID / use-in-fit:
   *History: `stage3_ledger_entry` took no comments before 2026-08-05, so every
   apply-with-decisions lost them. `mojave-review-audit-notes` rebuilds the set
   from the archives and reports (`--apply`: appends) whatever is missing.*
+- **Open submissions are not a gap.** While a source is awaiting Stage 3 its
+  comments live in `submitted/` and are rendered live under "Open suggestions"
+  — durable recording is Stage 3's job, so leaving them there is the design,
+  not an omission. The audit reports them separately from lost ones and never
+  writes them. This includes a review submitted after a source was finalized:
+  it waits for the next Stage-3 round like any other open work.
+- **Stage 2 has no automatic record.** A Stage-2 apply writes no ledger entry
+  and the Stage-2 prose is hand-written, so the builder's own comments reach
+  the notes only if they put them there. "Save & set Stage 2 done" warns when
+  they haven't and offers to append them
+  (`notes.audit.builder_comments_missing`).
 
 ## Lifecycle / stages
 

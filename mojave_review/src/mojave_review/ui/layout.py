@@ -647,6 +647,30 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                     ],
                                     style={"padding": "0.4em 1.25em 0.5em"},
                                 ),
+                                # "Save & set Stage 2 done" checks the builder's
+                                # OWN submission comments against the notes and
+                                # warns here if any are missing — the Stage-2
+                                # apply writes no ledger entry, so an untranscribed
+                                # comment survives only in applied/<date>__<slug>
+                                # .json where nothing reads it. Hidden until then.
+                                html.Div(
+                                    [
+                                        html.Div(id="stage2-comment-warning-text",
+                                                 style={"fontSize": "0.82em",
+                                                        "whiteSpace": "pre-wrap"}),
+                                        html.Button(
+                                            "Add them to Stage 2 notes",
+                                            id="stage2-add-comments-btn", n_clicks=0,
+                                            title="Append the missing comments to "
+                                                  "the Stage 2 section and save",
+                                            style={"padding": "0.25em 0.8em",
+                                                   "fontSize": "0.82em",
+                                                   "marginTop": "0.4em"},
+                                        ),
+                                    ],
+                                    id="stage2-comment-warning",
+                                    style={"display": "none"},
+                                ),
                                 # Stage-2 BASELINE apply (moved here from the
                                 # recommendations header). Distinct from the
                                 # Stage-3 aggregated apply: this applies the
