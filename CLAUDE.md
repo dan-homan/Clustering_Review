@@ -502,8 +502,8 @@ model.
     an in-app subprocess — that hit the `MOJAVE_CODE` env pitfall).
     `_apply_aggregated` writes `stage3/aggregated.json` + sidecar
     `aggregated.stage3.json` (`considered_slugs`, pre-rendered
-    `stage3_ledger_entry` with `{{BACKUP_REF}}` placeholder + run N, target
-    `status`), then shows the command:
+    `stage3_ledger_entry` with `{{BACKUP_REF}}` placeholder + run N + **reviewer
+    comments**, target `status`), then shows the command:
     `mojave-apply --recommendation …/aggregated.json --stage3-meta
     …/aggregated.stage3.json` (+ dirs, no `--no-confirm`). `mojave-apply
     --stage3-meta` (`cli/apply._apply_stage3_meta`) does the bookkeeping
@@ -513,13 +513,13 @@ model.
     append ledger (resolve `{{BACKUP_REF}}`), Status → `Stage 3 done · applied
     <date>`. Admin then clicks ↻ Reload.
   - **No decisions** → bookkeeping fully in-app (no `Results/` mutation):
-    append `stage3_no_change_ledger_entry` (folds `pending_notes_seed`), Status
+    append `stage3_no_change_ledger_entry`, Status
     → `Stage 3 done · finalized (no changes) <date>`, archive `submitted/*.json`
     → `considered/<date>/`, bump `reload-counter`.
 - **Needs Discussion** (`_mark_needs_discussion`) — flags for discussion without
   finalizing; source stays Stage 2 (`open`, nothing archived, `Results/`
   untouched). Adds `· needs discussion <date>` to Status (idempotent) +
-  ledger entry (folds `pending_notes_seed`). Detected by
+  ledger entry. Detected by
   `store.source_needs_discussion`; `_reviewer_status` checks it before
   per-reviewer branches. Refuses unless phase is `open`. Cleared by a later
   Stage-3 apply.
@@ -531,7 +531,42 @@ model.
   Note (by <admin>)` (`notes.dated_note_entry`). Seeded with pending reviewer
   comments (`notes.render.pending_notes_seed`, tagged `(reviewer)` with
   PARENTHESES — `[...]` would render as a markdown link). "Reseed from
-  submissions" re-pulls.
+  submissions" re-pulls. This box is a convenience, NOT the mechanism —
+  comments are recorded automatically (below).
+
+### Reviewer comments always reach notes/<source>.md
+
+Applying archives `submitted/*.json` → `considered/<date>/`, after which nothing
+in the app surfaces those comments — so **every** Stage-3 ending folds them into
+its ledger entry via the shared `aggregate.reviewer_comments_block`:
+apply-with-decisions, finalize-with-no-changes, and Needs Discussion. Until
+2026-08-05 `stage3_ledger_entry` took no comments at all and the
+apply-with-decisions path silently dropped them (the other two already folded
+them in — hence the "inconsistent" symptom).
+
+- Extraction + rendering: `notes.render.comment_entries` → `CommentEntry`
+  (reviewer / where / text) with the canonical `.line` bullet. One place, so all
+  paths and the audit tool agree.
+- Scope: `submitted/` only — unsubmitted `current/` drafts stay private.
+- Already-recorded comments are skipped (`unrecorded_entries`, via
+  `unrecorded_notes_seed`), so a dated note the admin already pasted isn't
+  duplicated. Matching is on the comment **prose**, not our bullet format (the
+  Stage-2 section quotes it as `Cluster 3: …` prose, a dated note as
+  `- (rv) cl 3: …`); short comments (< 12 non-space chars) additionally require
+  their cluster/epoch identifier on the same line, since "OK" alone proves
+  nothing. A **reworded** comment does not match and is reported/recorded again
+  — preserving the reviewer's own words is the point.
+- The apply-with-decisions entry is **pre-rendered into the sidecar** at
+  command-generation time, so a submission arriving between generating and
+  running the command isn't in it — the audit below catches that.
+
+**Recovery** — `mojave-review-audit-notes` (`cli/audit_notes.py`, logic in
+`notes/audit.py`) rebuilds the comment set from every submission on disk
+(`submitted/`, `considered/<date>/`, Stage-2 `applied/<date>__<slug>.json`;
+`__aggregated` skipped — those are the admin's own decision reasons) and reports
+each comment whose text is nowhere in the notes file. `--apply` appends a dated
+"Recovered reviewer comments" entry per source, with the origin as a **suffix**
+(prefixes would break re-run recognition), so it's idempotent.
 
 ### Stage 2 vs Stage 3 apply — two distinct admin paths
 
@@ -875,6 +910,10 @@ prefix /mojave-review/`. For Drive data: use Google Drive for Desktop and point
 ```bash
 # Audit (and repair) per-epoch robust inconsistencies in saved CSVs
 mojave-review-audit-robust --results-dir ./Results [--apply]
+
+# Reviewer comments missing from notes/<source>.md (lost by pre-2026-08-05
+# Stage-3 applies); --apply appends a dated recovery entry. Safe to re-run.
+mojave-review-audit-notes --recommendations-dir ./recommendations [--apply]
 
 # Per-source difficulty scores + star distribution
 mojave-review-difficulty --results-dir ./Results

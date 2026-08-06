@@ -88,6 +88,18 @@ Cross-ID / use-in-fit:
 - The **ledger** is append-only, rendered by `aggregate.stage3_ledger_entry`
   (records accepted ✓ and rejected ✗ with reasons + proposers) and written by
   the aggregation Apply — never by hand.
+- **Reviewer comments always land in the ledger.** Every Stage-3 ending
+  (apply-with-decisions, finalize-with-no-changes, Needs Discussion) appends the
+  round's reviewer comments as a `Reviewer comments:` block. This is the *only*
+  durable home for that prose: applying archives `submitted/*.json` to
+  `considered/<date>/`, and nothing in the app reads it back. The accept/reject
+  reasons above it are the **admin's** decisions and are not a substitute.
+  Comments already written in the file (a pasted dated note, the Stage-2
+  submission summary) are not repeated; a reworded one is recorded again, since
+  the point is to preserve the reviewer's own words.
+  *History: `stage3_ledger_entry` took no comments before 2026-08-05, so every
+  apply-with-decisions lost them. `mojave-review-audit-notes` rebuilds the set
+  from the archives and reports (`--apply`: appends) whatever is missing.*
 
 ## Lifecycle / stages
 

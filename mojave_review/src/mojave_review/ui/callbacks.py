@@ -21,13 +21,14 @@ from ..notes import (
     combined_markdown, notes_dir_for,
     read_note, write_note, get_section, set_section, scaffold,
     get_status, set_status, append_ledger, dated_note_entry, pending_notes_seed,
+    unrecorded_notes_seed,
 )
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
 from ..recommendations.apply import apply_recommendation, robust_inconsistencies
 from ..recommendations.aggregate import (
-    build_aggregation_view, compose_aggregated, stage3_ledger_entry,
-    stage3_no_change_ledger_entry,
+    build_aggregation_view, compose_aggregated, reviewer_comments_block,
+    stage3_ledger_entry, stage3_no_change_ledger_entry,
 )
 from ..recommendations.notebook_format import (
     format_submission_text, strip_for_notes,
@@ -572,7 +573,8 @@ def register_callbacks(
                 try:
                     if md is None:
                         md = scaffold(src.source, src.epoch_min, src.epoch_max)
-                    comments = pending_notes_seed(recommendations_dir, src.source)
+                    comments = unrecorded_notes_seed(
+                        recommendations_dir, src.source, md)
                     entry = stage3_no_change_ledger_entry(
                         view, finalized_by=current_reviewer(reviewer),
                         date=today, run_index=run_index, comments=comments)
@@ -601,11 +603,18 @@ def register_callbacks(
             # command's --stage3-meta consumes. ``{{BACKUP_REF}}`` is a
             # placeholder mojave-apply fills with the backup it actually cuts;
             # the run number is counted from the ledger now.
+            #
+            # The round's reviewer comments go INTO the entry: applying archives
+            # the submissions to considered/, so this is the last point they are
+            # reachable. Omitting them here is exactly the bug that lost
+            # comments on every apply-with-decisions before 2026-08-05.
             entry = stage3_ledger_entry(
                 view, finals=finals, rob_reasons=rob_reasons,
                 accepted_keys=accepted, edit_reasons=edit_reasons,
                 applied_by=current_reviewer(reviewer), date=today,
-                backup_ref="{{BACKUP_REF}}", run_index=run_index)
+                backup_ref="{{BACKUP_REF}}", run_index=run_index,
+                comments=unrecorded_notes_seed(
+                    recommendations_dir, src.source, md))
             sidecar = stage3_dir / "aggregated.stage3.json"
             sidecar.write_text(json.dumps({
                 "considered_slugs": [reviewer_slug(r.reviewer) for r in recs],
@@ -667,15 +676,17 @@ def register_callbacks(
                     md = scaffold(src.source, src.epoch_min, src.epoch_max)
                 # Preserve any pending reviewer comments into the ledger so
                 # they live in notes.md even if the submissions are later
-                # archived (Stage 3 apply / a future finalize path).
-                comments = pending_notes_seed(recommendations_dir, src.source)
+                # archived (Stage 3 apply / a future finalize path). Same
+                # rendering as the two Stage-3 apply paths, so a comment that
+                # lands here is recognized as recorded by all of them (and by
+                # mojave-review-audit-notes).
+                comments = unrecorded_notes_seed(
+                    recommendations_dir, src.source, md)
                 by = current_reviewer(reviewer)
                 heading = (f"### {today} — Flagged: needs discussion "
                            f"(by {by})")
-                body_lines = [heading]
-                if comments.strip():
-                    body_lines += ["", "Reviewer comments:", comments.strip()]
-                md = append_ledger(md, "\n".join(body_lines))
+                md = append_ledger(md, "\n".join(
+                    [heading] + reviewer_comments_block(comments)))
                 # Strip any prior ``· needs discussion …`` segment so repeated
                 # clicks just refresh the date rather than appending.
                 current = get_status(md) or "Stage 2 done"

@@ -13,7 +13,8 @@ from .store import (
 )
 from .render import (
     notes_markdown, open_suggestions_markdown, combined_markdown,
-    pending_notes_seed,
+    pending_notes_seed, unrecorded_notes_seed,
+    CommentEntry, comment_entries, comment_lines, unrecorded_entries,
 )
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "get_section", "set_section", "append_ledger", "dated_note_entry",
     "get_status", "set_status", "SECTIONS",
     "notes_markdown", "open_suggestions_markdown", "combined_markdown",
-    "pending_notes_seed",
+    "pending_notes_seed", "unrecorded_notes_seed",
+    "CommentEntry", "comment_entries", "comment_lines", "unrecorded_entries",
 ]

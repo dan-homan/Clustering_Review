@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..recommendations.schema import Recommendation
@@ -81,23 +83,41 @@ def _summarize(rec: Recommendation) -> str:
     return "\n".join(out)
 
 
-def pending_notes_seed(recommendations_dir: Path, source: str) -> str:
-    """Collate every non-empty reviewer *comment* from the open submissions into
-    a plain bullet list, tagged by reviewer, for seeding the Stage-3 dated-note
-    box. Includes source / cluster / epoch / edit comments. Reviewer tags use
-    parentheses, NOT square brackets, so the appended ledger markdown doesn't
-    turn the tag into a stray link. Empty string when there are no comments."""
-    lines: list[str] = []
-    for rec in _submitted_recs(recommendations_dir, source):
+@dataclass(frozen=True)
+class CommentEntry:
+    """One reviewer comment: who wrote it, what it is about, and the prose."""
+    reviewer: str
+    where: str          # "source" | "cl 3" | "epoch 2003.10" | "edit (…)"
+    text: str
+
+    @property
+    def line(self) -> str:
+        """THE canonical bullet rendering for the notes file. Reviewer tags use
+        parentheses, NOT square brackets, so appended ledger markdown doesn't
+        turn the tag into a stray link."""
+        return f"- ({self.reviewer}) {self.where}: {self.text}"
+
+
+def comment_entries(recs: "Iterable[Recommendation]") -> list[CommentEntry]:
+    """Every non-empty reviewer *comment* in ``recs``: source / cluster / epoch
+    / edit comments, in that order per reviewer.
+
+    The one place comments are extracted, so every Stage-3 path and the
+    ``mojave-review-audit-notes`` recovery tool see the same set, rendered the
+    same way. Exact duplicates (the same submission archived twice) collapse;
+    order preserved.
+    """
+    out: list[CommentEntry] = []
+    for rec in recs:
         rv = rec.reviewer or "(unknown)"
         if rec.source_comment and rec.source_comment.strip():
-            lines.append(f"- ({rv}) source: {rec.source_comment.strip()}")
+            out.append(CommentEntry(rv, "source", rec.source_comment.strip()))
         for cid, fb in rec.cluster_feedback.items():
             if fb.comment and fb.comment.strip():
-                lines.append(f"- ({rv}) cl {cid}: {fb.comment.strip()}")
+                out.append(CommentEntry(rv, f"cl {cid}", fb.comment.strip()))
         for ep, fb in rec.epoch_feedback.items():
             if fb.comment and fb.comment.strip():
-                lines.append(f"- ({rv}) epoch {ep}: {fb.comment.strip()}")
+                out.append(CommentEntry(rv, f"epoch {ep}", fb.comment.strip()))
         for e in rec.edits:
             cm = (getattr(e, "comment", "") or "").strip()
             if not cm:
@@ -106,8 +126,102 @@ def pending_notes_seed(recommendations_dir: Path, source: str) -> str:
                 what = f"change_clusterID {e.from_id}→{e.to_id}"
             else:
                 what = e.op
-            lines.append(f"- ({rv}) edit ({what}): {cm}")
-    return "\n".join(lines)
+            out.append(CommentEntry(rv, f"edit ({what})", cm))
+    seen: set[CommentEntry] = set()
+    return [e for e in out if not (e in seen or seen.add(e))]
+
+
+def comment_lines(recs: "Iterable[Recommendation]") -> list[str]:
+    """``comment_entries`` rendered as bullet lines."""
+    return [e.line for e in comment_entries(recs)]
+
+
+def _norm(text: str) -> str:
+    """Collapse whitespace so text written into the notes file still matches
+    the freshly-rendered comment (markdown wrapping / hard-break spaces)."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+#: Below this many non-space characters a comment ("OK", "same as 4") is not
+#: distinctive enough that finding its text somewhere in the notes proves it was
+#: recorded — see ``_is_recorded``.
+_MIN_DISTINCTIVE = 12
+
+#: "cl 111" / "epoch 2003_01_13" → the identifier a short comment must sit
+#: beside to count. Source / edit comments have no such anchor.
+_QUALIFIER_RE = re.compile(r"(?:cl|epoch)\s+(\S+)$")
+
+
+def _is_recorded(entry: CommentEntry, haystack: str,
+                 hay_lines: list[str]) -> bool:
+    """Is ``entry`` already written somewhere in the (normalized) notes text?
+
+    Matches on the comment PROSE, not on our bullet formatting, because the
+    same comment is quoted several ways across a notes file: the Stage-2
+    section holds a ``format_submission_text`` paste ("Cluster 111: Similar to
+    50"), a dated note holds the seeded bullet ("- (homand) cl 111: Similar to
+    50"). Requiring the bullet form reported comments as missing that were
+    plainly right there in the notes.
+
+    A SHORT comment's text alone proves nothing — "OK" occurs incidentally — so
+    it must appear on one line together with its cluster / epoch identifier,
+    which both quoting styles satisfy. Comments with no such anchor (source,
+    edit) fall back to the fully-tagged form. The asymmetry is deliberate:
+    re-recording a comment costs a duplicate line, dropping one loses it.
+    """
+    text = _norm(entry.text)
+    if len(text.replace(" ", "")) >= _MIN_DISTINCTIVE:
+        return text in haystack
+    m = _QUALIFIER_RE.match(entry.where)
+    if m is None:
+        return _norm(entry.line.lstrip("- ")) in haystack
+    qualifier = m.group(1)
+    return any(text in ln and qualifier in ln for ln in hay_lines)
+
+
+def unrecorded_entries(
+    entries: "Iterable[CommentEntry]", notes_md: str | None,
+) -> list[CommentEntry]:
+    """The subset of ``entries`` not already somewhere in ``notes_md`` — any
+    section, not just the ledger.
+
+    Reviewer decision (2026-08-05): when the admin has already recorded the
+    comments (a pasted dated note, the Stage-2 submission summary), the
+    automatic Stage-3 entry adds only what's missing rather than repeating them.
+    This is also what makes the recovery tool safe to re-run.
+
+    A comment the admin *reworded* in the notes does NOT match, and is reported
+    as unrecorded — by design: the point is to preserve the reviewer's own
+    words.
+    """
+    if not notes_md:
+        return list(entries)
+    hay = _norm(notes_md)
+    hay_lines = [_norm(ln) for ln in notes_md.splitlines() if ln.strip()]
+    return [e for e in entries if not _is_recorded(e, hay, hay_lines)]
+
+
+def pending_notes_seed(recommendations_dir: Path, source: str) -> str:
+    """Reviewer comments from the source's OPEN submissions, for seeding the
+    Stage-3 dated-note box. Empty string when there are none.
+
+    Only ``submitted/`` counts — unsubmitted ``current/`` drafts stay private
+    here as everywhere else in the app (reviewer decision, 2026-08-05)."""
+    return "\n".join(comment_lines(_submitted_recs(recommendations_dir, source)))
+
+
+def unrecorded_notes_seed(
+    recommendations_dir: Path, source: str, notes_md: str | None,
+) -> str:
+    """``pending_notes_seed`` minus anything already written in ``notes_md``.
+
+    What the Stage-3 endings fold into their ledger entry — ALL of them, so a
+    source's reviewer comments reach notes/<source>.md however the round ends
+    (decisions applied / finalized with no changes / flagged for discussion).
+    Before 2026-08-05 the apply-with-decisions path passed no comments at all
+    and silently dropped them; ``mojave-review-audit-notes`` recovers those."""
+    return "\n".join(e.line for e in unrecorded_entries(
+        comment_entries(_submitted_recs(recommendations_dir, source)), notes_md))
 
 
 def open_suggestions_markdown(recommendations_dir: Path, source: str) -> str:

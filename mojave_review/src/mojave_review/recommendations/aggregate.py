@@ -297,6 +297,20 @@ def _flag(b: bool) -> str:
     return "Robust" if b else "Non-robust"
 
 
+def reviewer_comments_block(comments: str) -> list[str]:
+    """The trailing "Reviewer comments:" lines of a Stage-3 ledger entry.
+
+    EVERY Stage-3 ledger renderer ends with this: a round's reviewer comments
+    must reach notes/<source>.md whether the round applied decisions, finalized
+    with no changes, or was flagged for discussion. (The apply-with-decisions
+    entry omitted them until 2026-08-05 — the comments were simply lost, since
+    the submissions get archived out of ``submitted/`` right after. Keep the
+    block shared so a future path can't drop it again.) Empty in / nothing out.
+    """
+    c = (comments or "").strip()
+    return ["", "Reviewer comments:", c] if c else []
+
+
 def stage3_no_change_ledger_entry(
     view: AggregationView,
     *,
@@ -321,10 +335,7 @@ def stage3_no_change_ledger_entry(
         f"Considered: {considered}",
         "Current model accepted as final; no robustness changes or edits applied.",
     ]
-    c = (comments or "").strip()
-    if c:
-        lines += ["", "Reviewer comments:", c]
-    return "\n".join(lines)
+    return "\n".join(lines + reviewer_comments_block(comments))
 
 
 def stage3_ledger_entry(
@@ -338,13 +349,21 @@ def stage3_ledger_entry(
     date: str,
     backup_ref: str,
     run_index: int = 1,
+    comments: str = "",
 ) -> str:
     """Render the append-only "Decisions & applied history" entry recording
     both what was **accepted ✓** and what was **rejected ✗**, with reasons and
     proposers — the human-readable suggested-vs-applied record.
 
     ``run_index`` numbers repeated Stage-3 applications on the same source
-    (run 1, run 2, …) so the sequential history is easy to scan."""
+    (run 1, run 2, …) so the sequential history is easy to scan.
+
+    ``comments`` are the round's reviewer comments (``notes.render.
+    unrecorded_notes_seed``), appended verbatim. They belong here because this
+    is the last moment they exist in ``submitted/``: applying archives the
+    submissions to ``considered/``, after which nothing in the app surfaces
+    them. The votes / reasons rendered above are the ADMIN's decisions, not the
+    reviewers' prose — they are not a substitute."""
     accepted = set(accepted_keys)
     considered = ", ".join(f"{rv} ({when})" for rv, when in view.submissions) or "—"
     lines = [
@@ -388,4 +407,4 @@ def stage3_ledger_entry(
             lines.append(f"- {e.description} {mark} "
                          f"({', '.join(e.proposers)}){tail}")
 
-    return "\n".join(lines)
+    return "\n".join(lines + reviewer_comments_block(comments))
