@@ -12,7 +12,8 @@ from mojave_review.data.assignments import (
     assignments_for, assignments_path, auto_balance, backfill_manual_reviews,
     credit_prior_submissions, get_source_target_date, is_paused, is_stale,
     load_store, manual_review_slugs_by_source,
-    migrate_per_record_targets_to_source, move_assignment, needs_for,
+    apply_removals, migrate_per_record_targets_to_source, move_assignment,
+    needs_for, plan_finalized_prune,
     prune_collision_reviewers, reassign_queue, rebalance_pending,
     redistribute_reviewer,
     remove_assignment, remove_manual_review, remove_team_member, reviewer_load,
@@ -918,3 +919,66 @@ def test_credit_prior_submissions_translates_slug_to_name(tmp_path):
         name_for_slug={},
     )
     assert "bob_smith" in store2.assignments
+
+
+# ---------------------------------------------------------------------------
+# Pruning unreviewed assignments on finalized sources
+# ---------------------------------------------------------------------------
+
+
+def _store_with(assignments: dict) -> AssignmentStore:
+    st = AssignmentStore()
+    for reviewer, sources in assignments.items():
+        st.assignments[reviewer] = [
+            AssignmentRecord(source=s, assigned_at="", assigned_by="test")
+            for s in sources
+        ]
+    return st
+
+
+def test_plan_finalized_prune_drops_only_unreviewed_finalized():
+    st = _store_with({
+        "Alice": ["src-final", "src-open"],
+        "Bob": ["src-final"],
+    })
+    reviewed = {("Bob", "src-final")}
+    plan = plan_finalized_prune(
+        st,
+        finalized_sources={"src-final"},
+        is_reviewed=lambda r, s: (r, s) in reviewed,
+    )
+    # Bob submitted his review ⇒ record kept (it credits his work);
+    # the open source is untouched whatever its status.
+    assert plan == [("Alice", "src-final")]
+
+
+def test_plan_finalized_prune_honours_manual_review_credit():
+    st = _store_with({"Alice": ["src-final"]})
+    st.manual_reviews["Alice"] = ["src-final"]
+    plan = plan_finalized_prune(
+        st, finalized_sources={"src-final"}, is_reviewed=lambda r, s: False,
+    )
+    assert plan == []
+
+
+def test_plan_finalized_prune_removes_unsubmitted_draft(tmp_path):
+    # "Unreviewed" spans pending AND an in-progress (never submitted)
+    # draft — the draft file stays on disk, the queue entry doesn't.
+    _draft(tmp_path, "0003-066u", "alice", empty=False)
+    _submit(tmp_path, "0003-066u", "bob")
+    st = _store_with({"alice": ["0003-066u"], "bob": ["0003-066u"]})
+    plan = plan_finalized_prune(
+        st,
+        finalized_sources={"0003-066u"},
+        is_reviewed=lambda r, s: assignment_status(tmp_path, s, r) == "submitted",
+    )
+    assert plan == [("alice", "0003-066u")]
+
+
+def test_apply_removals_mutates_store_and_counts():
+    st = _store_with({"Alice": ["src-final", "src-open"]})
+    n = apply_removals(st, [("Alice", "src-final"),
+                            ("Alice", "gone"),        # already absent
+                            ("Nobody", "src-final")])
+    assert n == 1
+    assert [r.source for r in st.assignments["Alice"]] == ["src-open"]

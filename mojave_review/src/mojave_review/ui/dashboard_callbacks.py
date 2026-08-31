@@ -21,8 +21,9 @@ from ..recommendations.store import (
 )
 from ..data.assignments import (
     active_reviewers, add_team_member, apply_additions, apply_moves,
-    assignment_status, auto_balance, backfill_manual_reviews,
-    credit_prior_submissions, load_store, move_assignment, reassign_queue,
+    apply_removals, assignment_status, auto_balance, backfill_manual_reviews,
+    credit_prior_submissions, load_store, move_assignment,
+    plan_finalized_prune, reassign_queue,
     rebalance_pending, redistribute_reviewer, remove_team_member, save_store,
     set_paused, set_source_target_date, sources_in_range, submitted_by_map,
 )
@@ -103,6 +104,24 @@ def register_dashboard_callbacks(
     # Auto-balance: preview-then-apply
     # -------------------------------------------------------------------
 
+    def _plan_prune(store, finalized: set[str]):
+        """Queue entries to drop because their source is finalized and
+        the reviewer never submitted it (pending OR an unsubmitted
+        draft). Runs as part of every auto-balance so nobody spends time
+        reviewing a source whose Stage 3 is already applied."""
+        return plan_finalized_prune(
+            store,
+            finalized_sources=finalized,
+            is_reviewed=lambda rname, src: assignment_status(
+                recommendations_dir, src, rname) == "submitted",
+        )
+
+    def _finalized_sources(all_sources) -> set[str]:
+        return {
+            s.source for s in all_sources
+            if source_phase(recommendations_dir, s.source) == "final"
+        }
+
     @app.callback(
         Output("dashboard-ab-modal", "style"),
         Output("dashboard-ab-preview-body", "children"),
@@ -156,11 +175,24 @@ def register_dashboard_callbacks(
         # reviewer recommendations (Stage 2 done). Stage 1/2-in-progress
         # sources aren't ready; finalized sources already had their
         # full review cycle.
+        phase_by_source = {
+            s.source: source_phase(recommendations_dir, s.source)
+            for s in all_sources
+        }
         open_sources = [
-            s for s in all_sources
-            if source_phase(recommendations_dir, s.source) == "open"
+            s for s in all_sources if phase_by_source[s.source] == "open"
         ]
         scored = score_all(open_sources)
+
+        # Prune first, then balance: drop unsubmitted queue entries on
+        # finalized sources so nobody reviews a source that no longer
+        # needs it. Mutating the in-memory store here means the
+        # additions below are planned against the post-prune queues.
+        finalized = {
+            src for src, ph in phase_by_source.items() if ph == "final"
+        }
+        removals = _plan_prune(store, finalized)
+        apply_removals(store, removals)
 
         # "Only unassigned" mode: fill slots only on sources nobody is
         # currently slated to review — a source counts as assigned when
@@ -231,6 +263,23 @@ def register_dashboard_callbacks(
                 style={"color": "#555", "fontSize": "0.85em",
                        "marginBottom": "0.3em"},
             ))
+        if removals:
+            by_reviewer: dict[str, list[str]] = {}
+            for rname, src in removals:
+                by_reviewer.setdefault(rname, []).append(src)
+            header_lines.append(html.Div([
+                html.Div(
+                    f"Removing {len(removals)} unreviewed assignment(s) "
+                    f"on finalized sources:",
+                    style={"fontWeight": 600, "color": "#a33"},
+                ),
+                html.Ul(
+                    [html.Li(f"{rname}: {', '.join(srcs)}")
+                     for rname, srcs in sorted(by_reviewer.items())],
+                    style={"margin": "0.2em 0 0.5em 1.2em",
+                           "color": "#555"},
+                ),
+            ], style={"fontSize": "0.85em", "marginBottom": "0.3em"}))
         if credit_completed:
             header_lines.append(html.Div(
                 f"Credited {n_credited} prior submission(s) as "
@@ -243,10 +292,12 @@ def register_dashboard_callbacks(
         if total_new == 0:
             scope = ("unassigned open source"
                      if only_sources is not None else "open source")
+            msg = (f"No new assignments needed — every {scope} already "
+                   f"has enough committed reviewers.")
+            if removals:
+                msg += " Apply still commits the removals above."
             body_inner = html.Div(
-                f"No new assignments needed — every {scope} already "
-                f"has enough committed reviewers.",
-                style={"color": "#666", "padding": "0.4em"},
+                msg, style={"color": "#666", "padding": "0.4em"},
             )
         else:
             rows = []
@@ -291,6 +342,7 @@ def register_dashboard_callbacks(
         # additions to merge. Bundle them.
         preview_store = {
             "additions": additions,
+            "removals": [list(rm) for rm in removals],
             "credited_store": store.to_dict(),
             "n_credited": n_credited,
             "credit_completed": credit_completed,
@@ -319,9 +371,9 @@ def register_dashboard_callbacks(
         # but a fresh credit pass is idempotent and avoids stale-state
         # surprises.)
         store = load_store(recommendations_dir)
+        all_sources = list_sources(results_dir)
         n_credited = 0
         if preview.get("credit_completed"):
-            all_sources = list_sources(results_dir)
             nfs = _name_for_slug(
                 tokens_path, recommendations_dir,
                 current_reviewer(reviewer))
@@ -331,6 +383,11 @@ def register_dashboard_callbacks(
                 sources=[s.source for s in all_sources],
                 name_for_slug=nfs,
             )
+        # Re-planned against the freshly-loaded store (same reason the
+        # credit pass re-runs): a review submitted between preview and
+        # apply must not have its queue entry pruned.
+        n_removed = apply_removals(
+            store, _plan_prune(store, _finalized_sources(all_sources)))
         n_added = apply_additions(
             store, preview["additions"],
             assigned_by=current_reviewer(reviewer))
@@ -338,6 +395,8 @@ def register_dashboard_callbacks(
         parts = []
         if n_credited:
             parts.append(f"credited {n_credited}")
+        if n_removed:
+            parts.append(f"removed {n_removed}")
         parts.append(f"added {n_added}")
         return time.time(), "auto-balance: " + ", ".join(parts)
 

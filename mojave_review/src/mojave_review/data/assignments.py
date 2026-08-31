@@ -48,6 +48,7 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Callable
 
 # Trailing collision-rename suffix on an archived submission stem
 # (``<slug>_2.json``); folded back to the base slug where reviewer
@@ -835,6 +836,58 @@ def remove_assignment(
             del bucket[i]
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Pruning stale queue entries on finalized sources
+# ---------------------------------------------------------------------------
+
+Removal = tuple[str, str]              # (reviewer, source)
+
+
+def plan_finalized_prune(
+    store: AssignmentStore,
+    *,
+    finalized_sources: set[str],
+    is_reviewed: Callable[[str, str], bool],
+) -> list[Removal]:
+    """Plan removal of every assignment on a FINALIZED source that the
+    reviewer never submitted — so nobody reviews a source whose Stage 3
+    is already applied. Returns ``(reviewer, source)`` pairs, sorted for
+    a stable preview.
+
+    "Never submitted" covers both a pending assignment and an unsubmitted
+    ``current/`` draft (reviewer decision 2026-08-31): the draft file
+    itself is untouched on disk, only the queue entry goes. A submitted
+    review keeps its record, which is what credits the reviewer's
+    completed work in the dashboard tallies.
+
+    Pure: ``is_reviewed(reviewer, source)`` is the caller's IO-backed
+    predicate — the dashboard passes ``assignment_status(...) ==
+    "submitted"``, which counts an open ``submitted/``, a Stage-3
+    ``considered/`` archive, or a Stage-2 applied baseline. Manual
+    review credit (``store.manual_reviews``) is honoured here too, since
+    that credit has no on-disk artifact for the predicate to find.
+    """
+    out: list[Removal] = []
+    for reviewer, records in sorted(store.assignments.items()):
+        credited = set(store.manual_reviews.get(reviewer, []))
+        for rec in sorted({r.source for r in records}):
+            if rec not in finalized_sources or rec in credited:
+                continue
+            if is_reviewed(reviewer, rec):
+                continue
+            out.append((reviewer, rec))
+    return out
+
+
+def apply_removals(store: AssignmentStore, removals: list[Removal]) -> int:
+    """Commit ``(reviewer, source)`` removals. Returns the count actually
+    removed (records already gone are skipped)."""
+    return sum(
+        1 for reviewer, source in removals
+        if remove_assignment(store, reviewer, source)
+    )
 
 
 def reassign_queue(

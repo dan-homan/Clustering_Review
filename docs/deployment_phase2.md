@@ -201,7 +201,10 @@ no need to edit anything directly on the server:
 **Assignment tools (all preview-then-apply, all move only `assignments`):**
 
 - **🔀 Auto-balance** — fill open review slots across the active pool
-  (additions only; won't move existing work). An **"Only unassigned
+  (won't move existing work). It also **removes unreviewed assignments on
+  finalized sources** (never-started or drafted-but-not-submitted), so nobody
+  spends time on a source whose Stage 3 is already applied; submitted records
+  stay, and the preview lists every removal before you commit. An **"Only unassigned
   sources"** checkbox restricts it to sources nobody currently holds an
   outstanding (not-yet-submitted) assignment for — use it to hand out
   newly Stage-2-done sources without also topping up the second slot on

@@ -722,10 +722,17 @@ draft reads as done. Only `pending` is eligible to move in a rebalance.
 
 In `dashboard_callbacks.py`; each writes only `store.assignments`, navigates via
 `url.href` (prefix-aware):
-- **🔀 Auto-balance** — fill open slots (LPT on `balance_weight`); additions
-  only. Schedules on current load alone by default. **"Consider completed
-  reviews"** checkbox (off by default) → `credit_prior_submissions` pre-seeds
-  completed load (past contributors get a lighter share; first-round only).
+- **🔀 Auto-balance** — prune, then fill open slots (LPT on `balance_weight`);
+  never moves existing work. **Prune (always on, shown in the preview)**:
+  `plan_finalized_prune` + `apply_removals` drop every queue entry on a
+  **finalized** source the reviewer never submitted — pending AND unsubmitted
+  `current/` draft (the draft file itself is untouched), so nobody reviews a
+  source whose Stage 3 is already applied. Submitted records stay (they credit
+  completed work); so do sources credited via `manual_reviews`. Removals are
+  re-planned from the fresh store on Apply, so a review submitted between
+  preview and apply isn't pruned. Additions schedule on current load alone by
+  default. **"Consider completed reviews"** checkbox (off by default) →
+  `credit_prior_submissions` pre-seeds completed load (past contributors get a lighter share; first-round only).
   Admin excluded.
   **"Only unassigned sources"** checkbox → `auto_balance(only_sources=)`:
   fills slots only on open sources with no outstanding (non-`submitted`)
