@@ -415,6 +415,21 @@ submit microtask can't await). Radios preloaded to current → `build_rec_from_u
 state` records an opinion only when a pick differs (else `None`), keeping
 `is_empty()` / vote aggregation correct.
 
+**The stores are triggers, never a data source (RESOLVED, do not regress).**
+`_do_submit`, `_autosave` and `_resync_table_with_effective` all rebuild their
+rows from the **live** components (`_cluster_rows_from_components` + the epoch
+textareas); the stores stay as Inputs only so a radio click / blurred comment
+still fires a save. Reason: Dash's ready-callback ordering (`getReadyCallbacks`)
+blocks a callback only on pending **Input** edges — **State is never waited
+on** — so a callback reading a store dispatches in the SAME batch as the bridge
+that refills it and sees the *previous* source's rows (or nothing, on a fresh
+page load). That silently lost robustness picks in production: `_load_for_source`
+publishes the rendered rows and `edits-store` in one response, the resync fired
+on `edits-store` with the stale store, rebuilt every radio at the model's
+current status, and autosave wrote the wiped draft over
+`current/<slug>.json` — the saved non-robust picks vanished while the comments
+and edits survived. Wiring is pinned by `tests/test_rec_panel_state_sources.py`.
+
 **Read-only modes:** `current` = editable/autosaves; `backup_NNN` /
 `alt_model_NNN` = locked, empty; `Rec: <slug>` = locked, shows that reviewer's
 **submitted** JSON (drafts under `current/` stay private). Visual lock =

@@ -901,20 +901,40 @@ def register(
     # user's Recommended Changes column to differ from. (If we folded
     # cluster_feedback into the baseline, the user's picks would
     # self-neutralize on every keystroke.)
+    #
+    # The carry-forward baseline is read from the LIVE Robustness components,
+    # NOT from the `cluster-feedback-table` store: the store is written by the
+    # `_sync_cluster_store` bridge, which is a *separate* callback, and Dash's
+    # ready-callback ordering only respects Input edges (State is ignored). On
+    # a source load `_load_for_source` publishes the rendered rows AND
+    # `edits-store` in one response, so this callback and the bridge dispatch in
+    # the same batch — meaning the store still holds the PREVIOUS source's rows
+    # (or nothing at all on a fresh page load). Merging against that dropped
+    # every saved robust/non-robust pick, the rebuilt radios fell back to the
+    # model's current status, and autosave then wrote the wiped draft back to
+    # `current/<slug>.json`. Reading the components sidesteps the round-trip
+    # entirely (same reason `_do_submit` reads them live) and also picks up
+    # comments that haven't been blurred yet.
     @app.callback(
         Output("cluster-feedback-rows", "children", allow_duplicate=True),
         Input("visualize-checkbox", "value"),
         Input("edits-store", "data"),
-        State("cluster-feedback-table", "data"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "value"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "id"),
+        State({"type": "cluster-comment", "cid": ALL}, "value"),
+        State({"type": "cluster-comment", "cid": ALL}, "id"),
         State("source-picker", "value"),
         State("model-picker", "value"),
         prevent_initial_call=True,
     )
     def _resync_table_with_effective(
-        visualize_val, edits, current_rows, source_folder, model_key,
+        visualize_val, edits, radio_vals, radio_ids, comment_vals, comment_ids,
+        source_folder, model_key,
     ):
         if not source_folder or not model_key:
             return no_update
+        current_rows = _cluster_rows_from_components(
+            radio_vals, radio_ids, comment_vals, comment_ids)
         # rec:<slug> reads from the current model; backup_* uses the backup.
         effective_model = "current" if (model_key or "").startswith("rec:") else model_key
         bundle = load_bundle(source_folder, effective_model)
@@ -1303,6 +1323,14 @@ def register(
 
     # ---- 5) Autosave on any field change ---------------------------------
     # Skipped when the model isn't "current" (rec:<slug> and backup_*).
+    #
+    # The two feedback stores stay as Inputs (they are what makes a radio click
+    # or a blurred comment trigger a save) but their *payloads* are ignored —
+    # the rows are rebuilt from the live components instead, same as
+    # `_do_submit` and `_resync_table_with_effective`. A source switch publishes
+    # `edits-store` / `source-comment` one batch ahead of the bridge callbacks
+    # that refill the stores, so a store-valued save fires once with the
+    # PREVIOUS source's feedback written under the NEW source's name.
     @app.callback(
         Output("save-indicator", "children", allow_duplicate=True),
         Input("source-comment", "value"),
@@ -1310,12 +1338,24 @@ def register(
         Input("epoch-feedback-table", "data"),
         Input("edits-store", "data"),
         Input("no-changes-checkbox", "value"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "value"),
+        State({"type": "robust-radio", "cid": ALL, "cur": ALL}, "id"),
+        State({"type": "cluster-comment", "cid": ALL}, "value"),
+        State({"type": "cluster-comment", "cid": ALL}, "id"),
+        State({"type": "epoch-comment", "epoch": ALL}, "value"),
+        State({"type": "epoch-comment", "epoch": ALL}, "id"),
         State("source-picker", "value"),
         State("model-picker", "value"),
         prevent_initial_call=True,
     )
-    def _autosave(source_comment, cluster_rows, epoch_rows, edits,
-                  no_changes_val, source_folder, model_key):
+    def _autosave(source_comment, _cluster_store, _epoch_store, edits,
+                  no_changes_val, radio_vals, radio_ids, cluster_comment_vals,
+                  cluster_comment_ids, epoch_vals, epoch_ids,
+                  source_folder, model_key):
+        cluster_rows = _cluster_rows_from_components(
+            radio_vals, radio_ids, cluster_comment_vals, cluster_comment_ids)
+        epoch_rows = [{"epoch": i["epoch"], "comment": (v or "")}
+                      for i, v in zip(epoch_ids or [], epoch_vals or [])]
         if not source_folder or not model_key:
             return no_update
         if model_key != "current":
