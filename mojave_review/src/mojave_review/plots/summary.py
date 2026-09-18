@@ -47,6 +47,10 @@ _CL_FILL = ["none", "full", "none", "none", "full", "none", "full", "none", "ful
 
 _FREQ_GHZ = 15.4  # U-band
 
+# Speed below which a motion counts as "no detected motion" rather than an
+# uncertain one, for the "Hide uncertain motions" gate (see _motion_fit).
+SLOW_SPEED_MAS_YR = 0.05
+
 VIEWS = ("Position", "Position Angle", "Flux", "Polarization", "Kinematics")
 
 
@@ -494,9 +498,9 @@ def _motion_fit(s: _Slice) -> _MotionFit | None:
 
     Returns a fit for EVERY qualifying robust cluster regardless of how
     significant the motion is; ``significant`` records whether it clears the
-    original >=3sigma (or slow-and-tightly-constrained) gate. Callers decide
-    whether to show all fits or only the significant ones (the "Show only
-    3-sigma motions" checkbox)."""
+    >=3sigma gate or is a confident non-detection (speed + 3 sigma below
+    ``SLOW_SPEED_MAS_YR``). Callers decide whether to show all fits or only the
+    significant ones (the "Hide uncertain motions" checkbox)."""
     if s.cid < 0 or s.cid >= 1000 or not s.robust:
         return None
     valid = (~np.isnan(s.xpos)) & (~np.isnan(s.ypos)) & s.use_in_fit
@@ -511,14 +515,24 @@ def _motion_fit(s: _Slice) -> _MotionFit | None:
     var_vx, var_vy = float(corrx[0, 0]), float(corry[0, 0])
     snr_den = np.sqrt(px[0]**2 * var_vx + py[0]**2 * var_vy)
     sig = (px[0]**2 + py[0]**2) / snr_den if snr_den > 0 else 0.0
-    slow = speed < 0.05 and np.sqrt(var_vx + var_vy) < 0.05
-    significant = bool(sig >= 3.0 or slow)
     # 1-sigma on speed = |grad sqrt(vx^2+vy^2)| propagated through the two
     # independent slope variances. Degenerates gracefully when speed -> 0.
     if speed > 0:
         speed_err = float(np.sqrt(px[0]**2 * var_vx + py[0]**2 * var_vy) / speed)
     else:
         speed_err = float(np.sqrt(var_vx + var_vy))
+    # A stationary cluster has a low SNR by construction, so the >=3sigma test
+    # alone would throw away confident non-detections. The escape hatch keeps
+    # them, but it must be a confident non-detection: the motion has to be
+    # CONSISTENTLY slower than SLOW_SPEED_MAS_YR at 3 sigma, not merely slow in
+    # its best-fit value. cluster_code.py tested `speed < 0.05 and
+    # sqrt(var_vx+var_vy) < 0.05` -- an absolute error cut that also admitted
+    # marginal detections (e.g. 0.042 +/- 0.019 mas/yr, a 2.2sigma motion), so
+    # "Hide uncertain motions" appeared to do nothing on slow sources
+    # (2022+171u had no fit the checkbox could remove). Reviewer decision
+    # 2026-09-18.
+    slow = speed + 3.0 * speed_err < SLOW_SPEED_MAS_YR
+    significant = bool(sig >= 3.0 or slow)
     pred_x = px[0] * s.time + px[1]
     pred_y = py[0] * s.time + py[1]
     pred_dist = np.sqrt(pred_x**2 + pred_y**2)

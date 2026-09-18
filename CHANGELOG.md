@@ -4,6 +4,164 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-09-18 — "Hide uncertain motions" actually hides them
+
+- **The checkbox no longer keeps marginal slow motions.** The gate behind
+  `_MotionFit.significant` was ported verbatim from `cluster_code.py`:
+  `SNR ≥ 3 OR (speed < 0.05 AND sqrt(var_vx+var_vy) < 0.05)`. The second clause
+  is there so genuinely stationary clusters survive — a non-moving cluster has
+  a low SNR by construction — but it cuts on the best-fit speed and the slope
+  errors *separately*, in absolute terms, so it also admitted marginal
+  detections. On `2022+171u` all three fits cleared it (cluster 1 at 2.2σ,
+  cluster 2 at 1.5σ) and ticking the box produced a byte-identical figure,
+  which read as a broken checkbox.
+- **Slow now means *confidently* slow**: `speed + 3·speed_err <
+  SLOW_SPEED_MAS_YR` (0.05 mas/yr), i.e. the motion has to clear the threshold
+  at 3σ, not merely in its best-fit value. The ≥3σ branch is unchanged, and so
+  is the default (unticked) behaviour of drawing every qualifying fit.
+- **Effect.** `2022+171u` hides cluster 1 and keeps the core and cluster 2
+  (0.010 ± 0.0065 mas/yr — a confident non-detection). Across all 3306 motion
+  fits in `MOJAVE_1996.00-2026.00`, 273 (8.3%) newly hide when the box is
+  ticked; every one is sub-3σ *and* sub-0.05 mas/yr.
+- **The app is now deliberately stricter than the pipeline.** The reference
+  `summary_plots.pdf` renders under `Results/` still show those marginal
+  motions; the equivalent change in `cluster_code.py` is the gate at its line
+  3038, left alone by request.
+
+---
+
+## 2026-09-16 — Recommendations panel: robustness picks no longer lost on load
+
+- **Switching source could silently wipe a reviewer's non-robust picks.** The
+  Robustness radios reach the rest of the panel through a `dcc.Store`
+  (`cluster-feedback-table`) filled by a separate bridge callback. Dash's
+  `getReadyCallbacks` blocks a callback only on pending **Input** edges — State
+  is never waited on — so a callback reading that store dispatches in the *same*
+  batch as the bridge and sees the previous source's rows, or nothing at all on
+  a fresh page load. `_load_for_source` publishes the rendered rows and
+  `edits-store` in one response, so on any source with staged edits the resync
+  fired against the stale store, rebuilt every radio at the model's current
+  status, and autosave wrote that wiped panel over `current/<slug>.json`. The
+  picks vanished; comments and edits survived (production: `1828+487u`,
+  `1514-241u`).
+- **The stores are now triggers, never a data source.** `_resync_table_with_
+  effective` and `_autosave` rebuild their rows from the live components
+  (`_cluster_rows_from_components`), the dodge `_do_submit` already used. The
+  stores stay as Inputs so a radio click or blurred comment still fires a save,
+  but their payloads are ignored — which also fixes a latent second case where a
+  source switch saved the previous source's feedback under the new source's
+  name. Wiring pinned by `tests/test_rec_panel_state_sources.py`.
+
+---
+
+## 2026-08-31 — Auto-balance prunes work on finalized sources
+
+- **Nobody is left reviewing a source whose Stage 3 is already applied.** Every
+  auto-balance now drops queue entries on a **finalized** source the reviewer
+  never submitted — pending *and* unsubmitted `current/` drafts (the draft file
+  itself is untouched; only the queue entry goes). No opt-out, and every removal
+  is listed in the preview modal before Apply commits it. Submitted records stay
+  (they credit completed work), as do `manual_reviews` credits.
+- **Pure planner + committer**: `plan_finalized_prune` returns the
+  `(reviewer, source)` removals, `apply_removals` commits them via the existing
+  `remove_assignment`. The prune mutates the in-memory store before additions
+  are planned, so the balancer schedules against post-prune queues; Apply
+  re-plans from the freshly-loaded store, so a review submitted between preview
+  and apply is never pruned.
+
+---
+
+## 2026-08-05 — Comment audit: in-flight vs lost, and a Stage-2 warning
+
+- **Open ≠ lost.** The first production sweep flagged 263 comments, but 155 were
+  open submissions still awaiting Stage 3 — in flight, not lost. `SourceAudit`
+  now splits `missing` (from an archived `considered/` or `applied/` submission,
+  which nothing in the app surfaces, so an unrecorded one is gone) from
+  `open_only` (a live `submitted/` rec, rendered under "Open suggestions" and
+  destined for the Stage-3 ledger entry). The CLI lists only the lost ones and
+  summarizes the rest; `--include-open` lists them; `--apply` never writes an
+  in-flight comment. Late submissions on a `final` source are ordinary open work.
+- **The real gap was Stage 2.** All 46 archived-but-unrecorded comments in
+  production were the builder's own: the Stage-2 apply writes no ledger entry
+  and the Stage-2 prose is hand-written, so skipping "Seed from submission
+  summary" leaves them only in `applied/<date>__<slug>.json`. **"Save & set
+  Stage 2 done" now warns** with the specific comments and an **"Add them to
+  Stage 2 notes"** button (`notes.audit.builder_comments_missing`) that appends
+  them in the canonical bullet form. Non-blocking — the save has already
+  happened. Chosen over auto-appending a Stage-2 ledger entry, which would break
+  the ledger-is-Stage-3-only invariant.
+- **Phantom sources.** `_source_dirs` skipped `_`-prefixed directories but not
+  dot-dirs, so four `.unison.*.tmp` sync-scratch directories were enumerated as
+  sources, polluting the audit and reviewer stats. Their contents were stale
+  copies of already-considered submissions, so nothing was at risk.
+- **Post-split production sweep**: 108 lost across 64 sources (62 Stage-3
+  `considered/`, 46 Stage-2 `applied/`), 151 in flight.
+
+---
+
+## 2026-08-05 — Stage 3 always records reviewer comments
+
+- **The usual way a round ends was dropping every reviewer comment.**
+  `stage3_ledger_entry` took no comments at all, so the apply-with-decisions
+  path wrote none into `notes/<source>.md` — and applying also moves
+  `submitted/*.json` into `considered/<date>/`, so the prose left the app
+  entirely. The other two Stage-3 endings (finalize-with-no-changes, Needs
+  Discussion) did fold them in, which is why it looked inconsistent.
+  `reviewer_comments_block` is now shared by every Stage-3 ledger renderer and
+  all three endings pass the round's comments, so a future path can't drop them.
+- **One extraction, one rendering.** `notes.render` grows `CommentEntry` /
+  `comment_entries`, used by every path *and* by the audit tool, so they always
+  agree on what "recorded" means. Only `submitted/` counts; unsubmitted
+  `current/` drafts stay private.
+- **No duplicates.** A comment already in the notes isn't repeated
+  (`unrecorded_entries`), so a dated note the admin already pasted is left
+  alone. Matching is on the comment **prose**, not our bullet format — the
+  Stage-2 section quotes it as `Cluster 3: …` prose, a dated note as
+  `- (rv) cl 3: …`. Short comments (< 12 non-space chars) additionally need
+  their cluster/epoch identifier on the same line, since "OK" alone proves
+  nothing; a *reworded* comment is recorded again, since preserving the
+  reviewer's own words is the point.
+- **New `mojave-review-audit-notes`** recovers what the old path lost: rebuilds
+  the comment set from every submission on disk (`submitted/`,
+  `considered/<date>/`, Stage-2 `applied/<date>__<slug>.json`; `__aggregated`
+  skipped — those are admin decisions, not reviewer prose) and reports each
+  comment whose text is nowhere in the notes. `--apply` appends a dated
+  "Recovered reviewer comments" entry, origin as a **suffix** so re-runs
+  recognize it (idempotent). Against the live production mirror: 30 raw hits, 28
+  already recorded as Stage-2 prose (the reason matching is prose-level), 2
+  genuine.
+
+---
+
+## 2026-08-05 — XY panel: active-epoch squares + epoch-range filter
+
+- **The XY centroid track now shows which points are the current epoch.** The
+  Position view's bottom panel has no epoch axis to carry the vertical epoch
+  line, so the track points at the Epoch overlay's epoch get a cyan open square
+  instead. Filled into an empty placeholder trace; the epoch arrives from the
+  existing clientside epoch-line callbacks via `window.mojaveXY.setEpoch`.
+- **Zooming the distance panel in time thins the XY plot.** Points outside the
+  epoch range visible in the distance-vs-epoch panel above are hidden — on busy
+  sources (`0415+379u`: 389 tracks / 1481 points) every epoch at once is
+  unreadable. No UI toggle and no opt-out: unzoomed, the top panel autoranges
+  over every point, so it's a no-op until the reviewer zooms. Filters on **x
+  (epoch) only**, so a distance zoom hides nothing, and the XY axis ranges still
+  span every point so the frame is fixed and survivors don't move (reviewer
+  decisions).
+- **Both are `Plotly.restyle` on the drawn figure, never a server rebuild** —
+  cheap enough to scrub epochs with, and `uirevision`/zoom plus the letterboxed
+  domains survive. Each XY trace carries `meta = {xy, ep, x0, y0}` (the drawn
+  arrays are lossy once masked), which keeps `assets/xy_epoch.js` stateless: a
+  rebuild ships fresh originals, so there's no cache to invalidate. Applies to
+  both main panes and both `/compare` Position panels.
+- **Two hazards found against real Plotly**, both now in `CLAUDE.md`: a pass
+  arriving during our own restyle was dropped (stale mask after a reset — now
+  remembered and re-run), and comparing against `gd.data` instead of
+  `gd._fullData` made every trace look changed after each rebuild (plotly 6
+  leaves arrays base64-encoded in `gd.data`), costing a full pointless redraw.
+
+---
+
 ## 2026-07-22 — Compare page: consistent vector frame + zoom across epochs
 
 - **Kinematics vector panels now share a frame, not just a scale.** Sharing only

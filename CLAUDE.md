@@ -333,9 +333,17 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
   known z → host-frame ("Tb host-frame [K]"), z=0 → observed ("Tb obs [K]").
 - **Position polyfit / projected motion** (`_motion_fit`): every robust cluster
   with ≥5 valid `use_in_fit` points. Drawn for ALL such by default; the
-  `>3σ OR (speed<0.05 & err<0.05)` test is recorded as `_MotionFit.significant`,
-  not a gate. **Hide uncertain motions** checkbox (`only_3sigma=`) filters to
+  `≥3σ OR confidently-slow` test is recorded as `_MotionFit.significant`, not a
+  gate. **Hide uncertain motions** checkbox (`only_3sigma=`) filters to
   significant. `_MotionFit.speed_err` drives Kinematics speed error bars.
+  **Confidently-slow** = `speed + 3·speed_err < SLOW_SPEED_MAS_YR` (0.05): a
+  stationary cluster has low SNR by construction, so the 3σ test alone would
+  discard confident non-detections. `cluster_code.py` instead tested
+  `speed < 0.05 AND sqrt(var_vx+var_vy) < 0.05` — an *absolute* error cut that
+  also admitted marginal detections (0.042 ± 0.019 mas/yr = 2.2σ), so on slow
+  sources the checkbox had nothing left to remove and looked broken
+  (`2022+171u`: all three fits "significant", figure unchanged when ticked).
+  Reviewer decision 2026-09-18; ~8% of fits sample-wide moved to hidden.
 
 ### Per-source redshift (`source_run_param.csv`)
 
