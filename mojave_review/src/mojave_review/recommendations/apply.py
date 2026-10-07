@@ -204,11 +204,15 @@ def _apply_auto_eligibility(
     * eligible *and* not explicitly set via cluster_feedback → auto-
       promoted to ``robust=True`` if currently False.
 
-    Cluster 0 (the core) is excluded — it's always robust by definition.
-    The park ID 999 and the unassigned −1 are also excluded.
+    Cluster 0 (the core) is excluded — it's always robust by definition, and
+    so is the unassigned −1. The park ID 999 is never *promoted* (it's a
+    holding pen, not a tracked feature) but IS demoted: a row parked by the
+    999-overlap rule arrives carrying the robust flag of the cluster it was
+    displaced from, which used to leave a robust "cluster 999" behind
+    (`0415+379u`: the 2017.46 core row, 0 use_in_fit epochs, robust=True).
     """
     history: list[str] = []
-    skip = {-1, 0, PARK_ID}
+    skip = {-1, 0}
     for cid in sorted(affected):
         if int(cid) in skip:
             continue
@@ -217,6 +221,13 @@ def _apply_auto_eligibility(
             continue                # cluster has no rows left (fully renamed away)
         n_fit = int(df.loc[mask, "use_in_fit"].astype(bool).sum())
         currently_robust = bool(df.loc[mask, "robust"].iloc[0])
+        if int(cid) == PARK_ID:
+            if currently_robust:
+                df.loc[mask, "robust"] = False
+                history.append(
+                    f"# Auto: cluster {PARK_ID} (park) demoted to non-robust"
+                )
+            continue
         eligible = n_fit >= min_fit
         if not eligible:
             if currently_robust:
@@ -324,6 +335,68 @@ def robust_inconsistencies(df: pd.DataFrame) -> dict[int, list[bool]]:
         if len(vals) > 1:
             out[int(cid)] = vals
     return out
+
+
+def robust_ineligible(
+    df: pd.DataFrame, min_fit: int = ELIGIBILITY_MIN_FIT,
+) -> dict[int, int]:
+    """clusterID -> number of ``use_in_fit=True`` rows, for every cluster
+    flagged ``robust`` that does not have enough fitted epochs to earn it.
+    Empty dict == every robust cluster is eligible.
+
+    The complement of :func:`robust_inconsistencies`: that one finds a flag
+    that disagrees with *itself* across epochs, this one finds a flag that
+    disagrees with the **eligibility rule** ``apply_recommendation`` enforces
+    (``< min_fit`` use_in_fit rows → ``robust=False``, no exceptions). The
+    pipeline can emit such a cluster directly, and ``_apply_auto_eligibility``
+    only reconsiders clusters an edit *touched*, so nothing used to flag one
+    that was simply born that way (three in the sample: ``0306+102u`` cl 9,
+    ``1127-145u`` cl 9, ``0415+379u`` cl 999).
+
+    Scope is the clusters whose robust flag means something: the core (0) is
+    robust by definition, the unassigned (−1) and synthetic (>= 1000) IDs draw
+    as black ``+`` and are never fitted. The park ID 999 **is** in scope — it
+    is < 1000, so it renders as an ordinary coloured cluster.
+
+    Pure (no mutation) — shared by the audit CLI's dry-run and the in-app
+    warning so both agree on what counts as ineligible.
+    """
+    out: dict[int, int] = {}
+    if "clusterID" not in df.columns or "robust" not in df.columns:
+        return out
+    if "use_in_fit" not in df.columns:
+        return out
+    for cid, g in df.groupby("clusterID"):
+        cid = int(cid)
+        if cid <= 0 or cid >= 1000:
+            continue
+        if not g["robust"].astype(bool).any():
+            continue
+        n_fit = int(g["use_in_fit"].astype(bool).sum())
+        if n_fit < min_fit:
+            out[cid] = n_fit
+    return out
+
+
+def _normalize_robust_eligibility(
+    df: pd.DataFrame, min_fit: int = ELIGIBILITY_MIN_FIT,
+) -> list[str]:
+    """Force ``robust=False`` on every cluster :func:`robust_ineligible`
+    reports. Idempotent; writes nothing on already-clean data.
+
+    Deliberately NOT part of ``apply_recommendation_with_history``: that pass
+    reconsiders only the clusters an edit touched, so applying a reviewer's
+    recommendation never silently rewrites an untouched cluster (and the
+    no-op fast path survives). Sample-wide repair is the audit CLI's job.
+    """
+    history: list[str] = []
+    for cid, n_fit in sorted(robust_ineligible(df, min_fit).items()):
+        mask = df["clusterID"].astype(int) == cid
+        df.loc[mask, "robust"] = False
+        note = " (park)" if cid == PARK_ID else ""
+        history.append(f"# Normalized cluster {cid}{note} robust=False "
+                       f"({n_fit} use_in_fit rows < {min_fit})")
+    return history
 
 
 def _canonical_robust(cid: int, sub: pd.DataFrame) -> bool:

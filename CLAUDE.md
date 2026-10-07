@@ -894,6 +894,25 @@ prefix /mojave-review/`. For Drive data: use Google Drive for Desktop and point
   (summary `iloc[0]`, `overlay.robust_by_cluster`). Legacy CSVs: read-only ⚠
   banner (`_robust_warning`); repair with `mojave-review-audit-robust
   --results-dir … [--apply]` (CSV-only, backs up + logs to `history.txt`).
+- **`robust=True` on an INELIGIBLE cluster is the second defect class** (< 5
+  `use_in_fit=True` epochs). Detected by `apply.robust_ineligible` (cid → n_fit;
+  scope `0 < cid < 1000`, so the park ID 999 **is** included — it renders as an
+  ordinary coloured cluster — while core / −1 / synthetic are not), repaired by
+  `_normalize_robust_eligibility`; both the audit CLI and the ⚠ banner report it
+  alongside the inconsistency class. The eligibility rule itself is **not** new
+  (`_apply_auto_eligibility`: "ineligibility is hard") — but it only reconsiders
+  clusters an *edit* touched, so a cluster born that way in the pipeline was
+  never re-checked, and the Robustness tab lists eligible clusters only, so no
+  reviewer could flag it either. Three in the sample (found 2026-10-07):
+  `0306+102u` cl 9, `1127-145u` cl 9, `0415+379u` cl 999. Deliberately NOT
+  folded into `apply_recommendation` — that must not rewrite untouched clusters
+  (and the no-op fast path must survive); sample-wide repair is the CLI's job.
+  The reverse (eligible + non-robust) is normal reviewer judgement, not a defect.
+- **A parked row must not inherit a robust flag.** `_apply_auto_eligibility`
+  used to skip `PARK_ID` entirely, so a row displaced by the 999-overlap rule
+  arrived carrying the robust flag of the cluster it came from (that's
+  `0415+379u` cl 999: the 2017.46 core row, 0 fitted epochs, robust=True). It
+  now demotes 999 unconditionally, and still never promotes it.
 - **Don't write back into `Results/`.** Recommendations are the only output.
 - **`grab_mojave_image` opens local files, not URLs.** The web app has its own
   fetcher; don't reuse that function.
@@ -957,7 +976,8 @@ prefix /mojave-review/`. For Drive data: use Google Drive for Desktop and point
 ## Useful local commands
 
 ```bash
-# Audit (and repair) per-epoch robust inconsistencies in saved CSVs
+# Audit (and repair) bad robust flags in saved CSVs: inconsistent across a
+# cluster's epochs, OR robust on a cluster with < 5 use_in_fit=True epochs
 mojave-review-audit-robust --results-dir ./Results [--apply]
 
 # Reviewer comments missing from notes/<source>.md (lost by pre-2026-08-05

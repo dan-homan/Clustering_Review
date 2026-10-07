@@ -26,7 +26,10 @@ from ..notes import (
 )
 from ..plots.overlay import overlay_figure_for_epoch
 from ..plots.summary import build_summary_figure
-from ..recommendations.apply import apply_recommendation, robust_inconsistencies
+from ..recommendations.apply import (
+    ELIGIBILITY_MIN_FIT, apply_recommendation, robust_inconsistencies,
+    robust_ineligible,
+)
 from ..recommendations.aggregate import (
     build_aggregation_view, compose_aggregated, reviewer_comments_block,
     stage3_ledger_entry, stage3_no_change_ledger_entry,
@@ -775,11 +778,13 @@ def register_callbacks(
         def _clear_agg_status(_source_folder):
             return ""
 
-    # ---- robust-consistency warning banner -------------------------------
-    # Read-only: flag a source whose saved CSV has a per-epoch robust
-    # inconsistency (latent data bug). The plots already render correctly via
-    # the per-cluster robust rule; this just surfaces the source for repair via
-    # the audit CLI. The bundle is cached (loaded by the plot callbacks too), so
+    # ---- robust-flag warning banner --------------------------------------
+    # Read-only: flag a source whose saved CSV has a bad robust flag — either
+    # inconsistent across a cluster's epochs, or robust on a cluster too thin
+    # to be eligible (< 5 use_in_fit epochs, so the Robustness tab can't even
+    # list it). Both are latent data bugs; the plots still render via the
+    # per-cluster robust rule. This just surfaces the source for repair via the
+    # audit CLI. The bundle is cached (loaded by the plot callbacks too), so
     # this is a cheap groupby — no meaningful load-time cost.
     @app.callback(
         Output("robust-warning", "children"),
@@ -797,13 +802,22 @@ def register_callbacks(
         except Exception:
             return "", hidden
         bad = robust_inconsistencies(bundle.cluster_df)
-        if not bad:
+        thin = robust_ineligible(bundle.cluster_df)
+        if not bad and not thin:
             return "", hidden
-        cids = ", ".join(str(c) for c in sorted(bad))
-        msg = (f"⚠ Saved robust flags are inconsistent across epochs for "
-               f"cluster(s) {cids}. The plots show one value per cluster, but "
-               f"the on-disk model has a data inconsistency — an admin can "
-               f"repair it with: mojave-review-audit-robust --apply")
+        bits = []
+        if bad:
+            cids = ", ".join(str(c) for c in sorted(bad))
+            bits.append(f"the saved robust flag is inconsistent across epochs "
+                        f"for cluster(s) {cids} (the plots show one value per "
+                        f"cluster)")
+        if thin:
+            thin_str = ", ".join(f"{c} ({n} use_in_fit epoch{'' if n == 1 else 's'})"
+                                 for c, n in sorted(thin.items()))
+            bits.append(f"cluster(s) {thin_str} are marked robust but need at "
+                        f"least {ELIGIBILITY_MIN_FIT} to be eligible")
+        msg = (f"⚠ {'; '.join(bits)}. The on-disk model has a data problem an "
+               f"admin can repair with: mojave-review-audit-robust --apply")
         style = {"display": "block", "background": "#fff3cd", "color": "#664d03",
                  "border": "1px solid #ffe69c", "borderRadius": "4px",
                  "padding": "0.4em 0.7em", "margin": "0.25em 0", "fontSize": "0.82em"}

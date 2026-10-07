@@ -36,6 +36,15 @@ of the clustering repo, not a separate repo).
 - **`change_clusterID` scopes:** `single` (one row) and `all_epochs`
   (renumber a cluster across the whole source). Mirrors the `i` and `a`
   keys in `cluster_code.py`'s interactive review.
+- **A robust cluster must be eligible** (>= 5 `use_in_fit=True` epochs) and
+  must carry ONE flag across its epochs. Both are data invariants, not
+  reviewer preferences: ineligibility is hard, and the Robustness tab never
+  even lists an ineligible cluster, so a reviewer cannot fix one. `mojave-apply`
+  enforces them on the clusters each apply touches;
+  `mojave-review-audit-robust [--apply]` sweeps the whole sample for violations
+  the pipeline emitted directly (2026-10-07: three found — `0306+102u` cl 9,
+  `1127-145u` cl 9, `0415+379u` cl 999). The reverse — an eligible cluster
+  marked non-robust — is ordinary reviewer judgement and never flagged.
 
 ## Phase 2 hosting requirements (summary)
 
