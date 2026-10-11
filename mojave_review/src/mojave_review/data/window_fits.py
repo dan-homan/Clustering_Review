@@ -451,24 +451,67 @@ _DROP_BARE_FLAGS = {"--editN", "--show_results", "--recalc_all",
                     "--dont_confirm", "--make_plots"}
 _DROP_VALUE_FLAGS = {"--N_win_file"}
 
+# The rerun we draft is a find_clusters.py command, so the run string we start
+# from has to BE one. run_string.txt is not guaranteed to be: update_cluster_df.py
+# (which rebuilds the merged CSV from the cached fits without re-running them)
+# overwrites run_string.txt with its OWN command line and copies the previous one
+# to backups/backup_NNN_run_string.txt. Its flags are a different set entirely, so
+# stripping ours out of it would draft a command that can't run. Walk back through
+# the backups (newest first) to the most recent genuine find_clusters.py run.
+_SCRIPT_NAME = "find_clusters.py"
+
+
+def _is_find_clusters_command(run_string: str) -> bool:
+    """True when `run_string` invokes find_clusters.py (matched on the script
+    basename, so an absolute or ../src/ path counts). Same test rerun.py uses."""
+    try:
+        tokens = shlex.split(run_string)
+    except ValueError:
+        return False
+    return any(Path(t).name == _SCRIPT_NAME for t in tokens)
+
+
+def find_clusters_run_string(src_folder: Path) -> tuple[str, Path] | None:
+    """The most recent find_clusters.py run string for the source as
+    ``(run_string, path)``: run_string.txt when it is one, else the
+    highest-numbered backups/backup_NNN_run_string.txt that is (backup numbers
+    increase with time, so the first hit scanning down is the most recent).
+    None when no find_clusters.py command is recorded anywhere."""
+    folder = Path(src_folder)
+    candidates = [folder / "run_string.txt"]
+
+    def _idx(path: Path) -> tuple[int, str]:
+        # backup_007_run_string.txt -> 7; sort numerically, not lexically, so
+        # a (hypothetical) backup_1000 still reads as newer than backup_999.
+        part = path.name.split("_")[1] if "_" in path.name else ""
+        return (int(part) if part.isdigit() else -1, path.name)
+
+    candidates += sorted(folder.glob("backups/backup_*_run_string.txt"),
+                         key=_idx, reverse=True)
+    for path in candidates:
+        try:
+            recorded = path.read_text().strip()
+        except OSError:
+            continue
+        if recorded and _is_find_clusters_command(recorded):
+            return recorded, path
+    return None
+
 
 def build_rerun_command(src_folder: Path, choices_path: Path) -> str | None:
-    """Compose the find_clusters.py rerun command from the source's
-    run_string.txt, with --editN (and recalc flags) stripped, then
-    --recalc_IDs + --N_win_file <choices> appended. None when run_string.txt
-    is missing.
+    """Compose the find_clusters.py rerun command from the source's most recent
+    find_clusters.py run string (see `find_clusters_run_string`), with --editN
+    (and recalc flags) stripped, then --recalc_IDs + --N_win_file <choices>
+    appended. None when no such run string is recorded.
 
     --recalc_IDs is included by default because changing N in a window
     usually means the cross-window cluster labels need re-matching; it's
     cheap (the cached fits are reused, only the cross-ID pass re-runs). The
     user can delete it from the drafted command if they don't want it."""
-    rs_path = Path(src_folder) / "run_string.txt"
-    try:
-        recorded = rs_path.read_text().strip()
-    except OSError:
+    found = find_clusters_run_string(src_folder)
+    if found is None:
         return None
-    if not recorded:
-        return None
+    recorded, _ = found
     tokens = shlex.split(recorded)
     out: list[str] = []
     skip_next = False

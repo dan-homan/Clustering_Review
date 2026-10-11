@@ -666,12 +666,22 @@ candidate N per window under `Results/<source>/cluster_fits/`.
     "choices": { "1995.57-2000.03": 6,
                  "2001.83-2006.51": {"N": 4, "comment": "..."} } }
   ```
-- **Hand-off**: "Generate rerun command" reads `run_string.txt`, strips
-  `--editN`/`--show_results`/`--recalc_*`/old `--N_win_file`, appends
+- **Hand-off**: "Generate rerun command" reads the **most recent
+  `find_clusters.py` run string** (`window_fits.find_clusters_run_string`),
+  strips `--editN`/`--show_results`/`--recalc_*`/old `--N_win_file`, appends
   `--recalc_IDs --N_win_file <abs nwin_choices.json>`. `--recalc_IDs` added
   unconditionally (N changes usually want full cross-window re-match; cheap with
   cached fits; user can delete). Run in the production working dir. Unmatched
   window labels are a hard error there — regenerate choices if windowing changed.
+  **`run_string.txt` is not always a `find_clusters.py` command**:
+  `src/update_cluster_df.py` (rebuilds the merged CSV from cached fits) writes
+  its OWN command line there and copies the previous one to
+  `backups/backup_NNN_run_string.txt`. Its flags are a different set, so
+  stripping ours out of it drafts a command that can't run — the helper falls
+  back through the backups newest-first (numeric order) to the last genuine
+  `find_clusters.py` run and the drafted command notes which backup it came
+  from. `src/rerun.py` has the same exposure (it `sys.exit`s on a non-
+  `find_clusters.py` run string) — not fixed there.
 - `cluster_fits/` is **excluded from server sync**
   (`server_sync/server_update_exclude.txt`) → panel is local-only; server deploy
   shows a hint. All ids prefixed `nwin-`; callbacks register only with `--admin`

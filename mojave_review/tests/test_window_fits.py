@@ -9,8 +9,9 @@ import numpy as np
 import pandas as pd
 
 from mojave_review.data.window_fits import (
-    bic_table, build_rerun_command, build_window_meta, global_window_extent,
-    list_window_fits, load_nwin_choices, nwin_choices_path, save_nwin_choices,
+    bic_table, build_rerun_command, build_window_meta,
+    find_clusters_run_string, global_window_extent, list_window_fits,
+    load_nwin_choices, nwin_choices_path, save_nwin_choices,
 )
 from mojave_review.data.loader import SourceRef
 
@@ -284,3 +285,78 @@ def test_build_rerun_command_adds_recalc_ids_when_absent(tmp_path):
 
 def test_build_rerun_command_missing_run_string(tmp_path):
     assert build_rerun_command(tmp_path, tmp_path / "c.json") is None
+
+
+def _folder_with_run_strings(tmp_path, current, backups):
+    """Source folder whose run_string.txt holds `current` and whose
+    backups/ hold `backups` = {NNN: run string}."""
+    folder = tmp_path / f"{SOURCE}_1994.00-2026.00"
+    folder.mkdir()
+    (folder / "run_string.txt").write_text(current + "\n")
+    if backups:
+        (folder / "backups").mkdir()
+        for idx, rs in backups.items():
+            (folder / "backups" / f"backup_{idx}_run_string.txt").write_text(
+                rs + "\n")
+    return folder
+
+
+def test_build_rerun_command_skips_update_cluster_df_run_string(tmp_path):
+    # update_cluster_df.py overwrites run_string.txt with its own command line
+    # and copies the prior find_clusters.py one into backups/. The rerun must
+    # be built from that backup, not from the update_cluster_df.py flags.
+    folder = _folder_with_run_strings(
+        tmp_path,
+        "python ../src/update_cluster_df.py 0003-066 --band u --recalc_df",
+        {"004": "python find_clusters.py 0003-066 --band u --max_clusters 16 "
+                "--editN --recalc_IDs"},
+    )
+    choices = tmp_path / "nwin_choices.json"
+    cmd = build_rerun_command(folder, choices)
+    assert cmd is not None
+    assert "update_cluster_df.py" not in cmd
+    assert "--recalc_df" not in cmd
+    assert cmd.startswith("python find_clusters.py 0003-066 --band u")
+    assert "--max_clusters 16" in cmd
+    assert "--editN" not in cmd
+    assert cmd.count("--recalc_IDs") == 1
+    assert cmd.endswith(f"--N_win_file {choices.resolve()}")
+
+
+def test_find_clusters_run_string_picks_most_recent_backup(tmp_path):
+    # Two update_cluster_df.py runs: backup_006 holds the first one's command,
+    # backup_005 the find_clusters.py run before it. Highest-numbered
+    # find_clusters.py backup wins (and 005 beats the older 003).
+    folder = _folder_with_run_strings(
+        tmp_path,
+        "python ../src/update_cluster_df.py 0003-066 --band u",
+        {"003": "python find_clusters.py 0003-066 --band u --max_clusters 12",
+         "005": "python find_clusters.py 0003-066 --band u --max_clusters 16",
+         "006": "python ../src/update_cluster_df.py 0003-066 --band u"},
+    )
+    found = find_clusters_run_string(folder)
+    assert found is not None
+    recorded, path = found
+    assert path.name == "backup_005_run_string.txt"
+    assert "--max_clusters 16" in recorded
+
+
+def test_find_clusters_run_string_prefers_current(tmp_path):
+    folder = _folder_with_run_strings(
+        tmp_path,
+        "python find_clusters.py 0003-066 --band u --max_clusters 16",
+        {"004": "python find_clusters.py 0003-066 --band u --max_clusters 12"},
+    )
+    recorded, path = find_clusters_run_string(folder)
+    assert path.name == "run_string.txt"
+    assert "--max_clusters 16" in recorded
+
+
+def test_find_clusters_run_string_none_when_only_other_scripts(tmp_path):
+    folder = _folder_with_run_strings(
+        tmp_path,
+        "python ../src/update_cluster_df.py 0003-066 --band u",
+        {"001": "python ../src/update_cluster_df.py 0003-066 --band u"},
+    )
+    assert find_clusters_run_string(folder) is None
+    assert build_rerun_command(folder, tmp_path / "c.json") is None

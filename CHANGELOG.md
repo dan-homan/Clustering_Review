@@ -4,6 +4,32 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-10-11 — Window-N rerun command skips `update_cluster_df.py` run strings
+
+- **The bug.** `build_rerun_command` read `Results/<source>/run_string.txt`
+  verbatim and assumed it was a `find_clusters.py` command. The new
+  `src/update_cluster_df.py` (rebuilds the merged CSV from the cached fits
+  without re-fitting) overwrites that file with its **own** command line, so
+  after running it the Window-N panel drafted a rerun built from
+  `update_cluster_df.py` flags — a command that can't do the rerun.
+- **The fix.** New `window_fits.find_clusters_run_string(folder)` returns the
+  most recent genuine `find_clusters.py` run string as `(text, path)`:
+  `run_string.txt` when it is one, else the highest-numbered
+  `backups/backup_NNN_run_string.txt` that is (`update_cluster_df.py` copies the
+  prior run string there before overwriting, and backup numbers increase with
+  time, so the first hit scanning down is the most recent). Detection matches
+  the script **basename**, like `src/rerun.py`, so `../src/find_clusters.py`
+  and absolute paths count. `build_rerun_command` starts from that; everything
+  downstream (flag stripping, `--recalc_IDs`, `--N_win_file`) is unchanged.
+- **The drafted command says so.** When the run string came from a backup, a
+  comment line names it — the command predates the saved CSV, and the reviewer
+  should see that rather than wonder why it looks stale.
+- **`src/rerun.py` has the same exposure** (it `sys.exit`s with "does not look
+  like a find_clusters.py command"), left alone — that's pipeline code and it
+  fails loudly rather than silently.
+
+---
+
 ## 2026-09-18 — "Hide uncertain motions" actually hides them
 
 - **The checkbox no longer keeps marginal slow motions.** The gate behind

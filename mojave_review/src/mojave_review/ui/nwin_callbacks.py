@@ -25,8 +25,8 @@ from ..data.fits_cache import split_source_band
 from ..data.loader import load_bundle
 from ..data.window_fits import (
     bic_table, build_rerun_command, build_window_meta,
-    list_window_fits, load_nwin_choices, load_window_fit, nwin_choices_path,
-    save_nwin_choices, window_bundle,
+    find_clusters_run_string, list_window_fits, load_nwin_choices,
+    load_window_fit, nwin_choices_path, save_nwin_choices, window_bundle,
 )
 from ..plots.overlay import _ellipse_xy, overlay_figure_for_epoch
 from .callbacks import _source_from_folder
@@ -558,15 +558,27 @@ def register(
             return ("No recorded choices yet — record at least one window's "
                     "N first."), shown
         path = nwin_choices_path(recommendations_dir, meta["source"])
-        cmd = build_rerun_command(Path(meta["folder"]), path)
-        if cmd is None:
-            return (f"run_string.txt not found in {meta['folder']} — compose "
-                    f"the find_clusters.py command manually and add: "
+        folder = Path(meta["folder"])
+        found = find_clusters_run_string(folder)
+        cmd = build_rerun_command(folder, path)
+        if cmd is None or found is None:
+            return (f"No find_clusters.py run string found in {meta['folder']} "
+                    f"(run_string.txt or backups/) — compose the "
+                    f"find_clusters.py command manually and add: "
                     f"--N_win_file {path.resolve()}"), shown
+        # Say which file it came from: when run_string.txt holds an
+        # update_cluster_df.py run we fall back to a backup, and the user
+        # should see that the command is older than the saved CSV.
+        src_note = ""
+        if found[1].name != "run_string.txt":
+            src_note = (f"# run_string.txt records a later non-find_clusters.py "
+                        f"run; using the most recent find_clusters.py command, "
+                        f"from backups/{found[1].name}:\n")
         return (f"# run from your production working directory "
                 f"(where find_clusters.py was originally run).\n"
                 f"# --recalc_IDs is included by default (re-match cross-window "
-                f"cluster labels); delete it if not wanted:\n{cmd}"), shown
+                f"cluster labels); delete it if not wanted:\n"
+                f"{src_note}{cmd}"), shown
 
     # ---- clientside: reposition the beam ellipse on zoom/pan ----------------------
     # Same restyle-and-no_update discipline as the main overlay's beam
