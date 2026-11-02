@@ -957,13 +957,25 @@ def register_callbacks(
         )
         # Persist the user's zoom across selection clicks, visualize toggle,
         # vector scale change, edits etc. — anything that doesn't change the
-        # axes themselves. The key changes on (source, model, view) because
-        # those genuinely swap the underlying data domain or the axis
-        # identities (Position vs Kinematics, etc.), and reusing the old
-        # zoom there would just be confusing. The prefix keeps the left and
-        # right summary graphs from sharing (and clobbering) each other's zoom.
+        # axes themselves. The key changes on (source, view) because those
+        # genuinely swap the underlying data domain or the axis identities
+        # (Position vs Kinematics, etc.), and reusing the old zoom there would
+        # just be confusing. The prefix keeps the left and right summary graphs
+        # from sharing (and clobbering) each other's zoom.
+        #
+        # ``model_key`` is deliberately NOT in the key (reviewer request
+        # 2026-11-02): switching current ⇄ backup_NNN ⇄ alt_model_NNN ⇄
+        # Rec:<slug> is how you COMPARE models, and that comparison is only
+        # meaningful at a fixed zoom — every model here is the same source over
+        # the same epochs, so the axes mean the same thing. The trade-off is
+        # that Plotly keys its retained UI edits (legend hide/isolate included)
+        # by trace INDEX, so a model whose cluster set differs can land a
+        # hidden-trace flag on a different cluster; "↺ Reset view" is the
+        # one-click flush. The app already behaves this way for every other
+        # data-changing input (visualize, hide-non-robust, pending edits),
+        # which leave uirevision untouched.
         fig.update_layout(
-            uirevision=(f"{uirev_prefix}:{source_folder}:{model_key}:{view}"
+            uirevision=(f"{uirev_prefix}:{source_folder}:{view}"
                         f":{reset_counter or 0}"))
         return fig
 
@@ -1317,20 +1329,22 @@ def register_callbacks(
             # SourceBundle dataclass is mutable; cheap to copy fields.
             from dataclasses import replace as _replace
             bundle = _replace(bundle, cluster_df=applied_df)
-        # Scope uirevision to (source, model) so the user's zoom persists
-        # while they're scrubbing epochs, but a context change always
-        # starts from a clean axis state. This is also our defence against
-        # the rare "missing overlay on some epochs" symptom: a constant
-        # uirevision lets Plotly carry stale axis or trace-visibility
-        # state across hours of figure updates; a per-context key
-        # guarantees that state never crosses a source/model boundary.
+        # Scope uirevision to the SOURCE so the user's zoom persists while
+        # they're scrubbing epochs AND while they're switching models (same
+        # source, same epochs, same axes — switching models is how you compare
+        # them, and that needs a fixed view; reviewer request 2026-11-02). A
+        # source change still starts from a clean axis state, which is also our
+        # defence against the rare "missing overlay on some epochs" symptom: a
+        # fully constant uirevision would let Plotly carry stale axis or
+        # trace-visibility state across hours of figure updates. "↺ Reset view"
+        # bumps the counter in the key as the explicit flush.
         return overlay_figure_for_epoch(
             bundle, int(epoch_int), cache_dir,
             source_no_band=source_no_band, band=band,
             fits_data_dir=fits_data_dir,
             image_source="fits" if use_fits_val else "synthesize",
             stacked=bool(stacked_val),
-            uirevision=f"overlay:{source_folder}:{model_key}:{reset_counter or 0}",
+            uirevision=f"overlay:{source_folder}:{reset_counter or 0}",
             source_label=src.source,
             ref_label=ref_label,
             origin_label=origin_label,

@@ -647,14 +647,20 @@ def overlay_figure_for_epoch(
     ``epoch_int`` so the reviewer can scrub epochs against the stable
     averaged background.
     """
+    # Every placeholder below carries the caller's ``uirevision``, so a model
+    # or epoch with nothing to draw does not make Plotly discard the retained
+    # zoom: switching current -> backup_NNN (no npz) -> current keeps the view,
+    # which is the point of the model-independent key the caller passes. Same
+    # trick the compare page uses to step THROUGH a blank epoch.
     if bundle.plotdata is None:
         return _empty_overlay(
             "Epoch overlay only available for the current model "
-            "(backups have no .plotdata.npz)."
+            "(backups have no .plotdata.npz).", uirevision
         ), None
     pd_ = bundle.plotdata
     if epoch_int < 0 or epoch_int >= len(pd_.epoch_info):
-        return _empty_overlay(f"Epoch index {epoch_int} out of range."), None
+        return _empty_overlay(f"Epoch index {epoch_int} out of range.",
+                             uirevision), None
     info = pd_.epoch_info[epoch_int]
     epoch_name = str(info["epoch_name"])
     epoch_val = float(info["epoch_val"])
@@ -688,7 +694,8 @@ def overlay_figure_for_epoch(
             core_reference_key(bundle.cluster_df))
         if result is None:
             return _empty_overlay(
-                "Stacked image needs plotdata, which this model lacks."
+                "Stacked image needs plotdata, which this model lacks.",
+                uirevision
             ), None
         epoch_axes, (beam_bmaj, beam_bmin, beam_bpa) = result
         # Median noise across epochs sets the contour base for the average.
@@ -705,7 +712,8 @@ def overlay_figure_for_epoch(
         try:
             fits_path = fetch_fits(ref, cache_dir, fits_data_dir=fits_data_dir)
         except Exception as e:
-            return _empty_overlay(f"Could not fetch FITS:\n{e}"), None
+            return _empty_overlay(f"Could not fetch FITS:\n{e}",
+                                 uirevision), None
         epoch_axes = _load_fits_image(fits_path, core_x=core_x, core_y=core_y)
         image_source_label = "FITS Image"
     else:

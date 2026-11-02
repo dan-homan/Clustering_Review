@@ -234,6 +234,29 @@ don't originate edits — the click-toggle is bound to `summary-graph`).
 Kinematics. `subplot_resize.js` stays bound to `#summary-graph` (no intra-pane
 resize on the right).
 
+**Zoom scope — `uirevision` keys (model is deliberately absent).**
+
+| Graph | Key |
+|---|---|
+| left summary | `summary:<folder>:<view>:<summary-reset-counter>` |
+| right summary | `summary-right:<folder>:<view>:<summary-reset-counter>` |
+| epoch overlay | `overlay:<folder>:<overlay-reset-counter>` |
+
+Scoped to (source, view) so zoom survives epoch scrubbing, selection clicks,
+the visualize/astrometry toggles, pending edits — **and model switches**
+(`current` ⇄ `backup_NNN` ⇄ `alt_model_NNN` ⇄ `Rec:<slug>`), which is how a
+reviewer compares models and only works at a fixed zoom. Every model under one
+source covers the same source/epochs, so the axes mean the same thing; a source
+or view change still flushes (different data domain / axis identities), as do
+the ↺ Reset view buttons via their counters. Reviewer request 2026-11-02.
+Trade-off: Plotly keys retained UI edits (legend hide/isolate included) by trace
+INDEX, so a model whose cluster set differs can land a hidden-trace flag on a
+different cluster — Reset view is the flush. The app already behaves this way
+for every other data-changing input, which leave `uirevision` untouched.
+`overlay_figure_for_epoch` passes the key into **every** `_empty_overlay`
+placeholder (no plotdata / epoch out of range / FITS fetch failed) so a figure
+with nothing to draw doesn't make Plotly discard the retained view either.
+
 ### Plotting conventions (spatial/sky plots) — also `docs/plot_conventions.md`
 
 - **+x to the left** (astronomical). Use explicit `range=[hi, lo]`, not

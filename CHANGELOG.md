@@ -4,6 +4,34 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-02 — Model switches keep the plots' zoom
+
+- **Switching the model no longer zooms the plots back out.** `model_key` was
+  part of both the summary and overlay `uirevision` keys, so every
+  `current` ⇄ `backup_NNN` ⇄ `alt_model_NNN` ⇄ `Rec: <slug>` switch handed
+  Plotly a fresh key and the view snapped to the default extent — which defeats
+  the point of switching, since comparing two models of the same source is only
+  meaningful at a fixed zoom. The keys are now scoped to (source, view):
+  `summary:<folder>:<view>:<reset-counter>`,
+  `summary-right:<folder>:<view>:<reset-counter>`,
+  `overlay:<folder>:<reset-counter>`.
+- **What still flushes**, because it should: a source change, a view change
+  (Position vs Kinematics don't share axis meanings), and the ↺ Reset view
+  buttons via their counters.
+- **Placeholders carry the key too.** `overlay_figure_for_epoch` now passes
+  `uirevision` into every `_empty_overlay` it returns (no plotdata / epoch index
+  out of range / FITS fetch failed), so a model or epoch with nothing to draw
+  doesn't make Plotly discard the retained view on the way through — the same
+  trick the compare page already uses to step through a blank epoch.
+- **Known trade-off.** Plotly keys its retained UI edits by trace *index*, and
+  legend hide/isolate state is one of them, so switching to a model whose
+  cluster set differs can land a hidden-trace flag on a different cluster.
+  ↺ Reset view is the one-click flush. This is not new behaviour: every other
+  data-changing input (visualize, hide-non-robust, pending edits) already
+  leaves `uirevision` untouched while changing the trace list.
+
+---
+
 ## 2026-10-29 — Absolute astrometric reference position
 
 - **New "Astrometric reference" header checkbox.** Every position the app plots
