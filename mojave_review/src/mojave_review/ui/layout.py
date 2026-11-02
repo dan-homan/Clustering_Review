@@ -269,6 +269,30 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                                "fontSize": "0.9em",
                                "color": "#444"},
                     ),
+                    # Put (0,0) at a FIXED sky position — the mean absolute
+                    # astrometric position of the core — instead of at each
+                    # epoch's own fitted core, on the epochs for which
+                    # astrometry_mojave.dat has one (data/astrometry.py).
+                    # Coverage is partial and per-epoch, so the adjacent status
+                    # span reports it per source and the overlay badge names
+                    # the frame of the epoch on screen. The option is disabled
+                    # for sources with no astrometry at all.
+                    dcc.Checklist(
+                        id="astrometry-checkbox",
+                        options=[{"label": " Astrometric reference",
+                                  "value": "yes"}],
+                        value=[],
+                        inputStyle={"marginRight": "0.3em"},
+                        style={"marginLeft": "1em",
+                               "fontSize": "0.9em",
+                               "color": "#444"},
+                    ),
+                    html.Span(
+                        id="astrometry-status",
+                        children="",
+                        style={"marginLeft": "0.4em", "fontSize": "0.8em",
+                               "color": "#888", "whiteSpace": "nowrap"},
+                    ),
                 ],
                 style={"display": "flex", "alignItems": "center", "marginTop": "0.5em"},
             ),

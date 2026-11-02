@@ -76,6 +76,7 @@ def register_callbacks(
     reviewer: str,
     admin: bool = False,
     fits_data_dir: Path | None = None,
+    astrometry_path: str | None = None,
 ) -> None:
     # Recommendations tab — load + autosave behavior.
     recommendations_callbacks.register(
@@ -104,6 +105,19 @@ def register_callbacks(
         find_source_params, load_redshifts, redshift_for)
     _redshift_map = load_redshifts(find_source_params(results_dir))
 
+    # Absolute astrometric core positions (astrometry_mojave.dat), loaded once.
+    # Drives the "Astrometric reference" header checkbox: where a source+epoch
+    # has an absolute position, (0,0) becomes the source's MEAN astrometric
+    # position (fixed on the sky) instead of that epoch's own fitted core.
+    # Empty map (no file) => the checkbox is disabled on every source and the
+    # app behaves exactly as before.
+    from ..data.astrometry import (
+        apply_astrometric_reference, astrometry_for, find_astrometry_file,
+        load_astrometry)
+    _astrometry_path = (Path(astrometry_path) if astrometry_path
+                        else find_astrometry_file(results_dir))
+    _astrometry = load_astrometry(_astrometry_path)
+
     # Local helpers that resolve a (source, model) pair into a possibly
     # rec-applied DataFrame, closing over recommendations_dir and the
     # reviewer-name resolver (token mode: g.reviewer; otherwise the
@@ -114,6 +128,7 @@ def register_callbacks(
     def _resolve_df_for_plot(
         source_folder: str, source_name: str, model_key: str,
         *, visualize_val, cluster_rows, edits, no_changes_val, agg_rec=None,
+        astrometry_val=None,
     ):
         eff_key = _effective_model_for_load(model_key)
         bundle = load_bundle(source_folder, eff_key)
@@ -143,6 +158,14 @@ def register_callbacks(
                     edits=edits,
                 )
                 df = apply_recommendation(df, own_rec)
+        # Re-reference LAST: recommendations can move the core (a
+        # change_clusterID to 0 rewrites core_x/core_y for the epoch), and the
+        # astrometric correction is applied on top of whatever core the
+        # rendered model ends up with. A no-op when the checkbox is off or the
+        # source has no astrometry.
+        if astrometry_val:
+            df, _info = apply_astrometric_reference(
+                df, astrometry_for(_astrometry, source_name))
         return df
 
     # ---- ↻ Reload button -------------------------------------------------
@@ -862,7 +885,8 @@ def register_callbacks(
     def _build_summary_fig(source_folder, model_key, view, vector_scale,
                            selection, visualize_val, cluster_rows, edits,
                            no_changes_val, hide_non_robust_val, only_3sigma_val,
-                           agg_rec, uirev_prefix, reset_counter=0):
+                           agg_rec, uirev_prefix, reset_counter=0,
+                           astrometry_val=None):
         """Resolve the plot dataframe and build a summary figure.
 
         Shared by the left (header ``view-picker``) summary and the right-pane
@@ -882,6 +906,7 @@ def register_callbacks(
             source_folder, src.source, model_key,
             visualize_val=visualize_val, cluster_rows=cluster_rows,
             edits=edits, no_changes_val=no_changes_val, agg_rec=agg_rec,
+            astrometry_val=astrometry_val,
         )
         # 1-sigma centroid-position uncertainties from the clean components,
         # for error bars on the Position view (distance + XY panels) and the
@@ -914,12 +939,21 @@ def register_callbacks(
         # z drives the (1+z) host-frame Tb correction and beta_app on the
         # Kinematics hovers; 0.0 (unknown) leaves Tb as the observed value.
         z = redshift_for(_redshift_map, src.source) or 0.0
+        # The per-panel badge names the frame when it isn't the plain core, so
+        # a screenshot is never ambiguous about what (0, 0) means.
+        label = src.source
+        origin_label = "core"
+        if astrometry_val and astrometry_for(_astrometry, src.source):
+            label = f"{src.source}  ·  astrometric ref"
+            # (0,0) is no longer the core — the core cluster plots just off it.
+            origin_label = "reference"
         fig = build_summary_figure(
             df, view=view, z=z,
             vector_scale_factor=vector_scale or 1.0,
             hide_non_robust=bool(hide_non_robust_val),
             only_3sigma=bool(only_3sigma_val),
-            source_label=src.source,
+            source_label=label,
+            origin_label=origin_label,
         )
         # Persist the user's zoom across selection clicks, visualize toggle,
         # vector scale change, edits etc. — anything that doesn't change the
@@ -949,16 +983,17 @@ def register_callbacks(
         Input("reload-counter", "data"),
         Input("agg-preview-rec", "data"),
         Input("summary-reset-counter", "data"),
+        Input("astrometry-checkbox", "value"),
     )
     def _refresh_summary(source_folder, model_key, view, vector_scale,
                          selection, visualize_val, cluster_rows, edits,
                          no_changes_val, hide_non_robust_val, only_3sigma_val,
-                         _reload_counter, agg_rec, summary_reset):
+                         _reload_counter, agg_rec, summary_reset, astrometry_val):
         return _build_summary_fig(
             source_folder, model_key, view, vector_scale, selection,
             visualize_val, cluster_rows, edits, no_changes_val,
             hide_non_robust_val, only_3sigma_val, agg_rec, "summary",
-            reset_counter=summary_reset)
+            reset_counter=summary_reset, astrometry_val=astrometry_val)
 
     # ---- second summary (right pane) -------------------------------------
     # Renders a second summary view in place of the epoch overlay when the
@@ -982,12 +1017,13 @@ def register_callbacks(
         Input("reload-counter", "data"),
         Input("agg-preview-rec", "data"),
         Input("summary-reset-counter", "data"),
+        Input("astrometry-checkbox", "value"),
     )
     def _refresh_summary_right(source_folder, model_key, mode, vector_scale,
                                selection, visualize_val, cluster_rows, edits,
                                no_changes_val, hide_non_robust_val,
                                only_3sigma_val, _reload_counter, agg_rec,
-                               summary_reset):
+                               summary_reset, astrometry_val):
         # "overlay" → the epoch overlay is showing; the right summary is hidden,
         # so do no work.
         if mode == "overlay":
@@ -996,7 +1032,7 @@ def register_callbacks(
             source_folder, model_key, mode, vector_scale, selection,
             visualize_val, cluster_rows, edits, no_changes_val,
             hide_non_robust_val, only_3sigma_val, agg_rec, "summary-right",
-            reset_counter=summary_reset)
+            reset_counter=summary_reset, astrometry_val=astrometry_val)
 
     # ---- summary Reset view button ---------------------------------------
     # Bumps a counter folded into BOTH summary graphs' uirevision, forcing a
@@ -1232,11 +1268,12 @@ def register_callbacks(
         Input("overlay-reset-counter", "data"),
         Input("reload-counter", "data"),
         Input("agg-preview-rec", "data"),
+        Input("astrometry-checkbox", "value"),
     )
     def _refresh_overlay(source_folder, model_key, epoch_int,
                          visualize_val, cluster_rows, edits, no_changes_val,
                          use_fits_val, stacked_val, reset_counter,
-                         _reload_counter, agg_rec):
+                         _reload_counter, agg_rec, astrometry_val):
         if not source_folder or not model_key or epoch_int is None:
             return go.Figure(), None
         src = _source_from_folder(source_folder)
@@ -1253,7 +1290,28 @@ def register_callbacks(
             source_folder, src.source, model_key,
             visualize_val=visualize_val, cluster_rows=cluster_rows,
             edits=edits, no_changes_val=no_changes_val, agg_rec=agg_rec,
+            astrometry_val=astrometry_val,
         )
+        # Astrometric coverage is per-epoch, so the badge has to say which
+        # frame THIS epoch is in — a reviewer scrubbing a partially covered
+        # source crosses the boundary without any other visible cue.
+        ref_label = ""
+        origin_label = "core"
+        sa = astrometry_for(_astrometry, src.source) if astrometry_val else None
+        in_range = (bundle.plotdata is not None
+                    and 0 <= int(epoch_int) < len(bundle.plotdata.epoch_info))
+        if sa is not None and in_range:
+            ep_name = str(bundle.plotdata.epoch_info[int(epoch_int)]["epoch_name"])
+            ae = sa.epochs.get(ep_name)
+            if ae is not None:
+                ref_label = (
+                    f"Origin: astrometric (mean of {sa.n_epochs} epochs) · "
+                    f"core offset {ae.dx:+.3f}, {ae.dy:+.3f} mas")
+                # On a covered epoch the × is the fixed sky position, not the
+                # core; on an uncovered one it IS the core, so leave it.
+                origin_label = "reference"
+            else:
+                ref_label = "Origin: fitted core (no astrometry this epoch)"
         if not applied_df.equals(bundle.cluster_df):
             # Construct a shallow shim bundle with the patched df. The
             # SourceBundle dataclass is mutable; cheap to copy fields.
@@ -1274,7 +1332,42 @@ def register_callbacks(
             stacked=bool(stacked_val),
             uirevision=f"overlay:{source_folder}:{model_key}:{reset_counter or 0}",
             source_label=src.source,
+            ref_label=ref_label,
+            origin_label=origin_label,
         )
+
+    # ---- astrometric-reference availability + status ---------------------
+    # Coverage is partial in two directions: only ~55% of the sample has any
+    # astrometric position at all, and a covered source usually has them for a
+    # minority of its MOJAVE epochs. Report both next to the checkbox, and
+    # disable the option outright where there is nothing to apply, so a
+    # reviewer never wonders why ticking it changed nothing.
+    @app.callback(
+        Output("astrometry-checkbox", "options"),
+        Output("astrometry-status", "children"),
+        Input("source-picker", "value"),
+        Input("model-picker", "value"),
+        Input("reload-counter", "data"),
+    )
+    def _astrometry_status(source_folder, model_key, _reload_counter):
+        opt = {"label": " Astrometric reference", "value": "yes"}
+        if not _astrometry:
+            return [{**opt, "disabled": True}], "(no astrometry file)"
+        src = _source_from_folder(source_folder) if source_folder else None
+        if src is None:
+            return [opt], ""
+        sa = astrometry_for(_astrometry, src.source)
+        if sa is None:
+            return [{**opt, "disabled": True}], "(none for this source)"
+        # Count the epochs that actually join, not just the file's rows: a few
+        # astrometric dates have no matching MOJAVE epoch in our CSVs.
+        try:
+            df = load_bundle(source_folder,
+                             _effective_model_for_load(model_key)).cluster_df
+            _df2, info = apply_astrometric_reference(df, sa)
+            return [opt], f"({info.n_matched} / {info.n_epochs} epochs)"
+        except Exception:
+            return [opt], f"({sa.n_epochs} epochs)"
 
     # ---- overlay Reset view button ---------------------------------------
     # Increments a counter that participates in the overlay's uirevision

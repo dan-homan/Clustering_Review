@@ -9,6 +9,12 @@ cluster table and drawn as 1-sigma error bars on the position plots.
 
 These are derived here, not read from the CSV. If the production pipeline later
 writes them to the CSV, prefer those columns and fall back to this module.
+
+When the astrometric reference is active (see ``data/astrometry.py``) the origin
+is no longer the epoch's own core but a fixed sky position known only to the
+accuracy of the astrometric fit, so that error (``astro_sig_x`` /
+``astro_sig_y`` on the cluster table) is added in quadrature as a third
+independent term on epochs that have an astrometric position.
 """
 
 from __future__ import annotations
@@ -42,6 +48,17 @@ def _weighted_mean_se(vals: np.ndarray, weights: np.ndarray) -> float:
     num = float(np.sum(w * (v - vbar) ** 2))
     se2 = num / ((n - 1) * sw)
     return float(np.sqrt(se2)) if se2 > 0 else 0.0
+
+
+def _first_finite(frame: pd.DataFrame, col: str) -> float | None:
+    """First finite value of ``col`` in ``frame``, or None (missing column /
+    all-NaN). Used for the per-epoch astrometric position error, which is the
+    same on every row of the epoch."""
+    if col not in frame.columns:
+        return None
+    vals = pd.to_numeric(frame[col], errors="coerce").to_numpy(dtype=float)
+    good = vals[np.isfinite(vals)]
+    return float(good[0]) if good.size else None
 
 
 def compute_position_uncertainties(
@@ -89,12 +106,25 @@ def compute_position_uncertainties(
         core_sx = se_x.get(0, np.nan)
         core_sy = se_y.get(0, np.nan)
 
+        # When the astrometric reference is in use, the ORIGIN itself carries
+        # the astrometric position error of this epoch (data/astrometry.py puts
+        # it in astro_sig_x/y, NaN on epochs with no astrometric position).
+        # Add it in quadrature as a third independent term -- but only where
+        # it's finite, so an astrometry-less epoch keeps its CC-only bars
+        # instead of going NaN. Reviewer decision 2026-10-29.
+        astro_sx = _first_finite(fit, "astro_sig_x")
+        astro_sy = _first_finite(fit, "astro_sig_y")
+
         for _, row in fit.iterrows():
             cid = int(row["clusterID"])
             # Combine cluster + core centroid SE in quadrature (independent).
             # np.hypot propagates NaN, so an undefined core SE -> NaN bars.
             sig_dx = float(np.hypot(se_x.get(cid, np.nan), core_sx))
             sig_dy = float(np.hypot(se_y.get(cid, np.nan), core_sy))
+            if astro_sx is not None:
+                sig_dx = float(np.hypot(sig_dx, astro_sx))
+            if astro_sy is not None:
+                sig_dy = float(np.hypot(sig_dy, astro_sy))
 
             dx = float(row["avg_x"]) - float(row["core_x"])
             dy = float(row["avg_y"]) - float(row["core_y"])

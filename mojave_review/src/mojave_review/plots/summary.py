@@ -407,10 +407,30 @@ def _add_xy_traces(fig: go.Figure, s: _Slice, row: int, col: int,
         )
 
 
+# Smallest core offset the XY panel treats as real (mas). In the plain core
+# frame cid 0's xpos/ypos are identically zero (avg_x IS core_x there, to
+# ~1e-16), so anything above a micro-mas means a reference shift moved it.
+_XY_CORE_EPS_MAS = 1e-6
+
+
+def _has_xy_offset(s: _Slice) -> bool:
+    """True when this cluster has at least one point measurably off the origin.
+
+    Only used to decide whether the core is worth drawing in the XY panel (see
+    ``_draw_xy``): with the plain core reference its whole track sits on the
+    origin marker, and plotting one marker per epoch there is clutter with no
+    information in it.
+    """
+    r = np.hypot(s.xpos, s.ypos)
+    return bool(np.any(np.isfinite(r) & (r > _XY_CORE_EPS_MAS)))
+
+
 def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
-             show_legend: bool) -> None:
-    """Draw the XY centroid-track panel (per-cluster (x, y) mas vs core) on
-    subplot ``row``: +x reversed, a black × at the core, and a 10%-padded range.
+             show_legend: bool, origin_label: str = "core") -> None:
+    """Draw the XY centroid-track panel (per-cluster (x, y) mas vs the reference
+    position) on subplot ``row``: +x reversed, a black × at the origin, and a
+    10%-padded range. The unassigned cluster (-1) is never drawn; the core (0)
+    is drawn only when its track is measurably off the origin (see below).
     The bottom panel of the Position view. The equal mas/pixel scale is NOT
     enforced here via ``scaleanchor`` (which would lock drag-zoom to the panel
     aspect). Instead a clientside script (``assets/equal_aspect.js``) keeps
@@ -428,7 +448,17 @@ def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
     all_x: list[float] = [0.0]
     all_y: list[float] = [0.0]
     for s in slices:
-        if s.cid < 1:                       # skip unassigned (-1) + the core
+        if s.cid < 0:                       # skip unassigned (-1)
+            continue
+        # The core (0) is drawn only when it has actually moved off the origin
+        # — which it can, now that the reference position need not BE the core
+        # (astrometric reference; see docs/astrometric_reference.md). In the
+        # plain core frame its track is identically (0,0), so drawing it would
+        # just pile one marker per epoch under the origin ×. Keyed on the data
+        # rather than on the toggle, so any future reference shift gets it for
+        # free and /compare (core-referenced) stays clean. Reviewer decision
+        # 2026-10-29.
+        if s.cid == 0 and not _has_xy_offset(s):
             continue
         _add_xy_traces(fig, s, row=row, col=1, show_legend=show_legend)
         all_x.extend(float(v) for v in s.xpos if np.isfinite(v))
@@ -439,7 +469,7 @@ def _draw_xy(fig: go.Figure, slices: list[_Slice], row: int,
             marker={"color": "black", "symbol": "x-thin", "size": 14,
                     "line": {"width": 2, "color": "black"}},
             name="core", showlegend=False,
-            hovertemplate="core (0, 0)<extra></extra>",
+            hovertemplate=f"{origin_label} (0, 0)<extra></extra>",
         ),
         row=row, col=1,
     )
@@ -587,6 +617,7 @@ def build_summary_figure(
     source_label: str = "",
     vector_scale_abs: float | None = None,
     kin_extent: "tuple | None" = None,
+    origin_label: str = "core",
 ) -> go.Figure:
     """Build a 2-row (top/bottom) summary figure for one of the four views.
 
@@ -604,6 +635,11 @@ def build_summary_figure(
     shared value (see `shared_vector_scale_abs`) to make vector length mean the
     same speed across several panels. None → auto (median speed at ~1/5th of
     the panel span, floored at 0.05 mas/yr).
+
+    `origin_label` names what the black × at (0, 0) IS, for its hover text.
+    "core" by default, since that's what the reference position normally is;
+    the astrometric reference makes (0, 0) a fixed sky position with the core
+    sitting slightly off it, and then calling the marker "core" is wrong.
 
     `kin_extent` = ``((x_lo, x_hi), (y_lo, y_hi))`` frames the Kinematics vector
     (X/Y) subplot to an explicit box instead of autoranging. Pass a shared box
@@ -683,7 +719,8 @@ def build_summary_figure(
         fig.update_yaxes(title_text="Distance from origin [mas]", row=1, col=1)
         # Legend comes from the distance traces (row 1); XY (row 2) reuses the
         # same legendgroups, so show_legend=False avoids duplicate entries.
-        _draw_xy(fig, slices, row=2, show_legend=False)
+        _draw_xy(fig, slices, row=2, show_legend=False,
+                 origin_label=origin_label)
         # Tell the letterbox script that THIS figure's bottom panel is the
         # equal-aspect XY track (Kinematics' bottom shares the "X/Y [mas]" axis
         # titles but keeps scaleanchor, so titles can't disambiguate).
@@ -741,7 +778,8 @@ def build_summary_figure(
         _draw_kinematics(fig, slices, motion_fits,
                          vector_scale_factor=vector_scale_factor,
                          only_3sigma=only_3sigma, z=z,
-                         vector_scale_abs=vector_scale_abs)
+                         vector_scale_abs=vector_scale_abs,
+                         origin_label=origin_label)
         # Always show the (0 distance, 0 speed) corner so the reader can see
         # where each feature sits relative to the core and to zero motion.
         # Distances and speeds are non-negative, so rangemode="tozero" anchors
@@ -872,6 +910,7 @@ def _draw_kinematics(
     only_3sigma: bool = False,
     z: float = 0.0,
     vector_scale_abs: float | None = None,
+    origin_label: str = "core",
 ) -> None:
     fits = [mf for mf in motion_fits.values()
             if mf is not None and mf.cid > 0
@@ -924,7 +963,7 @@ def _draw_kinematics(
             marker={"color": "black", "symbol": "x-thin", "size": 14,
                     "line": {"width": 2, "color": "black"}},
             name="core", showlegend=False,
-            hovertemplate="core (0, 0)<extra></extra>",
+            hovertemplate=f"{origin_label} (0, 0)<extra></extra>",
         ),
         row=2, col=1,
     )

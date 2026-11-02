@@ -210,6 +210,8 @@ def build_overlay_figure(
     show_3sigma: bool = False,
     image_source_label: str = "",
     source_label: str = "",
+    ref_label: str = "",
+    origin_label: str = "core",
     uirevision: str = "overlay",
     extent_override: tuple | None = None,
 ) -> go.Figure:
@@ -228,6 +230,14 @@ def build_overlay_figure(
     ``image_source_label`` is appended to the figure title when non-empty
     so the reviewer can tell at a glance whether they're looking at a
     real FITS or a synthesized image.
+
+    ``origin_label`` names what the black × at (0, 0) is, for its hover text
+    (see ``build_summary_figure``).
+
+    ``ref_label`` adds a fourth badge line naming what (0, 0) is — used by the
+    astrometric reference, where the origin is a fixed sky position rather than
+    this epoch's core, and where coverage is per-epoch so the reviewer needs to
+    see which frame the epoch in front of them is actually in.
     """
     # Per-epoch slice of the cluster table. Use a tight tolerance — the
     # default np.isclose merges neighbouring epochs spaced a few days apart
@@ -420,14 +430,16 @@ def build_overlay_figure(
                 #     )
                 # )
 
-    # Black 'x' at the core (0,0)
+    # Black 'x' at the reference position (0,0) — the core by default, a fixed
+    # sky position under the astrometric reference (where the core cluster sits
+    # slightly off it, so the marker must not claim to BE the core).
     fig.add_trace(
         go.Scatter(
             x=[0.0], y=[0.0], mode="markers",
             marker=dict(color="black", symbol="x-thin", size=14,
                         line=dict(width=2, color="black")),
             name="core", showlegend=False,
-            hovertemplate="core (0, 0)<extra></extra>",
+            hovertemplate=f"{origin_label} (0, 0)<extra></extra>",
         )
     )
 
@@ -492,17 +504,20 @@ def build_overlay_figure(
     fig.update_layout(
         template="plotly_white",
         height=720,
-        margin=dict(l=60, r=20, t=52, b=50),  # room for the 3-line badge
+        # Room for the badge: 3 lines normally, 4 with a reference line.
+        margin=dict(l=60, r=20, t=66 if ref_label else 52, b=50),
         dragmode="zoom",
         uirevision=uirevision,
         meta="overlay-equal",   # flag for equal_aspect.js (full-2D letterbox)
     )
 
-    # Badge instead of a centered title, top-left, three lines:
+    # Badge instead of a centered title, top-left, three lines (four with the
+    # astrometric reference):
     #   1. source
     #   2. epoch (val) · cbase  (+ mapping caveat)
     #   3. what's actually plotted (Clean Component Convolution [-Stacked] /
     #      FITS Image) — so the viewer always knows the image's provenance.
+    #   4. what (0, 0) is, when it isn't simply this epoch's core.
     # Anchored to the axis DOMAIN, not paper: the y-axis uses scaleanchor +
     # constrain="domain" (equal aspect), which shrinks the actual plot box
     # inside the paper area. A paper-anchored badge floated well above the
@@ -518,6 +533,8 @@ def build_overlay_figure(
     lines.append(detail)
     if image_source_label:
         lines.append(image_source_label)
+    if ref_label:
+        lines.append(ref_label)
     fig.add_annotation(
         text="<br>".join(lines), xref="x domain", yref="y domain",
         x=0.0, y=1.0, xanchor="left", yanchor="bottom",
@@ -531,12 +548,38 @@ def build_overlay_figure(
 # ---------------------------------------------------------------------------
 
 
+def core_reference_key(cluster_df: pd.DataFrame) -> tuple:
+    """Hashable per-epoch core reference ``((epoch, core_x, core_y), ...)``.
+
+    The stacked image shifts every epoch's clean components to that epoch's
+    core before accumulating, so it depends on the reference positions in the
+    *rendered* dataframe — which is not necessarily the one on disk (the
+    astrometric reference moves them, and so can a ``change_clusterID`` edit
+    that re-cores an epoch). This key lets the stacked cache be keyed on, and
+    rebuilt with, exactly those positions.
+    """
+    if "core_x" not in cluster_df.columns or not len(cluster_df):
+        return ()
+    fitted = cluster_df.loc[cluster_df["clusterID"] >= 0,
+                            ["epoch", "core_x", "core_y"]]
+    if not len(fitted):
+        return ()
+    first = fitted.groupby(fitted["epoch"].round(4), sort=True).first()
+    return tuple((float(ev), float(r.core_x), float(r.core_y))
+                 for ev, r in first.iterrows())
+
+
 @lru_cache(maxsize=8)
-def _stacked_axes_for_bundle(folder: str, model_key: str, csv_sha: str):
+def _stacked_axes_for_bundle(folder: str, model_key: str, csv_sha: str,
+                             core_ref: tuple = ()):
     """Cached stacked Stokes-I image for a (source, model) bundle.
 
     Keyed on the CSV content hash (``csv_sha``) so it invalidates when the
-    CSV changes (e.g. after ``mojave-apply``). The stacked image is
+    CSV changes (e.g. after ``mojave-apply``), and on ``core_ref`` (see
+    :func:`core_reference_key`) so a stack built in one reference frame is
+    never served for another — without that, ticking "Astrometric reference"
+    left the contour background in the core-aligned frame while the axes and
+    the CC overlay moved to the astrometric one. The stacked image is
     independent of the selected epoch, so caching keeps epoch-scrubbing
     snappy. Returns ``(EpochAxes, (bmaj, bmin, bpa))`` (median beam) or
     ``None`` when the bundle has no plotdata to stack.
@@ -546,8 +589,16 @@ def _stacked_axes_for_bundle(folder: str, model_key: str, csv_sha: str):
     b = load_bundle(folder, model_key)
     if b.plotdata is None:
         return None
+    df = b.cluster_df
+    if core_ref and tuple(core_reference_key(df)) != core_ref:
+        df = df.copy()
+        epochs = df["epoch"].to_numpy(dtype=float)
+        for ev, cx, cy in core_ref:
+            m = epoch_match_mask(epochs, ev)
+            df.loc[m, "core_x"] = cx
+            df.loc[m, "core_y"] = cy
     return synthesize_stacked_stokes_i(
-        cluster_df=b.cluster_df,
+        cluster_df=df,
         cc_data=b.plotdata.cc_data,
         epoch_info=b.plotdata.epoch_info,
     )
@@ -565,6 +616,8 @@ def overlay_figure_for_epoch(
     stacked: bool = False,
     uirevision: str = "overlay",
     source_label: str = "",
+    ref_label: str = "",
+    origin_label: str = "core",
     extent: tuple | None = None,
     cbase_factor: float = 3.0,
 ) -> tuple[go.Figure, dict | None]:
@@ -631,7 +684,8 @@ def overlay_figure_for_epoch(
         # Stacked image overrides image_source — it is always built from the
         # clean components (convolved with the median beam), never FITS.
         result = _stacked_axes_for_bundle(
-            str(bundle.source.folder), bundle.model.key, bundle.csv_sha)
+            str(bundle.source.folder), bundle.model.key, bundle.csv_sha,
+            core_reference_key(bundle.cluster_df))
         if result is None:
             return _empty_overlay(
                 "Stacked image needs plotdata, which this model lacks."
@@ -683,6 +737,8 @@ def overlay_figure_for_epoch(
         show_3sigma=show_3sigma,
         image_source_label=image_source_label,
         source_label=source_label,
+        ref_label=ref_label,
+        origin_label=origin_label,
         uirevision=uirevision,
         extent_override=extent,
         cbase_factor=cbase_factor,

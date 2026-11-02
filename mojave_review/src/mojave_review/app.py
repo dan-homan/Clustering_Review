@@ -40,6 +40,7 @@ def create_app(
     admin_contact: str = "the admin",
     url_base_prefix: str | None = None,
     xviii_path: str | None = None,
+    astrometry_path: str | None = None,
 ) -> Dash:
     """Build the Dash app.
 
@@ -154,6 +155,7 @@ def create_app(
         reviewer=reviewer,        # closure default — overridden per-request
         admin=admin,
         fits_data_dir=fits_data_dir,
+        astrometry_path=astrometry_path,
     )
 
     # Admin-only dashboard callbacks (auto-balance + reassign-queue).

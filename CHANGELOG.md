@@ -4,6 +4,74 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-10-29 — Absolute astrometric reference position
+
+- **New "Astrometric reference" header checkbox.** Every position the app plots
+  is an offset from the core, so the origin rides along with whatever the core
+  fit did in that epoch's map. Where an absolute astrometric position of the
+  core exists, ticking this puts `(0,0)` at a point **fixed on the sky** — the
+  source's mean astrometric position — so the core is free to wander and the
+  features carry absolute-frame motion. Off by default.
+- **The data.** `astrometry_mojave.dat`, a fixed-layout file kept next to the
+  production data (gitignored), parsed by the new `data/astrometry.py`. Found
+  like `source_run_param.csv` (cwd → `results_dir` parent → `results_dir`) or
+  via `--astrometry-file`; without it the checkbox is disabled everywhere.
+  Joined to our epochs by **date** (`20211023` → `ep_name` `2021_10_23`), not
+  by the decimal epoch, which differs from ours in the last digits. Covers 271
+  of the 487 sources under `Results/`, usually a minority of each one's epochs.
+- **The arithmetic.** With `corr(e) = astro(e) − mean(astro)`, the reference in
+  epoch *e*'s map frame is `core(e) − corr(e)`, so a plotted offset becomes
+  `avg − core + corr(e)` and the core itself plots at `+corr(e)`. The sign is
+  the part worth checking: the origin is the mean, so a core displaced `+corr`
+  in absolute terms must *appear* displaced by `+corr`. `dx` is +east, `dy`
+  +north; the file's RA offsets **and RA errors** are coordinate angles and get
+  the `cos δ` factor (verified: at dec +81.6 the RA error column runs ~6.5× the
+  Dec one, and the ratio collapses to ~1 once scaled). Corrections are ~0.1 mas
+  rms, up to ~0.7 mas. The mean is over every epoch in the **file**, so the
+  frame is a source-level constant that never shifts when a model gains epochs.
+- **It rewrites `core_x`/`core_y` and nothing else** — that is all it takes,
+  since every consumer derives positions from `avg − core`: summary views, PA,
+  motion fits, uncertainties, the overlay image/CCs/ellipses, the synthesized
+  and stacked contours, the zoom extent. Applied **last** in
+  `_resolve_df_for_plot`, after recommendations, because a `change_clusterID`
+  to 0 re-cores an epoch.
+- **1σ bars gain a third term.** The origin is now known only to the accuracy
+  of the astrometric fit, so that error is added in quadrature — but **only
+  where finite**, since `np.hypot` would propagate an uncovered epoch's NaN and
+  wipe its bars. The core, whose `σ_d`/`σ_pa` were NaN because `d ≡ 0`, now has
+  real ones.
+- **Stacked-image bug fixed on the way.** `_stacked_axes_for_bundle` re-reads
+  the bundle from disk, so the caller's shifted dataframe was invisible to it
+  and the contour background stayed core-aligned while the axes and the CC
+  overlay moved. It now takes `overlay.core_reference_key(df)` in its cache key
+  and re-applies those cores inside — which also fixes the same latent bug for
+  a re-coring edit.
+- **Coverage is reported twice**, because it is partial in two directions: the
+  status span beside the checkbox (`(10 / 37 epochs)` — epochs that actually
+  *join*; `(none for this source)` with the option disabled where there is
+  nothing to apply), and a fourth line on the overlay badge naming the frame of
+  the epoch on screen (`Origin: astrometric (mean of 10 epochs) · core offset
+  +0.095, +0.044 mas` / `Origin: fitted core (no astrometry this epoch)`). The
+  summary badge reads `<source> · astrometric ref`, and the black × hover says
+  "reference" rather than "core" where they differ.
+- **The core is drawn in the XY panel** now that it can be off the origin —
+  gated on the DATA (`_has_xy_offset`, `> 1e-6 mas`) rather than on the
+  checkbox, so the plain core frame and `/compare` still hide it instead of
+  piling one marker per epoch under the origin ×, and any future reference
+  shift gets it for free. Uncovered epochs stay in the track at exactly
+  `(0,0)`: there the reference genuinely *is* the core, and a gap would misjoin
+  the dotted connector. Kinematics is deliberately not extended — core drift is
+  not feature motion, and a partially covered fit mixes real offsets with
+  zero-offset epochs.
+- **Not folded into `uirevision`**, so ticking the box keeps the current zoom
+  and the shift is visible in place. Scope is the main review page (both
+  summary panes + overlay); `/compare` stays core-referenced (XVIII has no
+  astrometry, so the panels would sit in different frames and break the shared
+  extent), and Window-N frames carry no `ep_name` to join on.
+- Full rationale in `docs/astrometric_reference.md`.
+
+---
+
 ## 2026-10-11 — Window-N rerun command skips `update_cluster_df.py` run strings
 
 - **The bug.** `build_rerun_command` read `Results/<source>/run_string.txt`

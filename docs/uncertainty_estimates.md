@@ -56,6 +56,19 @@ uncertainty of the difference adds in quadrature:
 $$\sigma_{\Delta x}=\sqrt{SE_{c,x}^2+SE_{0,x}^2},\qquad
   \sigma_{\Delta y}=\sqrt{SE_{c,y}^2+SE_{0,y}^2},$$
 
+With the **astrometric reference** active (see
+[astrometric_reference.md](astrometric_reference.md)) the origin is a fixed sky
+position rather than this epoch's core, known only to the accuracy of the
+astrometric fit, so a third independent term joins the quadrature sum on epochs
+that have an astrometric position:
+
+$$\sigma_{\Delta x}=\sqrt{SE_{c,x}^2+SE_{0,x}^2+\sigma_{\mathrm{astro},x}^2}$$
+
+($\sigma_{\mathrm{astro}}$ = `astro_sig_x`/`astro_sig_y` on the cluster table,
+with the RA error's $\cos\delta$ factor applied; added only where finite, so an
+uncovered epoch keeps its CC-only bars instead of going NaN. The error on the
+*mean* position is a common offset and cancels differentially, so it's ignored.)
+
 with $\Delta x=\text{avg\_x}-\text{core\_x}$,
 $\Delta y=\text{avg\_y}-\text{core\_y}$ and $d=\sqrt{\Delta x^2+\Delta y^2}$
 taken from the CSV.

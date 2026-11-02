@@ -42,6 +42,13 @@ velocity vectors, ...). Apply them by default when adding new plots.
    range computation so the core is always visible even when no cluster
    sits near it.
 
+   `(0, 0)` is the **reference position**, which is the core only by
+   default. With the "Astrometric reference" option on, the origin is a
+   fixed sky position and the core sits slightly off it — so never derive
+   the core's drawn position by assuming it is the origin; take it from
+   `avg − core` like any other cluster. See
+   [astrometric_reference.md](astrometric_reference.md).
+
 5. **Vector lengths must be user-tunable.** Auto-fit (longest arrow ≈ 25%
    of panel span) is a reasonable default, but at least one MOJAVE source
    has vectors too small to see at auto-fit scale. Expose a slider /

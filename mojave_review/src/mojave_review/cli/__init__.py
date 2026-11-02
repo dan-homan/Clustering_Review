@@ -74,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
              "Defaults to $MOJAVE_REVIEW_FITS_DATA_DIR (alias: $MOJAVE_DATA).",
     )
     p.add_argument(
+        "--astrometry-file",
+        type=Path,
+        default=None,
+        help="Override the absolute-astrometry table (astrometry_mojave.dat) "
+             "behind the 'Astrometric reference' checkbox. Defaults to the "
+             "first of ./, <results-dir>/../ or <results-dir>/ that has one; "
+             "without it the option is disabled.",
+    )
+    p.add_argument(
         "--xviii-table",
         type=Path,
         default=None,
@@ -204,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         admin_contact=cfg.admin_contact,
         url_base_prefix=cfg.url_base_prefix,
         xviii_path=str(args.xviii_table) if args.xviii_table else None,
+        astrometry_path=(str(args.astrometry_file)
+                         if args.astrometry_file else None),
     )
 
     # The launcher hits the bound port directly (root), even when a public

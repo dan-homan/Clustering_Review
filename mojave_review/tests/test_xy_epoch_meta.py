@@ -13,6 +13,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from mojave_review.plots.summary import XY_EPOCH_COLOR, build_summary_figure
 
@@ -99,3 +100,72 @@ def test_other_views_have_no_xy_payload():
     for view in ("Position Angle", "Flux", "Polarization", "Kinematics"):
         fig = build_summary_figure(_df(), view=view)
         assert not _xy_traces(fig), view
+
+
+# ---------------------------------------------------------------------------
+# The core in the XY panel
+# ---------------------------------------------------------------------------
+
+
+def _df_with_core(core_offsets) -> pd.DataFrame:
+    """``_df()`` plus cluster 0, whose plotted offset per epoch is taken from
+    ``core_offsets`` (a list of (dx, dy)). The offset comes from moving
+    ``core_x``/``core_y`` away from ``avg_x``/``avg_y``, which is exactly what
+    a reference shift does — the core's own avg is always its fitted position.
+    """
+    rows = list(_df().to_dict("records"))
+    for i, (dx, dy) in enumerate(core_offsets):
+        ep = 2000.0 + i
+        rows.append(dict(
+            clusterID=0, epoch=ep, ep_name=f"{int(ep)}_01_01",
+            avg_x=0.0, avg_y=0.0, core_x=-dx, core_y=-dy,
+            fwhm_maj=0.5, fwhm_min=0.4, iflux=2.0, pflux=0.1, evpa=10.0,
+            robust=True, use_in_fit=True, select=False,
+            sig_dx=0.01, sig_dy=0.01, sig_dist=0.01, sig_pa=1.0,
+        ))
+    return pd.DataFrame(rows)
+
+
+def _track_cids(fig):
+    """clusterIDs with a track trace in the XY panel, read off customdata."""
+    out = []
+    for t in _xy_traces(fig):
+        if t.meta["xy"] == "track" and getattr(t, "customdata", None):
+            out.append(int(t.customdata[0][0]))
+    return sorted(out)
+
+
+def test_core_omitted_from_xy_when_it_sits_on_the_origin():
+    """With the plain core reference the core's track IS the origin, so drawing
+    it would pile one marker per epoch under the origin ×."""
+    fig = build_summary_figure(_df_with_core([(0.0, 0.0)] * 4), view="Position")
+    assert _track_cids(fig) == [1, 2]
+    # It stays in the distance panel above (a flat zero line) as before.
+    assert any(t.yaxis in (None, "y") and getattr(t, "customdata", None)
+               and int(t.customdata[0][0]) == 0 for t in fig.data)
+
+
+def test_core_drawn_in_xy_once_it_moves_off_the_origin():
+    """The astrometric reference makes the origin a fixed sky position, so the
+    core acquires a real track — which is worth plotting."""
+    offs = [(0.0, 0.0), (0.0, 0.0), (0.1, -0.2), (0.05, 0.3)]
+    fig = build_summary_figure(_df_with_core(offs), view="Position")
+    assert _track_cids(fig) == [0, 1, 2]
+    core = next(t for t in _xy_traces(fig)
+                if t.meta["xy"] == "track" and getattr(t, "customdata", None)
+                and int(t.customdata[0][0]) == 0)
+    # Every epoch is kept, zero-offset ones included: in those the reference
+    # genuinely IS the core, and a gap would misjoin the dotted connector.
+    assert len(core.x) == 4
+    assert core.x[2] == pytest.approx(0.1)
+    assert core.y[2] == pytest.approx(-0.2)
+    # And it rides the browser-side epoch linkage like any other track.
+    assert core.meta["ep"] == [2000.0, 2001.0, 2002.0, 2003.0]
+
+
+def test_core_not_drawn_for_a_sub_micro_mas_wobble():
+    """Guard against float noise promoting a zero track (avg_x IS core_x for
+    the core, equal to ~1e-16, not exactly)."""
+    fig = build_summary_figure(
+        _df_with_core([(1e-16, -1e-16)] * 4), view="Position")
+    assert _track_cids(fig) == [1, 2]

@@ -12,7 +12,7 @@ Two related but distinct things:
 
 Deeper design rationale lives in `docs/` (`review_workflow.md`,
 `plot_conventions.md`, `product_decisions.md`, `uncertainty_estimates.md`,
-`deployment_phase2.md`). Keep those in sync when behavior changes; keep this
+`astrometric_reference.md`, `deployment_phase2.md`). Keep those in sync when behavior changes; keep this
 file terse.
 
 ## Repository layout
@@ -40,6 +40,7 @@ Clustering_Review/
         │   ├── window_fits.py   # cluster_fits/*.npz loader + nwin_choices store
         │   ├── fits_cache.py    # MOJAVE URL + on-disk FITS cache
         │   ├── source_params.py # per-source redshift from source_run_param.csv
+        │   ├── astrometry.py    # absolute core positions from astrometry_mojave.dat
         │   ├── difficulty.py    # per-source difficulty score + stars
         │   ├── assignments.py   # _admin/assignments.json store + balancer
         │   ├── xviii.py         # Paper XVIII MRT parser → our cluster_df schema
@@ -109,6 +110,23 @@ NOT under `Results/` — a CSV next to the production data (found via
 into `{source: z}` (`load_redshifts`); blank/non-positive z → treated as z=0.
 Drives host-frame Tb `(1+z)` and Kinematics `beta_app`.
 
+### `astrometry_mojave.dat` (one line per source+astrometric epoch; local, gitignored)
+
+NOT under `Results/` — a fixed-layout text file next to the production data,
+found the same way as `source_run_param.csv` (`data/astrometry.find_astrometry_file`:
+cwd → `results_dir` parent → `results_dir`; `--astrometry-file` overrides). Holds
+**absolute** RA/Dec of the core (cluster 0) with 1σ errors, for ~271 of our 487
+sources and usually a minority of each one's epochs. Line layout (whitespace-split):
+
+```
+0003-066   20211023 h  4  EPOCH: 2021.81167  R: 00 06 13.89288712 -+ 0.0422     D: -06 23 35.3355558 -+ 0.0941  Corr: -0.0210  Obs: 151 / 157  Sca: 0 / 0
+```
+
+Join key is the **date** (`20211023` → our `ep_name` `2021_10_23`), NOT the
+decimal epoch (which differs from ours in the last digits). Drives the
+"Astrometric reference" option — see **Astrometric reference** below and
+`docs/astrometric_reference.md`.
+
 ## MOJAVE FITS retrieval
 
 URL pattern (from `grab_mojave_image` in `cluster_code.py`):
@@ -128,7 +146,7 @@ for `Position Angle`:
 
 | View | Top | Bottom |
 |---|---|---|
-| Position | distance vs epoch (+ polyfit), 1σ bars | centroid track (x,y) mas vs core, +x reversed, equal scale (letterbox), 1σ bars, epoch-linked (below) |
+| Position | distance vs epoch (+ polyfit), 1σ bars | centroid track (x,y) mas vs the reference position, +x reversed, equal scale (letterbox), 1σ bars, epoch-linked (below); −1 never drawn, core only when off-origin |
 | Position Angle | *(single)* PA vs epoch, 1σ bars | — |
 | Flux | I flux vs epoch (log y) | Tb vs epoch (log y; 15.4 GHz, z) |
 | Polarization | P flux vs epoch (log y) | EVPA vs epoch |
@@ -352,6 +370,71 @@ cl_fill    = ["none","full","none","none","full","none","full","none","full",
 host-frame Tb `(1+z)`, and `beta_app = (1+z)·µ·D_A/c` on Kinematics hovers
 (`source_params.beta_app`, astropy + flat ΛCDM H0=71 Ωm=0.27; omitted when z
 unknown).
+
+### Astrometric reference (header checkbox; `data/astrometry.py`)
+
+Puts `(0,0)` at a point **fixed on the sky** — the source's MEAN absolute
+astrometric core position — instead of at each epoch's own fitted core, on the
+epochs that have an absolute position. `load_astrometry` builds
+`{source: SourceAstrometry}` once; `_resolve_df_for_plot` calls
+`apply_astrometric_reference(df, astrometry_for(...))` **last** (after recs — a
+`change_clusterID` to 0 rewrites `core_x/core_y`, and the correction goes on top).
+
+With `corr(e) = astro(e) − mean(astro)`:
+
+```
+reference = core(e) − corr(e)        # so plotted = avg − core + corr(e)
+```
+
+The **sign** is the trap: the origin is the mean, so a core displaced `+corr`
+in absolute terms must plot at `+corr`. "core + correction" wobbles the core
+backwards. Reviewer decision 2026-10-29.
+
+- **Rewrites `core_x`/`core_y` and nothing else** — that's all it takes, since
+  every consumer derives positions from `avg − core`: summary views, PA,
+  motion fits, uncertainties, the overlay image/CCs/ellipses, synthesized +
+  stacked contours, `compute_source_extent`. Adds `astro_sig_x`/`astro_sig_y`.
+- `dx` is **+east** (= `+x`), `dy` +north. The file's RA offsets **and RA
+  errors** are coordinate angles → multiply by `cos(dec)` (verified: at dec
+  +81.6 the RA error column is ~6.5× the Dec one, ratio → ~1 once scaled).
+  Corrections run ~0.1 mas rms, up to ~0.7 mas.
+- **Mean over every epoch in the FILE**, not just the loaded model's — a
+  source-level constant, so the frame never shifts when epochs change.
+- **The core gets a real track** (was a flat zero line) and a real motion fit;
+  its `sig_dist`/`sig_pa` stop being NaN. `_draw_xy` therefore draws cid 0 in
+  the **XY panel** too — gated on `_has_xy_offset(s)` (`> 1e-6 mas`), i.e. on
+  the DATA not the checkbox, so the plain core frame (and `/compare`) still
+  hides it rather than piling a marker per epoch under the origin ×, and any
+  future reference shift gets it for free. Uncovered epochs stay in the track
+  at exactly (0,0) — there the reference *is* the core, and a gap would misjoin
+  the dotted connector. Kinematics is deliberately NOT extended
+  (`_draw_kinematics` keeps `mf.cid > 0`): core drift isn't feature motion, and
+  a partially covered fit mixes real offsets with zero-offset epochs. Reviewer
+  decisions 2026-10-29.
+- **1σ bars** gain the astrometric error in quadrature as a third independent
+  term, **only where finite** (`np.hypot` would propagate an uncovered epoch's
+  NaN and wipe its bars). Reviewer decision 2026-10-29.
+- **Stacked image** is rebuilt in the frame: `overlay.core_reference_key(df)` is
+  part of the `_stacked_axes_for_bundle` lru_cache key AND is re-applied to the
+  on-disk df inside it. Without that the contour background stayed core-aligned
+  while the axes + CC overlay moved (it reloads the bundle from disk, so the
+  caller's shifted df was invisible to it). Also fixes the same latent bug for a
+  re-coring edit.
+- **Coverage is partial and per-epoch**, so it's reported twice: the status span
+  beside the checkbox (`(10 / 37 epochs)` — epochs that actually *join*;
+  `(none for this source)` + disabled option where there's nothing to apply),
+  and the overlay badge's 4th line (`Origin: astrometric (mean of N epochs) ·
+  core offset +0.095, +0.044 mas` / `Origin: fitted core (no astrometry this
+  epoch)`). Summary badge reads `<source>  ·  astrometric ref`.
+- The black × at `(0,0)` is the **reference**, not necessarily the core:
+  `build_summary_figure(origin_label=)` / `build_overlay_figure(origin_label=)`
+  set its hover ("core" vs "reference", per epoch).
+- **Deliberately NOT in `uirevision`** — ticking it keeps the zoom so the shift
+  is visible in place.
+- Scope: main review page (both summary panes + overlay). `/compare` stays
+  core-referenced (XVIII has no astrometry → the panels would sit in different
+  frames and break the shared extent); Window-N too (no `ep_name` to join —
+  `apply_astrometric_reference` no-ops on such a frame by design).
 
 ## Recommendations
 
@@ -883,7 +966,8 @@ mojave-review --results-dir ../Results        # http://127.0.0.1:8050
 
 Flags: `--reviewer "Name"`, `--port`, `--no-browser`, `--cache-dir`,
 `--recommendations-dir`, `--admin` (Dashboard balancing + Stage-3), `--url-base-
-prefix /mojave-review/`. For Drive data: use Google Drive for Desktop and point
+prefix /mojave-review/`, `--astrometry-file` (absolute-astrometry table;
+auto-discovered otherwise). For Drive data: use Google Drive for Desktop and point
 `--results-dir` at the local mirror.
 
 ## Phase plan
@@ -928,6 +1012,12 @@ prefix /mojave-review/`. For Drive data: use Google Drive for Desktop and point
   fetcher; don't reuse that function.
 - **`.plotdata.npz` uses `allow_pickle=True`.** CSV is the authoritative
   cluster-level table; npz is needed only for the FITS overlay.
+- **`_stacked_axes_for_bundle` re-reads the bundle from DISK** — the caller's
+  patched `cluster_df` (shim bundle) is invisible to it, so anything that moves
+  `core_x`/`core_y` must also ride in its cache key. It takes
+  `overlay.core_reference_key(df)` for exactly that and re-applies those cores
+  inside. Add a new per-epoch input to the stack the same way, or the contour
+  background silently renders in a different frame from the overlay on it.
 - **A backup CSV has no matching npz** → loader returns `plotdata=None`; overlay
   must handle it gracefully.
 - **`autorange="reversed"` + explicit `range=[hi, lo]` fight.** Use explicit
