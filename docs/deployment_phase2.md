@@ -324,9 +324,35 @@ venv. So a code update on the host is its own step:
 ```bash
 cd /var/www/html/mojave.denison.edu/Clustering_Review   # the checkout
 git pull
-cd mojave_review && pip install -e .                    # or: uv pip install -e .
-systemctl --user restart mojave-review
+cd mojave_review && uv pip install -e .                 # see note on uv below
+sudo systemctl restart mojave                           # unit name on webby
 ```
+
+(The plan above describes a `systemd --user` unit; webby ended up with a
+system-level unit called `mojave`, hence `sudo systemctl restart mojave`. The
+earlier sections have not been reconciled with that.)
+
+**The venv on webby was created by `uv venv`, so it has NO `pip` in it** —
+`.venv/bin/` holds `python`, the console scripts and `gunicorn`, and that is
+all. Use `uv pip …`, which manages a pip-less venv perfectly well; run it from
+`mojave_review/` so it auto-detects the adjacent `.venv`, or pass
+`--python .venv/bin/python`. `uv` is installed under the deploying user
+(`~/.local/bin` or `~/.cargo/bin`), so `sudo` will not find it — do the install
+unprivileged and only the `systemctl` step with `sudo`. `python -m ensurepip`
+would add pip, but there is no reason to.
+
+To change ONE package rather than re-resolve everything — the right blast radius
+for a security patch on a live host — skip the editable reinstall:
+
+```bash
+cd /var/www/html/mojave.denison.edu/Clustering_Review/mojave_review
+uv pip install 'brotli>=1.2.1'
+sudo systemctl restart mojave
+.venv/bin/python -c "import importlib.metadata as m; print(m.version('brotli'))"
+```
+
+Restart even when the app no longer *calls* the upgraded library: an already
+imported module stays resident in the gunicorn workers until they recycle.
 
 ### A dependency change is inert until the venv is reinstalled
 
@@ -334,8 +360,12 @@ This is the easy one to miss, and it has a security edge:
 
 - **pip and uv treat an unversioned requirement as satisfied by whatever is
   already installed.** `flask-compress` requires bare `brotli`, so an installed
-  brotli 1.2.0 satisfies it forever — `pip install -e .` will not upgrade it,
-  and neither will `pip install -U -e .` unless the spec itself changed.
+  brotli 1.2.0 satisfies it forever — `uv pip install -e .` will not upgrade it,
+  and nor will the `-U` form unless the spec itself changed.
+- **uv's cache does not undermine the floor.** `~/.cache/uv/archive-v0/...`
+  keeps unpacked wheels, so a vulnerable version sits there after the venv is
+  clean — but a cached 1.2.0 does not satisfy `brotli>=1.2.1`, so it is not
+  reused. The cache is a scan finding, not a reinfection route.
 - **Therefore: when a package is reported vulnerable, add a floor to
   `pyproject.toml` rather than patching the venv by hand.** Hand-patching works
   until the next reinstall and then silently drifts back. A floor
