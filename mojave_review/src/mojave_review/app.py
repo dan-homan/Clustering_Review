@@ -81,6 +81,19 @@ def create_app(
     # (e.g. an env that hasn't `pip install -e .`'d since this landed).
     try:
         from flask_compress import Compress
+        # Encodings we are willing to serve, best first. flask-compress 1.24
+        # defaults to ["zstd", "br", "gzip", "deflate"] (and ["zstd", "br",
+        # "deflate"] when streaming), which quietly made brotli the preferred
+        # encoding for any client advertising "br" without "zstd" (Firefox) --
+        # not the intent of this block, which has always been about gzip.
+        # Dropping "br" keeps compression for every client (zstd for Chrome,
+        # gzip otherwise) while leaving the brotli code path unreachable, so a
+        # vulnerability in the brotli library is not exercised by this app even
+        # though flask-compress forces it into the environment (CVE-2026-111497
+        # on brotli 1.2.0; pyproject.toml floors the version too). Set BEFORE
+        # init: flask-compress fills its defaults with config.setdefault.
+        app.server.config["COMPRESS_ALGORITHM"] = ["zstd", "gzip", "deflate"]
+        app.server.config["COMPRESS_ALGORITHM_STREAMING"] = ["zstd", "deflate"]
         Compress(app.server)
     except Exception:
         pass

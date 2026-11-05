@@ -15,6 +15,15 @@ dependencies = [
     "scipy>=1.11",        # FFT-convolve in plots/synthesize_fits.py
     "contourpy>=1.1",     # contour polylines in plots/overlay.py (small payloads)
     "flask-compress>=1.14",  # gzip callback payloads (overlay figures)
+    # Hard (non-optional) dependency of flask-compress on CPython, so it is in
+    # the environment whether or not we compress with it. Floored at 1.2.1
+    # because 1.2.0 is vulnerable to CVE-2026-111497 ("HTTP2Shell"), flagged on
+    # the Denison server 2026-11-05. flask-compress itself requires bare
+    # "brotli", which pip/uv consider satisfied by an installed 1.2.0 -- so
+    # without this floor a reinstall silently leaves a patched host vulnerable
+    # again. app.py also drops "br" from COMPRESS_ALGORITHM so the library is
+    # never invoked; this pins the copy that is nonetheless present.
+    "brotli>=1.2.1",
     "astropy>=6.0",
     "requests>=2.31",
     "pyyaml>=6.0",        # tokens.yaml + (phase 2) config.yaml

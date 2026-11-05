@@ -4,6 +4,52 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-05 — Brotli: pin ≥ 1.2.1 and stop serving `br` (CVE-2026-111497)
+
+Prompted by a Denison sysadmin report of brotli 1.2.0 ("HTTP2Shell") in the
+venvs behind `mojave.denison.edu`.
+
+- **Brotli cannot be removed.** It is a hard, non-optional dependency of
+  Flask-Compress on CPython (`brotli; platform_python_implementation != "PyPy"`),
+  and we declare `flask-compress` directly. Every other installed package that
+  mentions brotli (urllib3, httpx, aiohttp, fonttools) lists it only under an
+  extra we don't request. Deleting it wouldn't crash the app — `Compress()` sits
+  in a `try/except` — it would silently serve **everything uncompressed**, which
+  the `app.py` comment flags as dominating felt latency when scrubbing epochs.
+- **The site was in fact serving Brotli**, and preferring it over gzip.
+  Flask-Compress 1.24 defaults `COMPRESS_ALGORITHM` to
+  `["zstd", "br", "gzip", "deflate"]` (and `["zstd", "br", "deflate"]` when
+  streaming) and we never overrode it, so any client advertising `br` without
+  `zstd` — Firefox among them — got brotli. That was never the intent of that
+  block, which has always been about gzip.
+- **`app.py` now sets both algorithm lists before init** (flask-compress fills
+  its defaults with `config.setdefault`, so pre-setting wins), leaving the
+  brotli code path unreachable: `["zstd", "gzip", "deflate"]` and
+  `["zstd", "deflate"]`. Verified by response headers — `br` → no encoding,
+  `br, gzip` → gzip, `zstd, br, gzip` → zstd. Compression is intact for every
+  real client (5.3× on the index page); only a client advertising `br` *alone*
+  loses it, and no browser does that.
+- **`pyproject.toml` floors `brotli>=1.2.1` as an explicit direct dependency.**
+  This is the part that protects the server: flask-compress requires bare
+  unversioned `brotli`, which pip/uv consider *satisfied* by an installed 1.2.0,
+  so without the floor a later `pip install -e .` leaves a freshly patched host
+  vulnerable again. PyPI ships
+  `brotli-1.2.1-cp312-cp312-manylinux2014_x86_64.whl`, matching webby's
+  linux/py3.12, so it resolves there with no compile.
+- **Deploy note:** the floor only takes effect when the venv is reinstalled —
+  `pip install -e .` on the host. An rsync of `Results/` does not carry it.
+- **Not addressed here:** the brotli we decompress rather than compress, i.e.
+  urllib3/requests decoding a `br` response while fetching FITS from
+  `cv.nrao.edu`. And the laptop's own conda-managed brotli: conda-forge lists
+  the whole 1.2.1 family for osx-arm64 but every solve (classic and libmamba)
+  refuses with `PackagesNotFoundInChannelsError: brotli-bin=1.2.1`, while plain
+  `conda update` stays on 1.2.0 and wants to churn ~15 unrelated packages plus
+  conda and openssl. Left alone deliberately: the laptop ships no packages to
+  the server, and `br` is now disabled there too. A project-local venv is the
+  clean route if the dev env needs to be current.
+
+---
+
 ## 2026-11-02 — Model switches keep the plots' zoom
 
 - **Switching the model no longer zooms the plots back out.** `model_key` was
