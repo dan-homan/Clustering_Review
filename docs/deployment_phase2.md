@@ -314,6 +314,94 @@ the loop:
 6. **Step 5 — Issue tokens to the rest of the group.** Five `add`
    calls, five emails with bookmarked URLs. Done.
 
+## Updating the deployed app (code + dependencies)
+
+The `Results/` rsync and the **code** are two different things. The sync
+described in Step 4 carries `Results/` only (`server_sync/server_update_exclude.txt`
+is a filter list relative to `Results/`); it never touches the checkout or the
+venv. So a code update on the host is its own step:
+
+```bash
+cd /var/www/html/mojave.denison.edu/Clustering_Review   # the checkout
+git pull
+cd mojave_review && pip install -e .                    # or: uv pip install -e .
+systemctl --user restart mojave-review
+```
+
+### A dependency change is inert until the venv is reinstalled
+
+This is the easy one to miss, and it has a security edge:
+
+- **pip and uv treat an unversioned requirement as satisfied by whatever is
+  already installed.** `flask-compress` requires bare `brotli`, so an installed
+  brotli 1.2.0 satisfies it forever — `pip install -e .` will not upgrade it,
+  and neither will `pip install -U -e .` unless the spec itself changed.
+- **Therefore: when a package is reported vulnerable, add a floor to
+  `pyproject.toml` rather than patching the venv by hand.** Hand-patching works
+  until the next reinstall and then silently drifts back. A floor
+  (`brotli>=1.2.1`) makes the installed 1.2.0 *unsatisfying*, so the ordinary
+  reinstall above fixes it and keeps fixing it.
+- **And the floor does nothing until that reinstall runs on the host.** Landing
+  it in git is half the job.
+
+### When IT reports a vulnerable package
+
+Worked example: brotli 1.2.0 / CVE-2026-111497, reported 2026-11-05. The
+sequence that turned out to matter:
+
+1. **Establish how it got there** — direct dependency, *hard* transitive one, or
+   an extra nobody requested? `importlib.metadata` answers it for the whole env:
+
+   ```bash
+   python3 -c "
+   import importlib.metadata as md
+   for d in md.distributions():
+       hits = [r for r in (d.requires or []) if r.lower().startswith('brotli')]
+       if hits: print(d.metadata['Name'], d.version, hits)"
+   ```
+
+   Brotli came back as a hard, non-optional dependency of Flask-Compress on
+   CPython — so "just remove it" was not available. Everything else that
+   mentioned it (urllib3, httpx, aiohttp, fonttools) listed it only under an
+   extra we don't install, which is worth saying out loud in the reply: those
+   copies are not in play.
+2. **Establish whether the app actually exercises it.** Do not guess from the
+   library being importable — check the behaviour. For a response-compression
+   library, the response headers are the ground truth:
+
+   ```bash
+   curl -s -o /dev/null -D - -H "Accept-Encoding: br" http://127.0.0.1:8050/ \
+       | grep -i content-encoding
+   ```
+
+   It did: flask-compress 1.24 defaults to preferring `br` over gzip, which no
+   one had noticed. That answered IT's open question ("unclear if the site even
+   uses Brotli") with a fact instead of a shrug.
+3. **Distinguish compressing our own output from decompressing someone
+   else's input** — very different risk profiles, and IT will want to know
+   which. We compress our own response bodies; the only inbound-decompression
+   path is urllib3/requests decoding a `br` response while fetching FITS from
+   `cv.nrao.edu`.
+4. **Then fix it in both directions**: floor the version in `pyproject.toml`
+   *and*, where the library is optional at runtime, stop invoking it (here:
+   dropping `br` from `COMPRESS_ALGORITHM` / `COMPRESS_ALGORITHM_STREAMING` in
+   `app.py`, which keeps zstd and gzip so nothing gets slower).
+
+### Housekeeping that shows up in scans
+
+- **Abandoned venvs are scanned forever.** A `venv_save/` left behind from an
+  earlier Python keeps reporting whatever it contains. Delete it rather than
+  patch it.
+- **The uv cache is scanned too.** `~/.cache/uv/archive-v0/...` holds unpacked
+  wheels, so a vulnerable version lingers there after the venv is clean. `uv
+  cache prune` drops unused entries and `uv cache clean <package>` targets one
+  — confirm the spelling with `uv cache --help` on the host, since uv is not
+  installed on the dev laptop and these were not exercised there.
+- **The laptop dev environment does not feed the host** — the only channel is
+  `Results/`, and the venv is built on the host from `pyproject.toml`. So a
+  stale package on a developer machine cannot re-introduce itself to the server
+  on its own; the thing that can is an un-floored dependency in git.
+
 ## Talking points for the IT conversation
 
 Lift these directly into an email:
