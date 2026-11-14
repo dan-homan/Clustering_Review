@@ -1,14 +1,125 @@
 # Running several projects from one install — options
 
-> **Status: proposal / design notes, 2026-11-09. Nothing here is implemented.**
-> The app today serves exactly one project: one `Results/` tree, one
-> `recommendations/` tree. This file captures the options for serving several,
-> so the thinking isn't lost. No decision has been made; the questions at the
-> bottom are genuinely open.
+> **Status: option C chosen 2026-11-14; not yet implemented.** The app today
+> serves exactly one project: one `Results/` tree, one `recommendations/` tree.
+> The options below are kept for the reasoning; **"Decisions" and "What is
+> actually left to build" at the bottom are the current plan.**
 
 "Project" here means an independent review effort with its own sources, models,
 recommendations and notes — e.g. a second frequency band, a different sample, or
 a sandbox copy of the production data.
+
+## Decisions (2026-11-14)
+
+Answers to the four questions, and what they settle:
+
+1. **The second project is BK224**, at
+   `~/Dropbox/Research/Shared_Projects/Clustering_CC/BK224` (a different
+   Dropbox tree from MOJAVE's — not a problem, since every path is configured
+   absolutely). 26 sources, **zero overlap** with MOJAVE's 487.
+2. **Different reviewers per project, if it's cheap.** It is *nearly* free
+   under option C — one `tokens_file` per project config — except for the
+   cookie collision described below, which has to be fixed first.
+3. **No cross-project admin view wanted** → **option B is out.**
+4. **Assume a new port is friction; build without one** → **option C it is**,
+   and option A is off the table rather than merely second choice.
+
+### BK224 already has the proposed layout
+
+This is the part that makes the job small — no migration, no restructuring:
+
+```
+BK224/
+├── Results/                  # 26 sources, same <source>_<emin>-<emax> naming
+├── recommendations/          # with _admin/assignments.json (v5, target 2, empty)
+├── notes/                    # 25 .md files — already the SIBLING of
+│                             #   recommendations/, which is exactly what
+│                             #   notes_dir_for() derives
+├── source_run_param.csv      # at the project root = results_dir.parent,
+│                             #   i.e. discovery slot #2
+└── full_ccfiles/, sources.txt
+```
+
+So the layout sketched below is descriptive, not aspirational. Nothing needs
+to move, and **no symlink beside `MOJAVE_1996.00-2026.00` is needed** — the
+config points at absolute paths. (A symlink wouldn't hurt, it just buys
+nothing.)
+
+Two consequences of the **zero source overlap**:
+
+- **Sharing `cache_dir` is harmless but buys no deduplication.** Worth keeping
+  shared anyway for operational simplicity; just don't count it as a win.
+- **Per-project redshift files are mandatory, not a nicety.** BK224's
+  `source_run_param.csv` covers an entirely disjoint source set, so under the
+  current cwd-first discovery BK224 would match *nothing* in MOJAVE's file:
+  every source silently falls back to z=0, Tb switches from host-frame to
+  observed and β_app disappears from the Kinematics hovers. Partly visible
+  (the Tb axis title changes from `Tb host-frame [K]` to `Tb obs [K]`), which
+  is lucky rather than by design.
+
+**BK224 has no `astrometry_mojave.dat`**, and that needs no special handling:
+`load_astrometry(None)` returns `{}`, the header checkbox renders disabled with
+`(no astrometry file)`, and every plot keeps the fitted-core reference. Already
+the correct behaviour.
+
+## The cookie is not scoped per app — fix before per-project tokens
+
+**This is the one real blocker for "different reviewers per project"**, found
+while checking whether it was cheap.
+
+`auth/middleware.py` uses a single module constant `COOKIE_NAME = "mr_token"`,
+and both `set_cookie` calls omit `path=`, so Flask applies its default
+`path="/"`. Two apps on one host therefore share one cookie slot:
+
+1. Reviewer opens project A's bookmark → `mr_token=<token A>` at `/`.
+2. Reviewer opens project B's bookmark (`?token=…`) → `mr_token=<token B>`,
+   **overwriting** A's.
+3. Reviewer returns to project A → the cookie now holds B's token, which A's
+   `tokens.yaml` doesn't contain → **403**, and clicking A's bookmark again
+   just flips the problem to B.
+
+They'd ping-pong indefinitely. With a *shared* `tokens.yaml` the collision is
+harmless (one token is valid everywhere), which is the fallback if this isn't
+fixed — so the choice between shared and per-project reviewers really is a
+choice about whether to do this bit of work.
+
+The fix is small and standard, and doing **both halves** is belt-and-braces:
+
+- pass `path=<the app's url prefix>` on both `set_cookie` calls, so the browser
+  only sends each project's cookie to that project's paths; **and**
+- make the cookie name per-app (e.g. `mr_token_<project slug>`), which also
+  covers a root-mounted app and makes a stray cookie diagnosable by name.
+
+Both want the cookie identity threaded from config into
+`auth.middleware.install`, which currently closes over `cookie_secure` and
+`cookie_max_age_days` only — the same shape, so no new pattern.
+
+## What is actually left to build
+
+In dependency order. Each step is independently testable, and the first two are
+worth doing on their own merits even if multi-project stalled.
+
+1. **Make the discovered files configured.** Add `source_params_file` and
+   `astrometry_file` to `Config` (the latter is currently a CLI-only
+   pass-through), keep discovery as the fallback, and demote or drop the
+   cwd-first rule. Removes a footgun that already exists single-project.
+2. **Scope the auth cookie per app** (above). Needed only for per-project
+   tokens, but cheap.
+3. **Split the Dash prefix knobs.** `create_app` passes one
+   `url_base_pathname`; mounting behind a dispatcher needs
+   `routes_pathname_prefix` + `requests_pathname_prefix` separately. One new
+   kwarg, defaulting to today's behaviour.
+4. **A dispatcher + per-project config loading in `wsgi.py`**, replacing the
+   single `create_app()` call. Projects enumerated from a directory of config
+   files, so adding one is a file plus a restart.
+5. **Per-project log context**, since `configure_logging` is global and log
+   lines would otherwise not say which project they came from.
+6. **Prove it with the checklist below** before touching webby.
+
+Deployment-side, already fine: `deploy/sync-results.sh` reads
+`$MOJAVE_SYNC_CONF` (falling back to
+`~/.config/mojave-results-sync.conf`), so a second project is a second conf
+file plus a second systemd timer — no script change.
 
 ## What already defines a project
 
@@ -70,7 +181,7 @@ self-contained; worth doing even if multi-project never happens, since it also
 removes a footgun from the single-project case (running the app from the wrong
 directory today already picks up the wrong file).
 
-## Option A — one process per project, own port
+## Option A — one process per project, own port  *(not chosen)*
 
 One `config.yaml`, one systemd unit, one port, one `url_base_prefix` and one
 nginx `location` block per project.
@@ -84,7 +195,7 @@ nginx `location` block per project.
     imported separately in each;
   - reviewers get N bookmarks and N tokens.
 
-## Option B — one project-aware app with a project picker
+## Option B — one project-aware app with a project picker  *(ruled out: no cross-project view wanted)*
 
 One process, one port, one token per reviewer, and the only design that can
 offer a **cross-project admin view** ("everyone's queue, across all projects").
@@ -102,7 +213,7 @@ view is actually wanted:
   "stores are triggers, never a data source" note in `CLAUDE.md`); threading
   another dimension through it is where the risk concentrates.
 
-## Option C — one gunicorn process, several apps mounted at different paths
+## Option C — one gunicorn process, several apps mounted at different paths  *(CHOSEN)*
 
 `wsgi.py` currently calls `create_app()` once and exposes
 `application = _app.server`. Instead it would build one app **per project**,
@@ -150,14 +261,14 @@ Honest caveats:
   knowing before someone reports "the app went slow when a colleague clicked
   something".
 
-## Option A → C is a one-way door that stays open
+## Option A → C is a one-way door that stays open  *(moot, but kept)*
 
 C's directory layout is a **superset** of A's. Lay the directories out as below
 and A works immediately; moving to C later changes only `wsgi.py` and needs no
 data migration. So "start with A, move to C if the port/proxy friction annoys
 you" is a legitimate plan, not a hedge.
 
-## Proposed layout (either option)
+## Layout (BK224 already matches this)
 
 ```
 /var/www/html/mojave.denison.edu/
@@ -183,7 +294,9 @@ everything project-scoped, and nothing project-scoped outside it.** That makes
 directory, and keeps the discovery rules honest, since `results_dir.parent` is
 then the project root.
 
-## Open questions
+## Open questions — ANSWERED 2026-11-14
+
+Kept for the reasoning; see "Decisions" at the top for the outcome.
 
 1. **What is the second project?** A different band or epoch range of the same
    sources, a different sample entirely, or a staging/sandbox copy? If the
@@ -202,7 +315,7 @@ then the project root.
    simplicity wins and C is over-engineering. Slow turnaround, or projects
    coming and going → C pays for itself immediately.
 
-## If option C is chosen — prove these first
+## Prove these before deploying to webby
 
 A throwaway two-project setup should demonstrate, before any real deployment:
 
@@ -216,6 +329,9 @@ A throwaway two-project setup should demonstrate, before any real deployment:
       both, including the `?source=` deep links.
 - [ ] Token auth is independent: a token valid for project A gets a 403 on
       project B when the token files are separate.
+- [ ] **The cookie collision is actually gone**: visit A, then B, then A again
+      and confirm A still authenticates (this is the failure mode described
+      above, and it only shows up on the *second* visit to the first project).
 - [ ] `source_run_param.csv` and `astrometry_mojave.dat` resolve per project —
       the landmine above. Test with *different* files per project and confirm
       the redshifts differ in the Flux view's Tb axis label and values.
