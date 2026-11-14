@@ -4,6 +4,47 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-09 — Auto-balance can give back surplus assignments
+
+- **The gap.** Auto-balance's *add* side always respected the review target
+  (`slots = review_target - len(committed)`), but nothing ever removed an
+  assignment a source had stopped needing. With reviews landing over months,
+  sources accumulated more committed reviewers than the target: on the
+  production sample, **40 of 87 open sources were over target, with 44
+  recoverable queue entries**. Nothing was under target, so the add side was
+  already a no-op and the button had nothing to do.
+- **New "Trim surplus assignments" checkbox** (off by default) on the
+  auto-balance modal → `assignments.plan_surplus_prune`, returning a
+  `SurplusPlan(removals, residual)` that feeds the existing `apply_removals`.
+  Committed is defined exactly as the add side defines it (submitted ∪
+  outstanding), so the two halves can never fight.
+- **Submitted reviews are untouchable, and only *pending* assignments are
+  removable.** An assignment with a started `current/` draft is left alone —
+  dropping the queue entry would orphan work the reviewer may not notice was
+  abandoned. On the real data this costs nothing: both at-risk drafts sat on
+  sources that also had pending entries to give instead.
+- **The heaviest-loaded reviewer donates first**, by remaining *weighted*
+  load (outstanding work only, decremented as the plan is built), mirroring
+  the add side picking the lightest. A stable alphabetical order was tried and
+  rejected: on the real sample it took 14 from one reviewer and emptied their
+  entire remaining queue (weight 191 → 0) while leaving another at 243.
+  Heaviest-first spreads the same 44 removals 11/7/6/6/6/5/2/1 and leaves
+  remaining load in a 101–204 band.
+- **Sources that stay over target are reported, not hidden.** Four sources
+  (`1504+377u`, `1611+343u`, `1954+513u`, `2128-123u`) have **three
+  submitted** reviews — over target by submissions alone, which no queue edit
+  can undo. The preview lists them as "ready to aggregate" so its arithmetic
+  reconciles with the dashboard's Reviews column instead of looking wrong.
+- Runs after the always-on finalized prune, against the post-prune store, and
+  is re-planned from the fresh store on Apply like every other removal.
+  Ignores "Only unassigned sources" (that checkbox scopes additions). Paused
+  reviewers are not preferred donors — the design keeps their queue for their
+  return.
+- 20 tests in `tests/test_surplus_prune.py`, verified to fail when draft
+  protection or load-aware donor choice is removed.
+
+---
+
 ## 2026-11-05 — Brotli: pin ≥ 1.2.1 and stop serving `br` (CVE-2026-111497)
 
 Prompted by a Denison sysadmin report of brotli 1.2.0 ("HTTP2Shell") in the

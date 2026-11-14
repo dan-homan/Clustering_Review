@@ -1225,6 +1225,18 @@ def _admin_controls_panel(
                         style={"fontSize": "0.85em",
                                "marginBottom": "0.4em"},
                     ),
+                    dcc.Checklist(
+                        id="dashboard-ab-trim-surplus",
+                        options=[{"label": " Trim surplus assignments "
+                                           "(give back queue entries on "
+                                           "sources that already have enough "
+                                           "committed reviewers; pending "
+                                           "only, never a started draft)",
+                                  "value": "trim"}],
+                        value=[],
+                        style={"fontSize": "0.85em",
+                               "marginBottom": "0.4em"},
+                    ),
                     html.Div(
                         id="dashboard-ab-preview-body",
                         style={"maxHeight": "44vh", "overflowY": "auto",

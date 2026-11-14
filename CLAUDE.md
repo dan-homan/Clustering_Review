@@ -876,6 +876,31 @@ In `dashboard_callbacks.py`; each writes only `store.assignments`, navigates via
   **"Only unassigned sources"** checkbox → `auto_balance(only_sources=)`:
   fills slots only on open sources with no outstanding (non-`submitted`)
   assignment; full scored list still seeds load.
+  **"Trim surplus assignments"** checkbox (off by default) →
+  `plan_surplus_prune` → `SurplusPlan(removals, residual)`, applied via the
+  same `apply_removals`. Gives BACK queue entries on open sources with more
+  committed reviewers than `review_target`, where committed = submitted ∪
+  outstanding — **the same definition the add side uses**, so the two halves
+  can't fight. The add side always respected the target
+  (`slots = review_target - len(committed)`), so a surplus never comes from
+  over-assigning on purpose; it comes from assignments handed out *before*
+  reviews landed, which nothing cleaned up. Rules: submitted is untouchable;
+  **pending only — never an `in_progress` draft** (dropping the queue entry
+  would orphan work the reviewer may not notice was abandoned, so a source
+  with only drafts to spare just stays over target); donor is the reviewer
+  with the **heaviest remaining weighted load** (outstanding-only, decremented
+  as the plan is built), ties on name — alphabetical was rejected because on
+  the real sample it emptied one reviewer's whole remaining queue by accident
+  of name order. Sources processed heaviest-weight first. `residual` lists
+  `(source, n_submitted, extra)` for sources still over target afterwards
+  (over-reviewed by *submissions* alone — nothing to remove); the preview
+  shows them so its arithmetic reconciles with the dashboard's Reviews
+  column. Runs AFTER the finalized prune, against the post-prune store, and
+  is re-planned from the fresh store on Apply like every other removal.
+  Ignores "Only unassigned sources" (that scopes additions). Paused reviewers
+  are deliberately NOT preferred donors — their queue is kept for their
+  return. Reviewer decisions 2026-11-09; found 44 recoverable slots across 37
+  of 87 open sources in production.
 - **⚖ Top-up rebalance** — *move* pending to even out load. "Consider completed"
   checkbox → `rebalance_pending(base_load=)`.
 - **🏖 Redistribute (break)** — spread one queue across the pool, optional cap +

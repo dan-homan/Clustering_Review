@@ -23,7 +23,7 @@ from ..data.assignments import (
     active_reviewers, add_team_member, apply_additions, apply_moves,
     apply_removals, assignment_status, auto_balance, backfill_manual_reviews,
     credit_prior_submissions, load_store, move_assignment,
-    plan_finalized_prune, reassign_queue,
+    plan_finalized_prune, plan_surplus_prune, reassign_queue,
     rebalance_pending, redistribute_reviewer, remove_team_member, save_store,
     set_paused, set_source_target_date, sources_in_range, submitted_by_map,
 )
@@ -116,6 +116,25 @@ def register_dashboard_callbacks(
                 recommendations_dir, src, rname) == "submitted",
         )
 
+    def _plan_surplus(store, open_sources: set[str], scored):
+        """Queue entries to give back because the source already has enough
+        committed reviewers (submitted + outstanding > target).
+
+        Opt-in, via the "Trim surplus assignments" checkbox: the add side has
+        always respected the target, so a surplus never comes from
+        over-assigning on purpose — it comes from assignments handed out
+        before reviews landed. Pending only; a started draft is never
+        touched. See :func:`plan_surplus_prune` for the full rules."""
+        return plan_surplus_prune(
+            store,
+            open_sources=open_sources,
+            submitted_by=submitted_by_map(recommendations_dir,
+                                          sorted(open_sources)),
+            status=lambda rname, src: assignment_status(
+                recommendations_dir, src, rname),
+            weight_by_source={d.source: d.balance_weight for d in scored},
+        )
+
     def _finalized_sources(all_sources) -> set[str]:
         return {
             s.source for s in all_sources
@@ -129,28 +148,32 @@ def register_dashboard_callbacks(
         Input("dashboard-auto-balance-btn", "n_clicks"),
         Input("dashboard-ab-only-new", "value"),
         Input("dashboard-ab-credit-completed", "value"),
+        Input("dashboard-ab-trim-surplus", "value"),
         Input("dashboard-ab-close", "n_clicks"),
         Input("dashboard-ab-cancel", "n_clicks"),
         State("dashboard-ab-modal", "style"),
         prevent_initial_call=True,
     )
-    def _ab_open_or_close(open_n, only_new_value, credit_value, close_n,
-                          cancel_n, modal_style):
+    def _ab_open_or_close(open_n, only_new_value, credit_value, trim_value,
+                          close_n, cancel_n, modal_style):
         from dash import ctx
         if ctx.triggered_id not in ("dashboard-auto-balance-btn",
                                     "dashboard-ab-only-new",
-                                    "dashboard-ab-credit-completed"):
+                                    "dashboard-ab-credit-completed",
+                                    "dashboard-ab-trim-surplus"):
             return {"display": "none"}, no_update, None
         # Toggling a checkbox re-runs the preview in place — but only
         # while the modal is open. A checkbox Input on a
         # dynamically-rendered page can fire spuriously on render; the
         # hidden-modal check keeps that from popping the modal open.
         if ctx.triggered_id in ("dashboard-ab-only-new",
-                                "dashboard-ab-credit-completed") and (
+                                "dashboard-ab-credit-completed",
+                                "dashboard-ab-trim-surplus") and (
                 not modal_style or modal_style.get("display") == "none"):
             return no_update, no_update, no_update
         only_new = bool(only_new_value) and "only_new" in only_new_value
         credit_completed = bool(credit_value) and "credit" in credit_value
+        trim_surplus = bool(trim_value) and "trim" in trim_value
 
         all_sources = list_sources(results_dir)
         # Optional pre-credit pass: every source the team has ever
@@ -193,6 +216,16 @@ def register_dashboard_callbacks(
         }
         removals = _plan_prune(store, finalized)
         apply_removals(store, removals)
+
+        # Then the optional surplus trim, against the POST-prune store so the
+        # two passes can't both claim the same queue entry. Applied in memory
+        # as well, so the additions below are planned against queues that
+        # already reflect everything Apply will commit.
+        surplus = None
+        if trim_surplus:
+            surplus = _plan_surplus(
+                store, {s.source for s in open_sources}, scored)
+            apply_removals(store, surplus.removals)
 
         # "Only unassigned" mode: fill slots only on sources nobody is
         # currently slated to review — a source counts as assigned when
@@ -280,6 +313,54 @@ def register_dashboard_callbacks(
                            "color": "#555"},
                 ),
             ], style={"fontSize": "0.85em", "marginBottom": "0.3em"}))
+        if surplus is not None:
+            if surplus.removals:
+                by_rv: dict[str, list[str]] = {}
+                for rname, src in surplus.removals:
+                    by_rv.setdefault(rname, []).append(src)
+                header_lines.append(html.Div([
+                    html.Div(
+                        f"Trimming {len(surplus.removals)} surplus "
+                        f"assignment(s) on "
+                        f"{len({s for _, s in surplus.removals})} source(s) "
+                        f"that already have enough committed reviewers "
+                        f"(pending only — started drafts are left alone):",
+                        style={"fontWeight": 600, "color": "#a33"},
+                    ),
+                    html.Ul(
+                        [html.Li(f"{rname}: {', '.join(sorted(srcs))}")
+                         for rname, srcs in sorted(by_rv.items())],
+                        style={"margin": "0.2em 0 0.5em 1.2em",
+                               "color": "#555"},
+                    ),
+                ], style={"fontSize": "0.85em", "marginBottom": "0.3em"}))
+            else:
+                header_lines.append(html.Div(
+                    "No surplus assignments to trim — no open source has "
+                    "more committed reviewers than it needs.",
+                    style={"color": "#888", "fontSize": "0.85em",
+                           "marginBottom": "0.3em"},
+                ))
+            if surplus.residual:
+                # Over target by SUBMISSIONS alone: there is no queue entry
+                # left to give back, so say so rather than let the preview's
+                # arithmetic look wrong against the dashboard's Reviews column.
+                header_lines.append(html.Div([
+                    html.Div(
+                        f"{len(surplus.residual)} source(s) stay over target "
+                        f"— already reviewed more times than needed, nothing "
+                        f"to remove:",
+                        style={"fontWeight": 600, "color": "#a70"},
+                    ),
+                    html.Ul(
+                        [html.Li(f"{src}: {nsub} submitted (+{extra} over "
+                                 f"target) — ready to aggregate")
+                         for src, nsub, extra in surplus.residual],
+                        style={"margin": "0.2em 0 0.5em 1.2em",
+                               "color": "#555"},
+                    ),
+                ], style={"fontSize": "0.85em", "marginBottom": "0.3em"}))
+
         if credit_completed:
             header_lines.append(html.Div(
                 f"Credited {n_credited} prior submission(s) as "
@@ -294,7 +375,7 @@ def register_dashboard_callbacks(
                      if only_sources is not None else "open source")
             msg = (f"No new assignments needed — every {scope} already "
                    f"has enough committed reviewers.")
-            if removals:
+            if removals or (surplus and surplus.removals):
                 msg += " Apply still commits the removals above."
             body_inner = html.Div(
                 msg, style={"color": "#666", "padding": "0.4em"},
@@ -346,6 +427,7 @@ def register_dashboard_callbacks(
             "credited_store": store.to_dict(),
             "n_credited": n_credited,
             "credit_completed": credit_completed,
+            "trim_surplus": trim_surplus,
         }
         return {"display": "block",
                 "position": "fixed", "top": 0, "left": 0,
@@ -388,6 +470,20 @@ def register_dashboard_callbacks(
         # apply must not have its queue entry pruned.
         n_removed = apply_removals(
             store, _plan_prune(store, _finalized_sources(all_sources)))
+        # Surplus trim, also re-planned from the fresh store and in the same
+        # order as the preview (finalized prune first): a review submitted
+        # between preview and apply changes who is surplus, and a queue entry
+        # the prune already took must not be double-counted.
+        n_trimmed = 0
+        if preview.get("trim_surplus"):
+            open_now = {
+                s.source for s in all_sources
+                if source_phase(recommendations_dir, s.source) == "open"
+            }
+            scored_now = score_all(
+                [s for s in all_sources if s.source in open_now])
+            n_trimmed = apply_removals(
+                store, _plan_surplus(store, open_now, scored_now).removals)
         n_added = apply_additions(
             store, preview["additions"],
             assigned_by=current_reviewer(reviewer))
@@ -397,6 +493,8 @@ def register_dashboard_callbacks(
             parts.append(f"credited {n_credited}")
         if n_removed:
             parts.append(f"removed {n_removed}")
+        if n_trimmed:
+            parts.append(f"trimmed {n_trimmed} surplus")
         parts.append(f"added {n_added}")
         return time.time(), "auto-balance: " + ", ".join(parts)
 

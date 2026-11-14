@@ -881,6 +881,118 @@ def plan_finalized_prune(
     return out
 
 
+@dataclass(frozen=True)
+class SurplusPlan:
+    """Result of :func:`plan_surplus_prune`."""
+    removals: list[Removal]
+    # (source, n_submitted, residual_surplus) for sources still over target
+    # after every removal this plan can make — i.e. over-reviewed by
+    # submissions alone, which no queue edit can undo.
+    residual: list[tuple[str, int, int]]
+
+
+def plan_surplus_prune(
+    store: AssignmentStore,
+    *,
+    open_sources: set[str],
+    submitted_by: dict[str, set[str]],
+    status: Callable[[str, str], str],
+    weight_by_source: dict[str, float],
+    review_target: int = DEFAULT_REVIEW_TARGET,
+) -> SurplusPlan:
+    """Plan removal of assignments a source no longer needs.
+
+    A source is "committed" by the reviewers who have already submitted it
+    PLUS everyone holding an outstanding assignment for it — the same
+    definition :func:`auto_balance` uses to decide how many slots to fill, so
+    the two halves can never fight each other. Anything beyond
+    ``review_target`` committed reviewers is surplus, and this plans the
+    ``(reviewer, source)`` removals that give it back.
+
+    The add side has always respected the target (``slots = review_target -
+    len(committed)``), so a surplus never arises from over-assigning on
+    purpose. It arises from *time*: assignments handed out before reviews
+    landed, which nothing cleaned up. Hence this.
+
+    Rules, in order (reviewer decisions 2026-11-09):
+
+    1. **Submitted reviews are untouchable** — they are the completed work the
+       dashboard tallies, and they cannot be un-submitted.
+    2. **Only PENDING assignments are removable.** An assignment with an
+       unsubmitted ``current/`` draft is left alone: the reviewer has started,
+       and dropping their queue entry would orphan work they might not notice
+       was abandoned. A source that is still over target once every pending
+       entry is gone simply stays over target.
+    3. Within a source, drop from the reviewer with the **heaviest remaining
+       weighted load** first (ties on name, so runs are reproducible). This
+       mirrors :func:`auto_balance` picking the *lightest* reviewer for an
+       addition. The alternative — a stable alphabetical order — was rejected
+       because on real data it emptied one reviewer's entire remaining queue
+       by accident of name order while leaving another untouched.
+    4. Sources are processed heaviest-weight first, so the decisions that move
+       the most load are made while the load figures are most informative.
+
+    ``status(reviewer, source)`` is the caller's IO-backed predicate, returning
+    ``"submitted"`` / ``"in_progress"`` / ``"pending"`` (the dashboard passes
+    :func:`assignment_status`). ``weight_by_source`` is ``balance_weight``
+    (``sqrt(difficulty)``) per source — the same scheduling weight the
+    balancer uses; a missing source contributes 0.
+
+    Paused reviewers are deliberately NOT preferred as donors: the existing
+    design keeps a paused reviewer's queue intact for their return (see
+    :func:`set_paused`), and preferring them here would quietly contradict it.
+
+    Returns a :class:`SurplusPlan`; feed ``.removals`` to
+    :func:`apply_removals`. Pure — no IO beyond the injected ``status``.
+    """
+    # Remaining weighted load: outstanding (not-yet-submitted) assignments on
+    # the in-scope sources only. Submitted work is done and shouldn't make a
+    # reviewer look busy, and out-of-scope sources aren't what we're trimming.
+    load: dict[str, float] = {}
+    holders: dict[str, list[str]] = {}
+    for reviewer, records in store.assignments.items():
+        for src in {r.source for r in records}:
+            if src not in open_sources:
+                continue
+            holders.setdefault(src, []).append(reviewer)
+            if status(reviewer, src) != "submitted":
+                load[reviewer] = load.get(reviewer, 0.0) + weight_by_source.get(src, 0.0)
+
+    removals: list[Removal] = []
+    residual: list[tuple[str, int, int]] = []
+
+    for src in sorted(open_sources,
+                      key=lambda s: (-weight_by_source.get(s, 0.0), s)):
+        n_submitted = len(submitted_by.get(src, set()))
+        pending: list[str] = []
+        drafting = 0
+        for reviewer in holders.get(src, []):
+            st = status(reviewer, src)
+            if st == "submitted":
+                continue
+            if st == "in_progress":
+                drafting += 1
+            else:
+                pending.append(reviewer)
+
+        surplus = n_submitted + len(pending) + drafting - review_target
+        if surplus <= 0:
+            continue
+
+        # Drop the heaviest-loaded donors first, up to the surplus.
+        take = min(surplus, len(pending))
+        for reviewer in sorted(pending, key=lambda r: (-load.get(r, 0.0), r))[:take]:
+            removals.append((reviewer, src))
+            load[reviewer] = load.get(reviewer, 0.0) - weight_by_source.get(src, 0.0)
+
+        if surplus > take:
+            residual.append((src, n_submitted, surplus - take))
+
+    removals.sort()
+    residual.sort()
+    return SurplusPlan(removals=removals, residual=residual)
+
+
 def apply_removals(store: AssignmentStore, removals: list[Removal]) -> int:
     """Commit ``(reviewer, source)`` removals. Returns the count actually
     removed (records already gone are skipped)."""
