@@ -52,7 +52,7 @@ _log = get_logger(__name__)
 __all__ = [
     "ProjectSpec", "ProjectConfigError",
     "parse_project_spec", "discover_projects", "projects_from_config",
-    "resolve_projects", "build_dispatcher",
+    "resolve_projects", "resolve_projects_tolerant", "build_dispatcher",
 ]
 
 
@@ -219,6 +219,73 @@ def projects_from_config(entries) -> list[ProjectSpec]:
                                label=str(label) if label else spec.label,
                                root=spec.root))
     return out
+
+
+def resolve_projects_tolerant(
+    *, project_args=None, projects_dir=None, config_entries=None,
+) -> tuple[list[ProjectSpec], list[str]]:
+    """Like :func:`resolve_projects`, but a project that can't be used is
+    SKIPPED rather than fatal. Returns ``(specs, problems)``.
+
+    For the production WSGI entry point. Aborting startup on one bad
+    declaration blacks out the reviewers of every *working* project, which is
+    the wrong trade-off when the usual cause is operational rather than a
+    mistake — a project whose rsync hasn't run yet, or a directory moved
+    mid-migration. Each problem is returned for the caller to log at ERROR,
+    and the project is simply absent from the switcher.
+
+    The interactive CLI keeps using the strict :func:`resolve_projects`: there
+    the operator is reading the error as it happens, and quietly serving less
+    than they asked for would be worse than refusing.
+
+    Raises :class:`ProjectConfigError` only when NOTHING is usable, since a
+    dispatcher with no projects can't serve anything either way. Declaring no
+    projects at all is still just "single-project mode" — ``([], [])``.
+    """
+    problems: list[str] = []
+    specs: list[ProjectSpec] = []
+
+    # Config entries and explicit --project args are per-entry recoverable.
+    for entry in (config_entries or []):
+        try:
+            specs.extend(projects_from_config([entry]))
+        except ProjectConfigError as e:
+            problems.append(str(e))
+    if projects_dir:
+        try:
+            specs.extend(discover_projects(Path(projects_dir)))
+        except ProjectConfigError as e:
+            problems.append(str(e))
+    for arg in (project_args or []):
+        try:
+            specs.append(parse_project_spec(str(arg)))
+        except ProjectConfigError as e:
+            problems.append(str(e))
+
+    declared_anything = bool(config_entries or projects_dir or project_args)
+    if not specs and declared_anything:
+        raise ProjectConfigError(
+            "no usable project among those declared: " + "; ".join(problems))
+
+    # De-duplicate with the same rules as the strict path, but downgrade a
+    # conflict to a skip-with-complaint rather than a failure.
+    by_name: dict[str, ProjectSpec] = {}
+    by_root: dict[Path, str] = {}
+    for spec in specs:
+        if spec.name in by_name and by_name[spec.name].root != spec.root:
+            problems.append(
+                f"skipping {spec.root}: name {spec.name!r} is already used by "
+                f"{by_name[spec.name].root}")
+            continue
+        prior = by_root.get(spec.root)
+        if prior and prior != spec.name:
+            problems.append(
+                f"skipping {spec.name!r}: {spec.root} is already mounted as "
+                f"{prior!r}")
+            continue
+        by_name[spec.name] = spec
+        by_root[spec.root] = spec.name
+    return list(by_name.values()), problems
 
 
 def resolve_projects(

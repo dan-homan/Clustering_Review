@@ -1042,6 +1042,13 @@ second project.
 callback and each project keeps its own URL/Back behaviour. `project_nav` is
 `[(name, label, href)]` — plain data, so `ui` never imports `projects`.
 
+**Bad project declarations:** `wsgi.py` uses `resolve_projects_tolerant` — an
+unusable project (data not synced, path typo, moved mid-migration) is skipped
+and logged at ERROR, and the rest are served; it fails only when NOTHING is
+usable. The CLI keeps strict `resolve_projects` (the operator is reading the
+error). Aborting everywhere was the original behaviour and it black-holed
+MOJAVE's reviewers on the first deploy because BK224 wasn't synced yet.
+
 **Logging:** `_logging._ProjectContextFilter` tags each record with the project
 handling the request (`[bk224] …`), resolved per record from the Flask app in
 context (`create_app` stashes the name under `PROJECT_NAME_KEY`). Attached to

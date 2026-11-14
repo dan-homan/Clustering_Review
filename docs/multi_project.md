@@ -294,6 +294,11 @@ worth doing on their own merits even if multi-project stalled.
    - 47 tests in `tests/test_projects.py`; verified they fail when the
      reserved-name check, the `Results/` requirement, the path-preserving
      fallback, or duplicate detection is removed.
+   - **Amended 2026-11-14 after the first real deploy:** `wsgi.py` uses
+     `resolve_projects_tolerant`, which skips an unusable project (logging it
+     at ERROR) and serves the rest, failing only when nothing is usable. The
+     original strict behaviour aborted startup, which took MOJAVE's reviewers
+     down over BK224's data not having been synced yet. The CLI stays strict.
 5. ~~**The header project control.**~~ **DONE 2026-11-14.**
    - `ui.layout.build_project_switcher(project_nav, current_project)` renders
      a native `<details>`/`<summary>` disclosure listing every project as a

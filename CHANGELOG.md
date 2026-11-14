@@ -4,6 +4,41 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Fix: one unusable project no longer takes down the whole service
+
+Found immediately on the first real multi-project deploy. `data/BK224` had not
+been synced to the server yet, and `resolve_projects` raising at WSGI import
+killed gunicorn's workers — so the proxy returned "service not available" and
+**MOJAVE's reviewers lost access too**, over a project they don't use.
+
+Aborting is the wrong trade-off under gunicorn: the usual cause is operational
+rather than a mistake (an rsync that hasn't run, a directory moved
+mid-migration), and the blast radius was every working project.
+
+- New `projects.resolve_projects_tolerant`, used by `wsgi.py`: a project that
+  can't be used is **skipped and logged at ERROR**, and the rest are served.
+  A name/root clash is likewise downgraded from fatal to first-wins-and-report.
+- It still **fails closed when nothing is usable**, since a dispatcher with no
+  projects can't serve anything either way. Declaring no projects at all
+  remains plain single-project mode, not an error.
+- **The CLI keeps the strict `resolve_projects`** — there the operator is
+  reading the error as it happens, and quietly serving less than they asked
+  for would be worse than refusing.
+- The resulting journal is explicit about both halves:
+
+  ```
+  ERROR mojave_review.wsgi     | project skipped: Project 'bk224': no such directory: …/data/BK224
+  INFO  mojave_review.wsgi     | WSGI multi-project: 1 projects (default mojave) under /
+  INFO  mojave_review.projects | mounted project mojave at /mojave/  (root=…, label='MOJAVE 1994-2026')
+  ```
+
+  The skipped project is simply absent from the switcher.
+- 7 tests added to `tests/test_projects.py` (405 total), covering a missing
+  root, a root without `Results/`, a malformed entry, both duplicate kinds,
+  the nothing-usable failure, and that strict resolution is unchanged.
+
+---
+
 ## 2026-11-14 — Multi-project step 6: per-project log context
 
 With several projects in one process, `mojave_review.auth.middleware | session

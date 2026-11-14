@@ -25,7 +25,7 @@ from __future__ import annotations
 from ._logging import configure_logging, get_logger
 from .app import create_app
 from .config import load_config
-from .projects import build_dispatcher, resolve_projects
+from .projects import build_dispatcher, resolve_projects_tolerant
 
 
 _config = load_config()
@@ -43,7 +43,14 @@ _log.info("WSGI startup  reviewer_fallback=%s  admin=%s  auth=%s  "
 # project behind a dispatcher instead of a single root-mounted app. Shared
 # settings (cache, tokens, identity) come from the same config; per-project
 # directories come from each project root.
-_projects = resolve_projects(config_entries=_config.projects)
+# Tolerant resolution: a project that can't be used (data not synced yet, a
+# path typo, a directory moved mid-migration) is skipped and logged rather
+# than taking down the reviewers of every working project. Fails only when
+# nothing at all is usable.
+_projects, _project_problems = resolve_projects_tolerant(
+    config_entries=_config.projects)
+for _problem in _project_problems:
+    _log.error("project skipped: %s", _problem)
 _shared = dict(
     cache_dir=_config.cache_dir,
     reviewer=_config.reviewer,

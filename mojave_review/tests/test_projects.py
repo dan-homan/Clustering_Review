@@ -287,3 +287,80 @@ def test_mount_root_shifts_every_project(tmp_path):
     assert apps["alpha"].config.requests_pathname_prefix == "/review/alpha/"
     assert client.get("/review/alpha/").status_code == 200
     assert client.get("/").headers["Location"].endswith("/review/alpha/")
+
+
+# ---------------------------------------------------------------------------
+# Tolerant resolution (the production WSGI path)
+# ---------------------------------------------------------------------------
+
+
+def test_tolerant_skips_a_missing_project_and_serves_the_rest(tmp_path):
+    """The operational case this exists for: one project's data hasn't synced
+    yet. Aborting would black out the reviewers of every working project."""
+    from mojave_review.projects import resolve_projects_tolerant
+    good = _mk(tmp_path, "good")
+    specs, problems = resolve_projects_tolerant(
+        config_entries=[f"good={good}", f"bad={tmp_path / 'nope'}"])
+    assert [s.name for s in specs] == ["good"]
+    assert len(problems) == 1
+    assert "no such directory" in problems[0]
+
+
+def test_tolerant_skips_a_root_without_results(tmp_path):
+    from mojave_review.projects import resolve_projects_tolerant
+    good = _mk(tmp_path, "good")
+    empty = _mk(tmp_path, "empty", results=False)
+    specs, problems = resolve_projects_tolerant(
+        config_entries=[f"good={good}", f"empty={empty}"])
+    assert [s.name for s in specs] == ["good"]
+    assert "no Results/" in problems[0]
+
+
+def test_tolerant_skips_a_malformed_entry(tmp_path):
+    from mojave_review.projects import resolve_projects_tolerant
+    good = _mk(tmp_path, "good")
+    specs, problems = resolve_projects_tolerant(
+        config_entries=[f"good={good}", {"name": "x"}])   # no root
+    assert [s.name for s in specs] == ["good"]
+    assert problems
+
+
+def test_tolerant_downgrades_a_duplicate_to_a_skip(tmp_path):
+    """Strict resolution raises on a name/root clash; here the first wins and
+    the clash is reported."""
+    from mojave_review.projects import resolve_projects_tolerant
+    a, b = _mk(tmp_path, "A"), _mk(tmp_path, "B")
+    specs, problems = resolve_projects_tolerant(
+        config_entries=[f"x={a}", f"x={b}"])
+    assert [s.root for s in specs] == [a.resolve()]
+    assert "already used by" in problems[0]
+
+    specs, problems = resolve_projects_tolerant(
+        config_entries=[f"x={a}", f"y={a}"])
+    assert [s.name for s in specs] == ["x"]
+    assert "already mounted as" in problems[0]
+
+
+def test_tolerant_still_fails_when_nothing_is_usable(tmp_path):
+    """A dispatcher with no projects can serve nothing, so there is no point
+    starting — fail loudly instead."""
+    from mojave_review.projects import resolve_projects_tolerant
+    with pytest.raises(ProjectConfigError, match="no usable project"):
+        resolve_projects_tolerant(
+            config_entries=[f"bad={tmp_path / 'nope'}"])
+
+
+def test_tolerant_treats_no_declaration_as_single_project_mode(tmp_path):
+    """Declaring nothing is not an error — it means single-project mode."""
+    from mojave_review.projects import resolve_projects_tolerant
+    assert resolve_projects_tolerant() == ([], [])
+    assert resolve_projects_tolerant(config_entries=[]) == ([], [])
+
+
+def test_strict_resolution_is_unchanged(tmp_path):
+    """The CLI keeps failing fast: the operator is reading the error, and
+    quietly serving less than they asked for would be worse."""
+    good = _mk(tmp_path, "good")
+    with pytest.raises(ProjectConfigError):
+        resolve_projects(config_entries=[f"good={good}",
+                                         f"bad={tmp_path / 'nope'}"])
