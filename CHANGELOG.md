@@ -4,6 +4,47 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Multi-project step 3: dispatcher mounting proved, `rel()` fixed
+
+Step 3 of [`docs/multi_project.md`](docs/multi_project.md). The prefix
+mechanism itself shipped earlier today; this is the de-risking that was still
+outstanding, run against **both real projects** (MOJAVE and BK224) mounted
+behind `werkzeug` `DispatcherMiddleware` at `/mojave/` and `/bk224/` with a
+redirect at `/`.
+
+- **A WSGI dispatcher strips the mount segment exactly like a stripping
+  proxy**, so a mounted app wants `proxy_strips_prefix=True`. No new mechanism
+  was needed; the flag's meaning generalises to "something upstream removed
+  the prefix", whether nginx or a dispatcher.
+- **Verified:** index + all 18 referenced assets load under each prefix; asset
+  URLs carry the right project prefix; `_dash-layout` / `_dash-dependencies`
+  return JSON rather than the catch-all index; source lists are per-project
+  and disjoint (484 vs 26); astrometry resolves per project (MOJAVE
+  `(10 / 37 epochs)`, BK224 `(no astrometry file)`); and `/` redirects to the
+  default project carrying the query string, so old `?token=…` bookmarks keep
+  working.
+- **Bug found and fixed: `ui.urls.rel()` was not per-app.** It called
+  `dash.get_relative_path`, which reads `dash._get_paths.CONFIG` — a
+  process-wide singleton that every `Dash(...)` constructor overwrites. With
+  one app per project the last app built wins, so MOJAVE's header rendered
+  `/bk224/dashboard`. Dash's own asset and callback URLs come from each app's
+  own config and were never affected, which is what makes this easy to miss:
+  the page loads fine and only the navigation is wrong. `rel()` now reads the
+  prefix from the Flask app handling the current request (stashed in
+  `server.config` by `create_app`), falling back to the Dash helper outside a
+  request context. Harmless single-project — root-mounted still returns bare
+  paths.
+- 8 tests in `tests/test_multi_app_urls.py`, including one that pins the
+  premise (the singleton really is overwritten) so the suite keeps its meaning
+  if Dash changes. Verified they fail when `rel()` is reverted to the
+  singleton.
+- **Still unverified**, and recorded as such in the checklist: clientside
+  script behaviour in a real browser under a prefix, the `allow_duplicate`
+  hashed output keys (the most likely remaining hazard, since they are derived
+  per app instance), token-auth independence, and the memory footprint.
+
+---
+
 ## 2026-11-14 — `proxy_strips_prefix`, and what the Denison proxy actually does
 
 **Correction to this entry as first written.** It claimed two latent

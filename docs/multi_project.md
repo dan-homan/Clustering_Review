@@ -230,11 +230,35 @@ worth doing on their own merits even if multi-project stalled.
    calls and the read. Root-mounted is unchanged, so no existing session
    breaks. The collision was reproduced end-to-end (two live servers, one
    cookie jar: step 4 returned 403 before, 200 after).
-3. **Split the Dash prefix knobs.** `create_app` passes one
-   `url_base_pathname`; mounting behind a dispatcher needs
-   `routes_pathname_prefix` + `requests_pathname_prefix` separately. One new
-   kwarg, defaulting to today's behaviour. **Settle the blocking unknown above
-   first** — it tells us what the deployed app currently receives.
+3. ~~**Split the Dash prefix knobs.**~~ **DONE 2026-11-14.** Landed on `main`
+   as part of the single-project prefix work (`ecebfa7`): `proxy_strips_prefix`
+   selects between the symmetric pair (`url_base_pathname`) and the asymmetric
+   one (`routes="/"` + `requests=<prefix>`). A WSGI dispatcher strips the mount
+   segment exactly like a stripping proxy, so a mounted app wants
+   `proxy_strips_prefix=True` — the flag means "something upstream removed the
+   prefix", whether that is nginx or `DispatcherMiddleware`.
+
+   **Proved end-to-end with both real projects** mounted behind
+   `DispatcherMiddleware` (`/mojave/`, `/bk224/`, redirect at `/`): index and
+   all 18 referenced assets load under each prefix, asset URLs carry the right
+   project prefix, `_dash-layout` / `_dash-dependencies` return JSON (not the
+   catch-all index), source lists are per-project and disjoint (484 vs 26),
+   in-app links stay within their own project, and astrometry resolves
+   per-project — MOJAVE `(10 / 37 epochs)`, BK224 `(no astrometry file)`.
+
+   **One real bug surfaced, and is fixed.** `ui.urls.rel()` called
+   `dash.get_relative_path`, which reads `dash._get_paths.CONFIG` — a
+   process-wide singleton that every `Dash(...)` constructor overwrites. With
+   one app per project the LAST app built wins, so MOJAVE's header rendered
+   `/bk224/dashboard`. Dash's own asset and callback URLs are built from each
+   app's own config and were never affected, which is what makes it easy to
+   miss: the page loads fine and only the navigation is wrong. `rel()` now
+   takes the prefix from the Flask app handling the current request
+   (`create_app` stashes it in `server.config`), falling back to the Dash
+   helper outside a request context. Pinned by
+   `tests/test_multi_app_urls.py`, which also asserts the premise (that the
+   singleton really is overwritten) so the test keeps its meaning if Dash
+   changes.
 4. **A project registry + dispatcher.** Parse `--project name=path` /
    `--projects-dir` / `config.yaml projects:` into a list of
    `(name, label, path)`; build one app per project under
@@ -459,22 +483,33 @@ Kept for the reasoning; see "Decisions" at the top for the outcome.
 
 A throwaway two-project setup should demonstrate, before any real deployment:
 
-- [ ] Both apps load their own `results_dir` and source list, with no bleed.
-- [ ] Assets (`/assets/*.js`, `.css`) resolve under each prefix — the clientside
+- [x] Both apps load their own `results_dir` and source list, with no bleed
+      (484 vs 26 sources, disjoint).
+- [x] Assets resolve under each prefix — verified for all 18 URLs the index
+      references, in both projects. **Browser-side behaviour of the clientside
       scripts (`equal_aspect.js`, `xy_epoch.js`, `keyboard.js`,
-      `subplot_resize.js`) all load and work in both.
-- [ ] Callback POSTs reach the right app — in particular the `allow_duplicate`
-      hashed output keys, which differ per app instance.
-- [ ] `ui/urls.rel()` produces correct in-app links (dashboard, `/compare`) in
-      both, including the `?source=` deep links.
+      `subplot_resize.js`) is still unverified** — they load, but nothing has
+      exercised them in a real browser under a prefix.
+- [x] Callback POSTs reach the right app — exercised via the page-content
+      router and the astrometry-status callback on both. **The
+      `allow_duplicate` hashed output keys are still unverified** and remain
+      the most likely remaining hazard, since they are derived per app
+      instance.
+- [x] `ui/urls.rel()` produces correct in-app links in both — this is the one
+      that initially FAILED; see step 3 above. The dashboard's `?source=`
+      deep-links go through the same helper, so they are covered by the fix,
+      but were not separately exercised.
 - [ ] Token auth is independent: a token valid for project A gets a 403 on
       project B when the token files are separate.
 - [ ] **The cookie collision is actually gone**: visit A, then B, then A again
       and confirm A still authenticates (this is the failure mode described
       above, and it only shows up on the *second* visit to the first project).
-- [ ] `source_run_param.csv` and `astrometry_mojave.dat` resolve per project —
-      the landmine above. Test with *different* files per project and confirm
-      the redshifts differ in the Flux view's Tb axis label and values.
+- [x] `source_run_param.csv` and `astrometry_mojave.dat` resolve per project.
+      Confirmed via the astrometry status span, which distinguishes the two
+      failure modes that matter: MOJAVE `(10 / 37 epochs)` (its own file
+      loaded) vs BK224 `(no astrometry file)`. Note `(none for this source)`
+      is a THIRD state — file loaded, that source absent — and mistaking it
+      for a failure cost a test iteration.
 - [ ] Memory footprint measured, to confirm C actually beats A by enough to
       justify the extra moving part.
 
