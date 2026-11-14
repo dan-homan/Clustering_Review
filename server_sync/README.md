@@ -134,6 +134,44 @@ cd /path/to/production/data            # parent of notes/ recommendations/ Resul
 /path/to/repo/server_sync/sync_server.sh MOJAVE auto      # unattended
 ```
 
+## Only one machine may run this
+
+`recommendations/` is a **two-way** Unison sync, and Unison keeps a state
+archive per `(machine, root pair)`. Run it from a second machine and you have
+two archives with two different views of "last synchronized state" — and
+because the data dir lives in **Dropbox**, files also move between your
+machines behind Unison's back. That combination produces spurious conflicts
+and, worse, deletions that bounce: machine A pulls a deletion from the server,
+Dropbox applies it on machine B, B's archive still remembers the file and tries
+to restore it.
+
+So the script **refuses to run** unless this machine is the designated sync
+authority, marked by a file in its HOME:
+
+```bash
+touch ~/.mojave-sync-authority        # on the ONE machine that owns the sync
+```
+
+A machine without it gets a refusal and nothing is synced. A marker file
+rather than a hostname check on purpose: hostnames change (DHCP — which is
+also what Unison's own `UNISONLOCALHOSTNAME` warning is about), and an
+explicit opt-in can't be acquired by accident.
+
+Designate the workstation that has been doing it. Leave every other machine —
+laptops especially — without the marker.
+
+The one-way rsync legs would in fact be harmless from anywhere, since every
+machine's Dropbox copy holds the same content and the push is idempotent. But
+refusing the whole run is easier to reason about than a half-sync, and this
+script's job is the three legs together. If you ever do want just the push
+from a non-authority machine:
+
+```bash
+MOJAVE_SYNC_FORCE=1 ./sync_server.sh MOJAVE preview
+```
+
+...and answer `n` when the Unison leg asks, so the two-way merge is declined.
+
 ## Multi-project
 
 The server keeps one directory per project:
@@ -341,7 +379,9 @@ ssh homand@webby.cc.denison.edu \
   channel is independent of that. It's fine for a single workstation, but if
   other machines also edit these files via Dropbox you have multiple masters —
   treat the server as the single authority for reviewer submissions to avoid
-  surprises.
+  surprises. This is why the `~/.mojave-sync-authority` marker exists (see
+  "Only one machine may run this"): it is the Dropbox channel that makes a
+  second Unison client actively harmful rather than merely redundant.
 - **Server-side paths** are configured at the top of `sync_server.sh`
   (`REMOTE`, `REMOTE_DATA`, `SSH`) and in the roots/`sshargs` of the profile.
   Change them in **both** places if the host, port, key, or layout changes.

@@ -109,7 +109,51 @@ for d in notes recommendations Results; do
                      echo "or set DATA_DIR=/path/to/data." >&2; exit 1; }
 done
 
-# === 0) remote project root must already exist ===
+# === 0a) only ONE machine may run the Unison leg ===
+# recommendations/ is two-way, and Unison keeps a per-(host, root-pair) state
+# archive. Run it from a second machine and you get two archives with two
+# different views of "last synchronized state" -- plus, because the data dir
+# lives in Dropbox, a third channel copying files between the machines behind
+# both their backs. The failure modes are spurious conflicts and deletions
+# that bounce: machine A pulls a deletion from the server, Dropbox applies it
+# on machine B, B's archive still remembers the file and tries to restore it.
+#
+# So the Unison leg is restricted to the designated sync authority, marked by
+# a file in that machine's HOME. The one-way rsync legs would be harmless from
+# anywhere (same Dropbox content, pushed idempotently), but refusing the whole
+# run is easier to reason about than a half-sync -- and this script's job is
+# the three legs together.
+#
+# To designate a machine:   touch ~/.mojave-sync-authority
+# To override for one run:  MOJAVE_SYNC_FORCE=1 ./sync_server.sh ...
+AUTHORITY_MARKER="${AUTHORITY_MARKER:-$HOME/.mojave-sync-authority}"
+if [[ ! -e "$AUTHORITY_MARKER" && -z "${MOJAVE_SYNC_FORCE:-}" ]]; then
+  cat >&2 <<EOM
+REFUSING to sync: this machine is not the designated sync authority.
+
+  looked for: $AUTHORITY_MARKER
+  this host:  $(uname -n)
+
+recommendations/ is a two-way Unison sync, and Unison keeps a state archive
+per machine. Running it from a second machine gives two archives with two
+views of what was last synchronized -- and since the data dir is in Dropbox,
+files also move between the machines behind Unison's back. That combination
+produces spurious conflicts and deletions that bounce between replicas.
+
+Nothing has been synced.
+
+If this IS the machine that should own the sync:
+  touch $AUTHORITY_MARKER
+
+If you just want to push Results/ and notes/ from here (one-way, harmless),
+and deliberately skip the recommendations merge:
+  MOJAVE_SYNC_FORCE=1 $0 $PROJECT preview     # then 'run'
+  ...but do NOT accept the Unison leg's changes; answer 'n' when it asks.
+EOM
+  exit 1
+fi
+
+# === 0b) remote project root must already exist ===
 # Refuse rather than create it. rsync would happily make
 # <REMOTE_DATA>/<typo>/Results and report success, leaving a stale tree the
 # app never reads and this project's data not where it belongs. And a

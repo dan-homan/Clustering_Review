@@ -30,6 +30,31 @@ waiting for input nobody could see.
 
 ---
 
+## 2026-11-15 — Only the designated machine may run the two-way sync
+
+`recommendations/` is a two-way Unison sync, and Unison keeps a state archive
+per `(machine, root pair)`. A second machine means two archives with two views
+of "last synchronized state" — and since the data dir is in **Dropbox**, files
+also move between machines behind Unison's back. The nasty case is a deletion
+that bounces: machine A pulls it from the server, Dropbox applies it on B, B's
+archive still remembers the file and tries to restore it.
+
+- `sync_server.sh` (both variants) now **refuses to run** unless
+  `~/.mojave-sync-authority` exists on that machine. `MOJAVE_SYNC_FORCE=1`
+  overrides for one run. Nothing is synced on a refusal — the check runs before
+  any leg.
+- A marker file rather than a hostname check, deliberately: hostnames change
+  (DHCP, which is what Unison's own `UNISONLOCALHOSTNAME` warning concerns),
+  and an explicit opt-in can't be acquired by accident.
+- Refuses the *whole* run rather than skipping just the Unison leg. The
+  one-way rsync legs are harmless from anywhere — same Dropbox content, pushed
+  idempotently — but a half-sync is harder to reason about than a refusal, and
+  the refusal message explains how to get the push alone if ever wanted.
+- Verified in all three states: no marker refuses with nothing synced, marker
+  present proceeds, `MOJAVE_SYNC_FORCE=1` proceeds.
+
+---
+
 ## 2026-11-15 — `server_sync/sync_server.sh` is project-aware
 
 The admin's actual by-hand sync — three legs, including the two-way Unison
