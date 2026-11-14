@@ -259,15 +259,50 @@ worth doing on their own merits even if multi-project stalled.
    `tests/test_multi_app_urls.py`, which also asserts the premise (that the
    singleton really is overwritten) so the test keeps its meaning if Dash
    changes.
-4. **A project registry + dispatcher.** Parse `--project name=path` /
-   `--projects-dir` / `config.yaml projects:` into a list of
-   `(name, label, path)`; build one app per project under
-   `<mount-root>/<name>/`; mount them behind a WSGI dispatcher with a redirect
-   at the root to the default (first) project. One project ⇒ skip the
-   dispatcher entirely and mount at the root exactly as today.
+4. ~~**A project registry + dispatcher.**~~ **DONE 2026-11-14** —
+   `src/mojave_review/projects.py`.
+   - `ProjectSpec(name, label, root)`; `results_dir` / `recommendations_dir`
+     derived by convention (`<root>/Results`, `<root>/recommendations`), and
+     the two data tables found by the existing per-project discovery because
+     `<root>` *is* `results_dir.parent`. So nothing needs configuring per
+     project beyond its root.
+   - Declared by `--project <name>=<path>` (repeatable), `--projects-dir
+     <dir>` (every subdirectory holding a `Results/`), or a `projects:` block
+     in `config.yaml` taking either form. The CLI flattens its declarations
+     into the config layer so CLI > env > yaml precedence is the usual one.
+   - Names: explicit, else derived from the path's basename —
+     `MOJAVE_1996.00-2026.00` → `mojave`. Validated as a URL segment, and
+     refused when they collide with a path the app serves (`dashboard`,
+     `compare`, `assets`, `static`). **A symlink's own name wins over its
+     target's**, which is what makes a `--projects-dir` of symlinks a sane way
+     to gather projects from different trees.
+   - `build_dispatcher` mounts each at `<mount-root>/<name>/` with
+     `proxy_strips_prefix=True` and redirects **every** unmatched path into the
+     default (first) project, path and query preserved: `/` → `/mojave/`,
+     `/dashboard` → `/mojave/dashboard`, `/?token=…` → `/mojave/?token=…`. So
+     root-level bookmarks from before projects existed keep working. No loop
+     is possible, since a path already under a mount is handled by that mount.
+   - Declaring **no** projects keeps single-project mode byte-identical:
+     one app at the root, no dispatcher. Verified by running the daily
+     `mojave-review --results-dir Results` and diffing the banner + behaviour.
+   - `results_dir` is no longer required to exist in multi-project mode (each
+     project validates its own `Results/`), since the built-in default
+     `Results` almost never exists next to a multi-project config file.
+   - `--source-params` / `--astrometry-file` are **refused** alongside
+     `--project`: they name one file, and silently applying one project's
+     table to all of them is exactly the bug step 1 removed.
+   - 47 tests in `tests/test_projects.py`; verified they fail when the
+     reserved-name check, the `Results/` requirement, the path-preserving
+     fallback, or duplicate detection is removed.
 5. **The header project control** — a dropdown of links, hidden when there is
-   only one project. Pass the **mount root** to `cookie_identity` so one login
-   covers all projects.
+   only one project. The app instances exist and are addressable; what's
+   missing is the UI. Note the cookie question: with projects at root level
+   the common mount root *is* `/`, so cookie **path** can't separate them and
+   the per-project cookie **name** is what does — but a *shared* token means
+   one login should cover every project, so `cookie_identity` should get the
+   **mount root** rather than each project's prefix. Not yet wired: the apps
+   currently each get their own prefix, so a reviewer would need to present
+   their token once per project.
 6. **Per-project log context**, since `configure_logging` is global and log
    lines would otherwise not say which project they came from.
 7. **Prove it with the checklist below** before touching webby.

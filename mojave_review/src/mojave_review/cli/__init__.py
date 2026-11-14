@@ -83,6 +83,23 @@ def build_parser() -> argparse.ArgumentParser:
              "without it the option is disabled.",
     )
     p.add_argument(
+        "--project", action="append", default=None, metavar="NAME=PATH",
+        help="Serve several projects from one process. Repeatable. PATH is a "
+             "project directory holding Results/ and recommendations/; NAME "
+             "becomes its URL segment (derived from the directory name when "
+             "omitted, e.g. MOJAVE_1996.00-2026.00 -> 'mojave'). Each project "
+             "is mounted at /<name>/ and / redirects to the first one. "
+             "Without this (or --projects-dir) the app serves one project at "
+             "the root exactly as before.",
+    )
+    p.add_argument(
+        "--projects-dir", type=Path, default=None, metavar="DIR",
+        help="Serve every immediate subdirectory of DIR that contains a "
+             "Results/ directory as a project. Shorthand for repeating "
+             "--project when the project directories are siblings; combines "
+             "with it.",
+    )
+    p.add_argument(
         "--source-params",
         type=Path,
         default=None,
@@ -193,6 +210,21 @@ def main(argv: list[str] | None = None) -> int:
         "log_level":           args.log_level,
     }
 
+    # Flatten the CLI project declarations into the normal config layer, so
+    # they follow the usual CLI > env > yaml precedence AND so load_config can
+    # see that this is multi-project mode (where a top-level results_dir is
+    # neither needed nor checked). --projects-dir is scanned here rather than
+    # later for the same reason.
+    from ..projects import ProjectConfigError, discover_projects
+    try:
+        cli_projects = [str(a) for a in (args.project or [])]
+        if args.projects_dir:
+            cli_projects += [str(spec.root)
+                             for spec in discover_projects(args.projects_dir)]
+    except ProjectConfigError as e:
+        raise SystemExit(f"project configuration error: {e}")
+    overrides["projects"] = cli_projects or None
+
     from ..config import load_config
     cfg = load_config(overrides, config_file=args.config_file)
 
@@ -218,10 +250,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg.fits_data_dir is not None and not cfg.fits_data_dir.is_dir()
     )
 
-    from ..app import create_app
-    app = create_app(
-        results_dir=cfg.results_dir,
-        recommendations_dir=cfg.recommendations_dir,
+    # Settings every project shares. results_dir / recommendations_dir are
+    # per-project and therefore NOT in here.
+    from ..projects import mount_prefix, resolve_projects
+    shared = dict(
         cache_dir=cfg.cache_dir,
         reviewer=cfg.reviewer,
         admin=cfg.admin,
@@ -229,14 +261,43 @@ def main(argv: list[str] | None = None) -> int:
         tokens_path=cfg.tokens_file,
         cookie_secure=cfg.cookie_secure,
         admin_contact=cfg.admin_contact,
-        url_base_prefix=cfg.url_base_prefix,
-        proxy_strips_prefix=cfg.proxy_strips_prefix,
         xviii_path=str(args.xviii_table) if args.xviii_table else None,
-        astrometry_path=(str(args.astrometry_file)
-                         if args.astrometry_file else None),
-        source_params_path=(str(args.source_params)
-                            if args.source_params else None),
     )
+    try:
+        projects = resolve_projects(config_entries=cfg.projects)
+    except ProjectConfigError as e:
+        raise SystemExit(f"project configuration error: {e}")
+
+    if projects:
+        # Per-project data tables are DISCOVERED from each project root, so
+        # the --source-params / --astrometry-file overrides (which name a
+        # single file) are meaningless here and would silently apply one
+        # project's table to all of them.
+        for flag, val in (("--source-params", args.source_params),
+                          ("--astrometry-file", args.astrometry_file)):
+            if val:
+                raise SystemExit(
+                    f"{flag} cannot be combined with --project/--projects-dir: "
+                    f"it names one file, but each project discovers its own "
+                    f"from its project root. Remove the flag, or run that "
+                    f"project on its own with --results-dir."
+                )
+        from ..projects import build_dispatcher
+        app, _apps = build_dispatcher(
+            projects, mount_root=cfg.url_base_prefix or "/", **shared)
+    else:
+        from ..app import create_app
+        app = create_app(
+            results_dir=cfg.results_dir,
+            recommendations_dir=cfg.recommendations_dir,
+            url_base_prefix=cfg.url_base_prefix,
+            proxy_strips_prefix=cfg.proxy_strips_prefix,
+            astrometry_path=(str(args.astrometry_file)
+                             if args.astrometry_file else None),
+            source_params_path=(str(args.source_params)
+                                if args.source_params else None),
+            **shared,
+        )
 
     # The launcher hits the bound port directly (root), even when a public
     # url_base_prefix is set for the reverse-proxy deployment.
@@ -245,8 +306,15 @@ def main(argv: list[str] | None = None) -> int:
         Timer(1.0, lambda: webbrowser.open(url)).start()
 
     print(f"mojave-review serving on {url}")
-    print(f"  results_dir         = {cfg.results_dir}")
-    print(f"  recommendations_dir = {cfg.recommendations_dir}")
+    if projects:
+        print(f"  projects            = {len(projects)} "
+              f"(default: {projects[0].name})")
+        for spec in projects:
+            print(f"    {mount_prefix(spec, cfg.url_base_prefix or '/'):14s} "
+                  f"{spec.root}")
+    else:
+        print(f"  results_dir         = {cfg.results_dir}")
+        print(f"  recommendations_dir = {cfg.recommendations_dir}")
     print(f"  cache_dir           = {cfg.cache_dir}")
     print(f"  reviewer            = {cfg.reviewer}")
     if cfg.fits_data_dir is not None:
@@ -263,7 +331,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"  auth                = single-user (no tokens-file)")
 
-    app.run(host=cfg.host, port=cfg.port, debug=bool(cfg.debug))
+    if projects:
+        # A dispatcher is a bare WSGI callable, not a Dash app, so there is no
+        # .run(). Werkzeug's dev server is what Dash would have used anyway.
+        from werkzeug.serving import run_simple
+        run_simple(cfg.host, cfg.port, app,
+                   use_reloader=bool(cfg.debug), use_debugger=bool(cfg.debug))
+    else:
+        app.run(host=cfg.host, port=cfg.port, debug=bool(cfg.debug))
     return 0
 
 

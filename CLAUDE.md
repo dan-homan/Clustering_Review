@@ -35,6 +35,7 @@ Clustering_Review/
     └── src/mojave_review/
         ├── cli.py               # `mojave-review` entry point
         ├── app.py               # Dash factory (assets_folder → pkg dir; page router)
+        ├── projects.py          # multi-project registry + WSGI dispatcher
         ├── data/
         │   ├── loader.py        # source/model discovery, CSV+NPZ load
         │   ├── window_fits.py   # cluster_fits/*.npz loader + nwin_choices store
@@ -1007,6 +1008,32 @@ Dash serve under the prefix; every in-app link routes through `ui/urls.py`
 prefix** (`proxy_pass …:<port>;` NO trailing slash). Root-path hosting needs
 none. See `docs/deployment_phase2.md`.
 
+## Multi-project (several review efforts, one process)
+
+`projects.py`. A *project* is one directory holding `Results/` (and
+conventionally `recommendations/`; `notes/` is derived as its sibling, and the
+data tables are discovered because the project root **is**
+`results_dir.parent`). Declared by `--project <name>=<path>` (repeatable),
+`--projects-dir <dir>`, or a `projects:` block in `config.yaml`; the CLI
+flattens its own into the config layer so CLI > env > yaml holds. Names become
+URL segments — validated as such, derived from the basename when omitted
+(`MOJAVE_1996.00-2026.00` → `mojave`), a **symlink's name beating its
+target's**, and refused when they'd shadow `dashboard`/`compare`/`assets`/
+`static`.
+
+`build_dispatcher` makes one Dash app per project at `<mount-root>/<name>/`
+with `proxy_strips_prefix=True` (a `DispatcherMiddleware` strips the mount
+segment exactly as a stripping proxy does), and redirects **every** unmatched
+path into the default (first) project preserving path + query — so `/`,
+`/dashboard` and `/?token=…` all keep working. Declaring no projects skips the
+dispatcher and mounts one app at the root, byte-identical to before.
+
+**Per project:** `Results/`, `recommendations/`, `notes/`, the data tables.
+**Shared:** FITS cache (keyed by MOJAVE data identity, so project-independent)
+and `tokens.yaml` — one token per reviewer, by reviewer request.
+
+Rationale and the remaining steps are in `docs/multi_project.md`.
+
 ## Running the web app
 
 ```bash
@@ -1076,6 +1103,14 @@ auto-discovered otherwise). For Drive data: use Google Drive for Desktop and poi
   path-prefix of `/review/bk224/`). Without this, two apps on one host
   overwrite each other's token and a reviewer 403s on returning to the first
   — reproduced and fixed against two live servers sharing one cookie jar.
+- **`ui.urls.rel()` must not use `dash.get_relative_path`.** That reads
+  `dash._get_paths.CONFIG`, a process-wide singleton every `Dash(...)`
+  constructor overwrites, so with one app per project the LAST app built wins
+  and every project's links point at it (observed: MOJAVE's header linking to
+  `/bk224/dashboard`). Dash's own asset/callback URLs come from each app's own
+  config and are fine, which is what makes it easy to miss — the page loads and
+  only navigation is wrong. `rel()` reads the prefix from the Flask app serving
+  the current request (`create_app` stashes it in `server.config`).
 - **Don't write back into `Results/`.** Recommendations are the only output.
 - **`grab_mojave_image` opens local files, not URLs.** The web app has its own
   fetcher; don't reuse that function.

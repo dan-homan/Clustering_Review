@@ -4,6 +4,58 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Multi-project step 4: project registry + dispatcher
+
+Several review projects served from one process, each with its own `Results/`,
+`recommendations/` and `notes/`. New `src/mojave_review/projects.py`.
+
+- **A project is one directory** holding `Results/` (and conventionally
+  `recommendations/`). Both production projects already have that shape, so
+  nothing had to move. `source_run_param.csv` / `astrometry_mojave.dat` are
+  found by the per-project discovery added in step 1, because the project root
+  *is* `results_dir.parent`.
+- **Three ways to declare them**, composable: `--project <name>=<path>`
+  (repeatable), `--projects-dir <dir>` (every subdirectory with a `Results/`),
+  and a `projects:` block in `config.yaml` taking either the string or a
+  `{name, label, root}` mapping. The CLI flattens its declarations into the
+  config layer, so the usual CLI > env > yaml precedence applies.
+- **Names become URL segments**, so they're validated as such, and refused
+  when they'd shadow a path the app serves (`dashboard`, `compare`, `assets`,
+  `static`). Derived from the basename when not given —
+  `MOJAVE_1996.00-2026.00` → `mojave`. A symlink's own name wins over its
+  target's, which makes a `--projects-dir` of symlinks a sane way to gather
+  projects that live in different trees.
+- **Mounting**: `/mojave/`, `/bk224/`, and **every** unmatched path redirects
+  into the default (first) project with path and query preserved — `/` →
+  `/mojave/`, `/dashboard` → `/mojave/dashboard`, `/?token=…` →
+  `/mojave/?token=…`. Root-level bookmarks from before projects existed keep
+  working, which matters because the Denison proxy passes them through
+  verbatim.
+- **Single-project mode is byte-identical.** Declaring no projects skips the
+  dispatcher entirely and mounts one app at the root; verified by running
+  `mojave-review --results-dir Results` from a project directory and checking
+  the banner and behaviour are unchanged. `results_dir` is no longer required
+  to exist when `projects` is set, since the built-in default `Results` won't
+  exist beside a multi-project config.
+- **Loud failures, not silent ones:** a missing directory, a directory with no
+  `Results/` (including the easy mistake of pointing at `Results/` itself), a
+  reserved or URL-unsafe name, the same name for two roots, or the same root
+  under two names all raise at startup. `--source-params` /
+  `--astrometry-file` are refused alongside `--project`, since they name one
+  file and would apply one project's table to all of them.
+- Verified end-to-end through the real CLI with both production projects:
+  484 vs 26 sources, in-app links confined to their own project,
+  `_dash-layout` returning JSON on both, and the root redirect carrying a
+  token.
+- 47 tests in `tests/test_projects.py`, confirmed to fail when the
+  reserved-name check, the `Results/` requirement, the path-preserving
+  fallback, or duplicate detection is removed.
+- **Not yet done:** the header project switcher (step 5), and the shared-token
+  cookie scoping it needs — each app currently gets its own prefix-derived
+  cookie, so a reviewer would present their token once per project.
+
+---
+
 ## 2026-11-14 — Multi-project step 3: dispatcher mounting proved, `rel()` fixed
 
 Step 3 of [`docs/multi_project.md`](docs/multi_project.md). The prefix

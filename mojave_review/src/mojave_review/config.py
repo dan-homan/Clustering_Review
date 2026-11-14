@@ -16,7 +16,15 @@ YAML format
 
 .. code-block:: yaml
 
-    # Paths
+    # Multi-project (optional). When present, each project is mounted at
+    # its own path and results_dir/recommendations_dir below are ignored.
+    projects:
+      - name: mojave
+        label: MOJAVE 1996-2026
+        root: /data/MOJAVE_1996.00-2026.00
+      - bk224=/data/BK224
+
+    # Paths (single-project mode)
     results_dir: /data/Results
     recommendations_dir: /data/recommendations
     cache_dir: /data/fits_cache
@@ -83,7 +91,13 @@ class Config:
     to already exist; ``fits_data_dir`` is left alone (read-only).
     """
 
-    # Paths
+    # Multi-project: a list of project declarations, each either a
+    # "name=path" / path string or a {name, label, root} mapping. Parsed by
+    # ``projects.projects_from_config``. Empty/None ⇒ single-project mode,
+    # driven by ``results_dir`` exactly as before. See docs/multi_project.md.
+    projects: list | None = None
+
+    # Paths — single-project mode, and the shared settings in both modes.
     results_dir: Path = Path("Results")
     recommendations_dir: Path | None = None     # resolved post-init
     cache_dir: Path | None = None               # resolved post-init
@@ -160,14 +174,23 @@ def _coerce(name: str, value: Any) -> Any:
     target = f.type
     # Strip Optional[...] wrappers for the type check
     if isinstance(target, str):
-        # PEP 563 strings — rough check, but our types are simple here
-        is_bool = "bool" in target
-        is_int = "int" in target and "bool" not in target
-        is_path = "Path" in target
+        # PEP 563 strings — rough check, but our types are simple here.
+        # ``list`` is tested FIRST: "list[Path]" would otherwise match the
+        # Path branch and get str()'d into nonsense.
+        is_list = target.startswith("list") or "list[" in target
+        is_bool = (not is_list) and "bool" in target
+        is_int = (not is_list) and "int" in target and "bool" not in target
+        is_path = (not is_list) and "Path" in target
     else:
+        is_list = target is list
         is_bool = target is bool
         is_int = target is int
         is_path = target is Path
+    if is_list:
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        raise ValueError(
+            f"{name!r} must be a list, got {type(value).__name__}: {value!r}")
     if is_bool:
         if isinstance(value, bool):
             return value
@@ -272,9 +295,11 @@ def load_config(
        config.yaml``).
     4. Built-in :class:`Config` defaults.
 
-    Paths are expanded but not resolved (no symlink mangling). The
-    ``results_dir`` is required to exist; ``recommendations_dir`` and
-    ``cache_dir`` are created if missing.
+    Paths are expanded but not resolved (no symlink mangling).
+    ``recommendations_dir`` and ``cache_dir`` are created if missing.
+    ``results_dir`` is required to exist in single-project mode; when
+    ``projects`` is set it is unused and not checked (each project validates
+    its own ``Results/``).
     """
     env = env or dict(os.environ)
     overrides = {k: v for k, v in (cli_overrides or {}).items() if v is not None}
@@ -299,8 +324,13 @@ def load_config(
     cfg = Config(**merged)
 
     # ---- Post-resolution: path normalisation + sanity checks ----------
+    # In multi-project mode each project carries its own Results/ (validated
+    # in projects.parse_project_spec), and the top-level results_dir is
+    # unused — so don't demand it exists. The built-in default is the
+    # relative "Results", which almost never exists next to a multi-project
+    # config file and would otherwise block startup.
     cfg.results_dir = Path(cfg.results_dir).expanduser()
-    if not cfg.results_dir.is_dir():
+    if not cfg.projects and not cfg.results_dir.is_dir():
         raise SystemExit(f"results_dir not found: {cfg.results_dir}")
 
     if cfg.recommendations_dir is None:

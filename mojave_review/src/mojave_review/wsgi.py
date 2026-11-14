@@ -25,6 +25,7 @@ from __future__ import annotations
 from ._logging import configure_logging, get_logger
 from .app import create_app
 from .config import load_config
+from .projects import build_dispatcher, resolve_projects
 
 
 _config = load_config()
@@ -38,9 +39,12 @@ _log.info("WSGI startup  reviewer_fallback=%s  admin=%s  auth=%s  "
           "token" if _config.tokens_file else "single-user",
           _config.log_file or "<stderr only>")
 
-_app = create_app(
-    results_dir=_config.results_dir,
-    recommendations_dir=_config.recommendations_dir,
+# Multi-project: when config.yaml declares `projects:`, build one app per
+# project behind a dispatcher instead of a single root-mounted app. Shared
+# settings (cache, tokens, identity) come from the same config; per-project
+# directories come from each project root.
+_projects = resolve_projects(config_entries=_config.projects)
+_shared = dict(
     cache_dir=_config.cache_dir,
     reviewer=_config.reviewer,
     admin=_config.admin,
@@ -48,18 +52,35 @@ _app = create_app(
     tokens_path=_config.tokens_file,
     cookie_secure=_config.cookie_secure,
     admin_contact=_config.admin_contact,
-    astrometry_path=(str(_config.astrometry_file)
-                     if _config.astrometry_file else None),
-    source_params_path=(str(_config.source_params_file)
-                        if _config.source_params_file else None),
-    # Previously omitted, so the config key was read and then ignored and the
-    # app was always root-mounted. Both default to off, which is the correct
-    # setting for the Denison deployment (see docs/deployment_phase2.md) --
-    # these exist for a proxy or dispatcher that really does mount the app
-    # under a prefix.
-    url_base_prefix=_config.url_base_prefix,
-    proxy_strips_prefix=_config.proxy_strips_prefix,
 )
 
-# What gunicorn looks for.
-application = _app.server
+if _projects:
+    _log.info("WSGI multi-project: %d projects (default %s) under %s",
+              len(_projects), _projects[0].name,
+              _config.url_base_prefix or "/")
+    # The dispatcher IS the WSGI callable gunicorn serves; there is no single
+    # Dash app to take .server from.
+    application, _apps = build_dispatcher(
+        _projects, mount_root=_config.url_base_prefix or "/", **_shared)
+else:
+    _app = create_app(
+        results_dir=_config.results_dir,
+        recommendations_dir=_config.recommendations_dir,
+        astrometry_path=(str(_config.astrometry_file)
+                         if _config.astrometry_file else None),
+        source_params_path=(str(_config.source_params_file)
+                            if _config.source_params_file else None),
+        # url_base_prefix was previously omitted here, so the config key was
+        # read and then ignored. Both default to off, which is the correct
+        # setting for the Denison deployment (see docs/deployment_phase2.md);
+        # they exist for a proxy or dispatcher that really does mount the app
+        # under a prefix.
+        url_base_prefix=_config.url_base_prefix,
+        proxy_strips_prefix=_config.proxy_strips_prefix,
+        **_shared,
+    )
+    # What gunicorn looks for.
+    application = _app.server
+
+# ``application`` is set in both branches above — the dispatcher directly, or
+# the single app's Flask server.
