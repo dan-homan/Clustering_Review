@@ -62,6 +62,92 @@ Two consequences of the **zero source overlap**:
 `(no astrometry file)`, and every plot keeps the fitted-core reference. Already
 the correct behaviour.
 
+## Decisions, round 2 (2026-11-14, after steps 1–2)
+
+Settled once the token question was revisited:
+
+1. **One shared token per reviewer**, not one per project. Reviewers won't
+   manage several links; the admin handles per-project assignments instead.
+2. **Projects are switched inside the app**, via a header control.
+3. **Declared by `--project <name>=<path>` (repeatable) and/or
+   `--projects-dir <dir>`**; the server declares the same thing in a
+   `projects:` block in `config.yaml`, since the WSGI entry reads no flags.
+   Both forms are wanted because MOJAVE and BK224 live in *different* trees
+   (`Clustering_CC/` vs `Shared_Projects/Clustering_CC/`), so a single parent
+   directory can't see both without a symlink.
+4. **A bare `--results-dir` stays exactly as it is**: one project at `/`, no
+   project control in the header, cookie `("mr_token", "/")`. Multi-project is
+   strictly opt-in. This is the daily local workflow and must not drift.
+
+### The switcher does NOT require option B
+
+This is the decision that keeps the work small. With a **shared** token the
+cookie should be scoped to the **common mount root**, not to each project —
+and once one login covers every project beneath that root, the switcher is
+just a header dropdown of links to sibling prefixes:
+
+```
+Project: [ MOJAVE 1996–2026 ▾ ]   →  href=".../bk224/"
+```
+
+Same `html.A(href=rel(...))` pattern as the existing Dashboard and XVIII
+Comparison links. The reviewer-visible difference from an in-place swap is a
+page load on switch and a URL that changes per project — the latter arguably a
+feature, since each project stays bookmarkable and "which project am I in" is
+answerable from the address bar. Option B's cost (every dir-using closure in
+`register_callbacks` becoming per-request, the `_redshift_map` / `_astrometry`
+startup loads, and a new dimension through the recommendations store-bridge
+wiring) buys only the absence of that page load.
+
+**Consequence for step 2's work:** the per-project cookie built on 2026-11-14
+is the wrong *default* for this deployment. `cookie_identity` should be passed
+the **mount root** (one cookie for all projects), not each project's own
+prefix. A reviewer clicking through to a project whose path the cookie doesn't
+cover would get a 403 with a perfectly valid token. The per-project form stays
+available for the case where token files genuinely differ — it's a call-site
+choice, not a code change.
+
+### Mount inside the existing prefix — then IT does nothing
+
+The current public path is `/mojave-review/`, and reviewers have bookmarks
+with `?token=…` on it. Mounting projects *beneath* that same prefix:
+
+```
+/mojave-review/            -> redirect to the default project
+/mojave-review/mojave/     -> project 1
+/mojave-review/bk224/      -> project 2
+```
+
+means the existing nginx stanza (`location /mojave-review/`) keeps working
+untouched — **no new port, no new proxy rule, no IT request**, which was
+requirement 4. Old bookmarks still land on `/mojave-review/`, which redirects
+to the default project, so nothing has to be reissued and the shared cookie is
+set at the same path it is today. Moving to a fresh root like `/review/` would
+mean reissuing every link for no benefit.
+
+### Blocking unknown: does the deployed app actually get its prefix?
+
+`wsgi.py` never passes `url_base_prefix` to `create_app` (noticed in
+`a26df83`, deliberately left alone). That matters now, because the dispatcher
+depends on getting these prefixes right, and the two possibilities imply
+opposite nginx setups:
+
+- If nginx **preserves** the prefix (what `deployment_phase2.md` prescribes:
+  `proxy_pass http://127.0.0.1:8050;` with no trailing slash), then a
+  root-mounted Dash app would 404 on every request — yet the site works, so
+  this cannot be the whole story.
+- If nginx **strips** it (trailing slash), the app serves at root and requests
+  work, but `rel()` returns bare paths, so the Dashboard / XVIII links and the
+  post-login redirect would point outside the proxied location and break.
+
+Something must therefore be supplying the prefix, or the actual proxy config
+differs from the docs. **One diagnostic settles it:** on the live site, open
+the page source and look for `requests_pathname_prefix` in the Dash config
+blob — `"/mojave-review/"` means the prefix is reaching Dash somehow,
+`"/"` means it isn't. A quick cross-check is whether the
+"📋 Assignment Dashboard" header link actually works when clicked on the
+server. Resolve this before step 4.
+
 ## The cookie was not scoped per app  *(FIXED 2026-11-14)*
 
 **This was the one real blocker for "different reviewers per project"**, found
@@ -124,13 +210,20 @@ worth doing on their own merits even if multi-project stalled.
 3. **Split the Dash prefix knobs.** `create_app` passes one
    `url_base_pathname`; mounting behind a dispatcher needs
    `routes_pathname_prefix` + `requests_pathname_prefix` separately. One new
-   kwarg, defaulting to today's behaviour.
-4. **A dispatcher + per-project config loading in `wsgi.py`**, replacing the
-   single `create_app()` call. Projects enumerated from a directory of config
-   files, so adding one is a file plus a restart.
-5. **Per-project log context**, since `configure_logging` is global and log
+   kwarg, defaulting to today's behaviour. **Settle the blocking unknown above
+   first** — it tells us what the deployed app currently receives.
+4. **A project registry + dispatcher.** Parse `--project name=path` /
+   `--projects-dir` / `config.yaml projects:` into a list of
+   `(name, label, path)`; build one app per project under
+   `<mount-root>/<name>/`; mount them behind a WSGI dispatcher with a redirect
+   at the root to the default (first) project. One project ⇒ skip the
+   dispatcher entirely and mount at the root exactly as today.
+5. **The header project control** — a dropdown of links, hidden when there is
+   only one project. Pass the **mount root** to `cookie_identity` so one login
+   covers all projects.
+6. **Per-project log context**, since `configure_logging` is global and log
    lines would otherwise not say which project they came from.
-6. **Prove it with the checklist below** before touching webby.
+7. **Prove it with the checklist below** before touching webby.
 
 Deployment-side, already fine: `deploy/sync-results.sh` reads
 `$MOJAVE_SYNC_CONF` (falling back to
@@ -211,7 +304,7 @@ nginx `location` block per project.
     imported separately in each;
   - reviewers get N bookmarks and N tokens.
 
-## Option B — one project-aware app with a project picker  *(ruled out: no cross-project view wanted)*
+## Option B — one project-aware app with a project picker  *(ruled out twice: no cross-project view wanted, and the switcher turned out not to need it — see Decisions, round 2)*
 
 One process, one port, one token per reviewer, and the only design that can
 offer a **cross-project admin view** ("everyone's queue, across all projects").
@@ -303,6 +396,14 @@ you" is a legitimate plan, not a hedge.
     │   └── logs/
     └── <second-project>/       # same shape
 ```
+
+**The everyday local invocation is unaffected by the discovery reorder.**
+Running `mojave-review --results-dir Results --reviewer homand --admin` from
+inside a project directory makes `results_dir.parent` equal `.`, i.e. the cwd —
+so the project root is search slot 1 *and* slot 3, and the result is identical
+either way (verified: finds both files, loads 409 redshifts). The reorder only
+changes the case nobody types deliberately: standing in one project's
+directory while pointing `--results-dir` at another's.
 
 The principle worth holding to: **one directory per project containing
 everything project-scoped, and nothing project-scoped outside it.** That makes
