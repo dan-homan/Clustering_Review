@@ -302,6 +302,10 @@ def build_dispatcher(
         from .app import create_app as app_factory  # local: avoids a cycle
 
     default_prefix = mount_prefix(projects[0], mount_root)
+    # Shared across every app: the switcher's entries, and the cookie scope.
+    nav = [(spec.name, spec.label, mount_prefix(spec, mount_root))
+           for spec in projects]
+    scope = (mount_root or "/").strip() or "/"
 
     apps: dict[str, object] = {}
     mounts: dict[str, object] = {}
@@ -312,6 +316,12 @@ def build_dispatcher(
             recommendations_dir=spec.recommendations_dir,
             url_base_prefix=prefix,
             proxy_strips_prefix=True,
+            # One login for all projects: the cookie is scoped to the common
+            # mount root, not to each project's own path. Reviewers asked for
+            # a single token and a single bookmark.
+            cookie_scope_prefix=scope,
+            project_nav=nav,
+            current_project=spec.name,
             **create_app_kwargs,
         )
         apps[spec.name] = dash_app

@@ -294,15 +294,36 @@ worth doing on their own merits even if multi-project stalled.
    - 47 tests in `tests/test_projects.py`; verified they fail when the
      reserved-name check, the `Results/` requirement, the path-preserving
      fallback, or duplicate detection is removed.
-5. **The header project control** — a dropdown of links, hidden when there is
-   only one project. The app instances exist and are addressable; what's
-   missing is the UI. Note the cookie question: with projects at root level
-   the common mount root *is* `/`, so cookie **path** can't separate them and
-   the per-project cookie **name** is what does — but a *shared* token means
-   one login should cover every project, so `cookie_identity` should get the
-   **mount root** rather than each project's prefix. Not yet wired: the apps
-   currently each get their own prefix, so a reviewer would need to present
-   their token once per project.
+5. ~~**The header project control.**~~ **DONE 2026-11-14.**
+   - `ui.layout.build_project_switcher(project_nav, current_project)` renders
+     a native `<details>`/`<summary>` disclosure listing every project as a
+     plain link to its mount, the current one marked `●` and named in the
+     summary. Returns **None** below two projects, so single-project mode
+     renders no control at all.
+   - Deliberately not a `dcc.Dropdown`: the entries are links to sibling
+     mounts, so switching is an ordinary navigation — no callback, no
+     clientside JS, no round-trip — and each project keeps its own URL, so
+     Back and per-project bookmarks behave as reviewers expect. (HTML has no
+     "dropdown of links"; `<details>` is the closest scriptless equivalent,
+     and the admin Window-N panel already uses one.)
+   - `project_nav` is `[(name, label, href), ...]` — plain data, so `ui`
+     never imports `projects` and `projects` can keep importing `app`.
+   - **One login for every project.** New
+     `install_token_middleware(cookie_scope_prefix=)`, which `build_dispatcher`
+     sets to the **mount root** rather than each project's prefix, so the
+     cookie is `("mr_token", "/")` and a single token covers everything. This
+     was the open question from step 4: with projects at root level the common
+     mount root *is* `/`, so cookie path cannot separate them — and it should
+     not, because the chosen design is one shared token per reviewer. Scoping
+     per project would have met a reviewer clicking into their second project
+     with a 403 despite a valid token.
+   - 14 tests in `tests/test_project_switcher.py`; verified they fail when the
+     cookie is scoped per project (4), the switcher shows for a single project
+     (1), the current project is unmarked (2), or every app is told the same
+     `current_project` (1).
+   - **Labels default to the directory basename**, so MOJAVE reads as
+     `MOJAVE_1996.00-2026.00` in the header. Set `label:` in the config
+     `projects:` block (or name the symlink) for something shorter.
 6. **Per-project log context**, since `configure_logging` is global and log
    lines would otherwise not say which project they came from.
 7. **Prove it with the checklist below** before touching webby.
@@ -534,11 +555,12 @@ A throwaway two-project setup should demonstrate, before any real deployment:
       that initially FAILED; see step 3 above. The dashboard's `?source=`
       deep-links go through the same helper, so they are covered by the fix,
       but were not separately exercised.
-- [ ] Token auth is independent: a token valid for project A gets a 403 on
-      project B when the token files are separate.
-- [ ] **The cookie collision is actually gone**: visit A, then B, then A again
-      and confirm A still authenticates (this is the failure mode described
-      above, and it only shows up on the *second* visit to the first project).
+- [x] **One token covers every project** (the design that was chosen, rather
+      than per-project token files): visit A, then B, then A again, all
+      authenticated from a single `?token=` login. Tested over HTTP with one
+      cookie jar. Per-project token files remain possible — pass each app its
+      own `tokens_path` and let `cookie_scope_prefix` default — but nothing
+      exercises that path.
 - [x] `source_run_param.csv` and `astrometry_mojave.dat` resolve per project.
       Confirmed via the astrometry status span, which distinguishes the two
       failure modes that matter: MOJAVE `(10 / 37 epochs)` (its own file

@@ -4,6 +4,41 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Multi-project step 5: header switcher + one shared login
+
+- **Project switcher in the header.** `ui.layout.build_project_switcher`
+  renders a native `<details>`/`<summary>` disclosure listing every project as
+  a link to its mount, the current one marked `●` and named in the summary.
+  **Nothing is rendered below two projects**, so single-project mode looks
+  exactly as it always has.
+- Deliberately plain links rather than a `dcc.Dropdown`: switching becomes an
+  ordinary navigation — no callback, no clientside JS — and each project keeps
+  its own URL, so Back and per-project bookmarks work. HTML has no "dropdown
+  of links"; `<details>` is the closest scriptless equivalent, and the admin
+  Window-N panel already uses one.
+- **One login covers every project.** New
+  `install_token_middleware(cookie_scope_prefix=)`, set by `build_dispatcher`
+  to the **mount root** instead of each project's own prefix, so the cookie is
+  `("mr_token", "/")` and a single `?token=…` works everywhere. This closes the
+  question left open by step 4: with projects at root level the common mount
+  root *is* `/`, so cookie path cannot distinguish them — and should not,
+  because the chosen design is one shared token per reviewer. Scoping per
+  project would have met a reviewer clicking into their second project with a
+  403 despite holding a valid token.
+- Verified over HTTP with one cookie jar against both production projects:
+  login at `/mojave/`, then `/bk224/` and back to `/mojave/`, all
+  authenticated; anonymous still 403 on both; and each project's page renders
+  the full list with itself marked.
+- 14 tests in `tests/test_project_switcher.py` (390 total), confirmed to fail
+  when the cookie is scoped per project (4 failures), the switcher appears for
+  a single project (1), the current project is unmarked (2), or every app is
+  told the same `current_project` (1).
+- **Labels default to the directory basename**, so MOJAVE shows as
+  `MOJAVE_1996.00-2026.00`. Use `label:` in the config `projects:` block, or
+  name a symlink, for something shorter.
+
+---
+
 ## 2026-11-14 — Multi-project step 4: project registry + dispatcher
 
 Several review projects served from one process, each with its own `Results/`,

@@ -227,6 +227,7 @@ def install_token_middleware(
     admin_contact: str = "the admin",
     url_base_prefix: str | None = None,
     proxy_strips_prefix: bool = False,
+    cookie_scope_prefix: str | None = None,
 ) -> None:
     """Wire the before_request hook + the cookie-refresh after_request hook.
 
@@ -265,13 +266,27 @@ def install_token_middleware(
         mounting this app under a path — removes ``url_base_prefix`` before
         the app sees it (see :func:`mojave_review.app.create_app`). Decides
         whether ``request.path`` already carries the prefix.
+    cookie_scope_prefix :
+        Path the session cookie is scoped to, when it should differ from
+        ``url_base_prefix``. Defaults to ``url_base_prefix``, i.e. a cookie
+        private to this app.
+
+        Multi-project deployments pass the **mount root** — the common
+        ancestor of every project — so ONE login covers all of them. That is
+        what reviewers asked for: a single token and a single bookmark, with
+        projects switched inside the app. Scoping each project's cookie to its
+        own prefix instead would mean presenting the token once per project,
+        and a reviewer clicking from one project to another would be met with
+        a 403 despite holding a perfectly valid token.
     """
     cache = _StoreCache()
     cookie_max_age = int(cookie_max_age_days * 86400)
-    # Cookie identity is always derived from the PUBLIC prefix: it is the
-    # browser that decides whether to send a cookie, and the browser only
-    # knows public paths.
-    cookie_name, cookie_path = cookie_identity(url_base_prefix)
+    # Cookie identity is always derived from a PUBLIC path: it is the browser
+    # that decides whether to send a cookie, and the browser only knows public
+    # paths.
+    cookie_name, cookie_path = cookie_identity(
+        cookie_scope_prefix if cookie_scope_prefix is not None
+        else url_base_prefix)
 
     def _resolve(token: str | None) -> User | None:
         if not token:

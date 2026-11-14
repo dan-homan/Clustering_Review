@@ -139,11 +139,71 @@ def build_source_options(results_dir: Path, recommendations_dir: Path,
     return out
 
 
+def build_project_switcher(project_nav, current_project):
+    """Header control for switching between projects, or None when there is
+    nothing to switch to (single-project mode, the overwhelmingly common
+    case, renders no control at all).
+
+    ``project_nav`` is ``[(name, label, href), ...]`` — plain data rather than
+    ``ProjectSpec`` objects, so ``ui`` never imports ``projects`` and
+    ``projects`` can keep importing ``app``.
+
+    A native ``<details>``/``<summary>`` disclosure, not a ``dcc.Dropdown``:
+    the entries are plain links to sibling mounts, so switching is an ordinary
+    navigation needing no callback, no clientside JS and no round-trip. (HTML
+    has no "dropdown of links" element; `<details>` is the closest thing that
+    works without script.) Each project keeps its own URL, so the browser Back
+    button and per-project bookmarks behave the way reviewers expect.
+    """
+    nav = list(project_nav or [])
+    if len(nav) < 2:
+        return None
+    current = next((lbl for n, lbl, _h in nav if n == current_project), None)
+    entries = []
+    for name, label, href in nav:
+        is_current = name == current_project
+        entries.append(html.A(
+            ("● " if is_current else "○ ") + label,
+            href=href,
+            style={"display": "block", "padding": "0.35em 0.8em",
+                   "color": "#222" if is_current else "#1f77b4",
+                   "fontWeight": 600 if is_current else 400,
+                   "textDecoration": "none", "whiteSpace": "nowrap",
+                   "background": "#eef4fb" if is_current else "transparent"},
+            title=("Current project" if is_current
+                   else f"Switch to {label}"),
+        ))
+    return html.Details(
+        [
+            html.Summary(
+                f"🗂 {current or 'Project'} ▾",
+                style={"cursor": "pointer", "fontSize": "0.9em",
+                       "color": "#1f77b4", "listStyle": "none",
+                       "userSelect": "none"},
+                title="Switch project",
+            ),
+            html.Div(
+                entries,
+                style={"position": "absolute", "zIndex": 1200,
+                       "background": "#fff", "border": "1px solid #ccc",
+                       "borderRadius": "4px",
+                       "boxShadow": "0 2px 8px rgba(0,0,0,0.15)",
+                       "marginTop": "0.2em", "minWidth": "12em"},
+            ),
+        ],
+        style={"marginLeft": "1.5em", "position": "relative",
+               "alignSelf": "center"},
+    )
+
+
 def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
-                 recommendations_dir: Path | None = None) -> html.Div:
+                 recommendations_dir: Path | None = None,
+                 project_nav=None, current_project: str | None = None,
+                 ) -> html.Div:
     source_options = build_source_options(results_dir, recommendations_dir,
                                           reviewer, admin=admin)
     initial = source_options[0]["value"] if source_options else None
+    switcher = build_project_switcher(project_nav, current_project)
 
     header = html.Div(
         [
@@ -174,7 +234,7 @@ def build_layout(results_dir: Path, reviewer: str, admin: bool = False,
                         title="Compare the old MOJAVE XVIII Gaussian fits with "
                               "the current clustering (new tab)",
                     ),
-                ],
+                ] + ([switcher] if switcher is not None else []),
                 style={"display": "flex", "alignItems": "baseline"},
             ),
             html.Div(

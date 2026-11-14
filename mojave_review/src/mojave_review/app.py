@@ -41,6 +41,9 @@ def create_app(
     admin_contact: str = "the admin",
     url_base_prefix: str | None = None,
     proxy_strips_prefix: bool = False,
+    cookie_scope_prefix: str | None = None,
+    project_nav=None,
+    current_project: str | None = None,
     xviii_path: str | None = None,
     astrometry_path: str | None = None,
     source_params_path: str | None = None,
@@ -199,6 +202,8 @@ def create_app(
             reviewer=rev,
             admin=admin,
             recommendations_dir=recommendations_dir,
+            project_nav=project_nav,
+            current_project=current_project,
         )
 
     register_callbacks(
@@ -295,6 +300,9 @@ def create_app(
             # their browser actually is after a ``?token=`` login.
             url_base_prefix=url_base_prefix,
             proxy_strips_prefix=proxy_strips_prefix,
+            # Multi-project: the mount root, so one login covers every
+            # project rather than one token prompt per project.
+            cookie_scope_prefix=cookie_scope_prefix,
         )
 
     return app

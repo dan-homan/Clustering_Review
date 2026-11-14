@@ -1030,7 +1030,17 @@ dispatcher and mounts one app at the root, byte-identical to before.
 
 **Per project:** `Results/`, `recommendations/`, `notes/`, the data tables.
 **Shared:** FITS cache (keyed by MOJAVE data identity, so project-independent)
-and `tokens.yaml` — one token per reviewer, by reviewer request.
+and `tokens.yaml` — one token per reviewer, by reviewer request. That shared
+token is why `build_dispatcher` passes the **mount root** as
+`cookie_scope_prefix`: the cookie is `("mr_token", "/")`, so one login covers
+every project. Per-project scoping would 403 a reviewer clicking into their
+second project.
+
+**Switcher:** `ui.layout.build_project_switcher(project_nav, current_project)`
+→ a `<details>` of plain links to sibling mounts (current marked `●`), or
+**None** below two projects. Links not a `dcc.Dropdown`, so switching needs no
+callback and each project keeps its own URL/Back behaviour. `project_nav` is
+`[(name, label, href)]` — plain data, so `ui` never imports `projects`.
 
 Rationale and the remaining steps are in `docs/multi_project.md`.
 
