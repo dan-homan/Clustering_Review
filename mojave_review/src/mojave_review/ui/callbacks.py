@@ -77,6 +77,7 @@ def register_callbacks(
     admin: bool = False,
     fits_data_dir: Path | None = None,
     astrometry_path: str | None = None,
+    source_params_path: str | None = None,
 ) -> None:
     # Recommendations tab — load + autosave behavior.
     recommendations_callbacks.register(
@@ -103,7 +104,8 @@ def register_callbacks(
     # map => every source behaves as z unknown (z=0), exactly as before.
     from ..data.source_params import (
         find_source_params, load_redshifts, redshift_for)
-    _redshift_map = load_redshifts(find_source_params(results_dir))
+    _redshift_map = load_redshifts(
+        find_source_params(results_dir, source_params_path))
 
     # Absolute astrometric core positions (astrometry_mojave.dat), loaded once.
     # Drives the "Astrometric reference" header checkbox: where a source+epoch
@@ -114,8 +116,7 @@ def register_callbacks(
     from ..data.astrometry import (
         apply_astrometric_reference, astrometry_for, find_astrometry_file,
         load_astrometry)
-    _astrometry_path = (Path(astrometry_path) if astrometry_path
-                        else find_astrometry_file(results_dir))
+    _astrometry_path = find_astrometry_file(results_dir, astrometry_path)
     _astrometry = load_astrometry(_astrometry_path)
 
     # Local helpers that resolve a (source, model) pair into a possibly

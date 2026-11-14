@@ -79,8 +79,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the absolute-astrometry table (astrometry_mojave.dat) "
              "behind the 'Astrometric reference' checkbox. Defaults to the "
-             "first of ./, <results-dir>/../ or <results-dir>/ that has one; "
+             "first of <results-dir>/../, <results-dir>/ or ./ that has one; "
              "without it the option is disabled.",
+    )
+    p.add_argument(
+        "--source-params",
+        type=Path,
+        default=None,
+        help="Override the per-source parameter table "
+             "(source_run_param.csv), which supplies the redshifts behind "
+             "host-frame Tb and beta_app. Defaults to the first of "
+             "<results-dir>/../, <results-dir>/ or ./ that has one; without "
+             "it every source is treated as z unknown.",
     )
     p.add_argument(
         "--xviii-table",
@@ -215,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         xviii_path=str(args.xviii_table) if args.xviii_table else None,
         astrometry_path=(str(args.astrometry_file)
                          if args.astrometry_file else None),
+        source_params_path=(str(args.source_params)
+                            if args.source_params else None),
     )
 
     # The launcher hits the bound port directly (root), even when a public

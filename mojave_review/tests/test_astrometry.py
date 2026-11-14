@@ -109,16 +109,26 @@ def test_malformed_and_missing_are_tolerated(tmp_path):
 
 
 def test_find_file_search_order(tmp_path, monkeypatch):
+    """Project root, then results_dir, then cwd LAST.
+
+    cwd used to come first. It was demoted on 2026-11-14 so that one process
+    serving several projects can't apply whichever directory it started in to
+    all of them; see ``docs/multi_project.md`` and
+    ``tests/test_project_scoping.py`` for the fuller contract.
+    """
     results = tmp_path / "data" / "Results"
     results.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     assert find_astrometry_file(results) is None
-    # parent of results_dir
-    (results.parent / "astrometry_mojave.dat").write_text("")
-    assert find_astrometry_file(results) == results.parent / "astrometry_mojave.dat"
-    # cwd wins
+    # cwd alone is still found — it is a fallback, not forbidden.
     (tmp_path / "astrometry_mojave.dat").write_text("")
     assert find_astrometry_file(results) == tmp_path / "astrometry_mojave.dat"
+    # ... but the project's own file outranks it.
+    (results.parent / "astrometry_mojave.dat").write_text("")
+    assert find_astrometry_file(results) == results.parent / "astrometry_mojave.dat"
+    # An explicit path outranks everything.
+    pinned = tmp_path / "pinned.dat"
+    assert find_astrometry_file(results, pinned) == pinned
 
 
 # ---------------------------------------------------------------------------

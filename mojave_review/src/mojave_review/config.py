@@ -21,6 +21,8 @@ YAML format
     recommendations_dir: /data/recommendations
     cache_dir: /data/fits_cache
     fits_data_dir: /data/mojave_fits   # optional
+    source_params_file: /data/source_run_param.csv   # optional
+    astrometry_file: /data/astrometry_mojave.dat     # optional
 
     # Authentication
     tokens_file: /etc/mojave-review/tokens.yaml
@@ -45,6 +47,8 @@ Environment variables
 * ``MOJAVE_REVIEW_CACHE_DIR``
 * ``MOJAVE_REVIEW_FITS_DATA_DIR`` (alias: ``MOJAVE_DATA`` — kept for
   back-compat with Phase 1)
+* ``MOJAVE_REVIEW_SOURCE_PARAMS_FILE``
+* ``MOJAVE_REVIEW_ASTROMETRY_FILE``
 * ``MOJAVE_REVIEW_TOKENS_FILE``
 * ``MOJAVE_REVIEW_ADMIN_CONTACT``
 * ``MOJAVE_REVIEW_COOKIE_SECURE`` (``true``/``false``)
@@ -83,6 +87,17 @@ class Config:
     recommendations_dir: Path | None = None     # resolved post-init
     cache_dir: Path | None = None               # resolved post-init
     fits_data_dir: Path | None = None
+    # Per-project data tables that live NEXT TO the production data rather
+    # than under results_dir. Both were previously *discovered* by searching
+    # cwd -> results_dir.parent -> results_dir, with no config key at all.
+    # cwd-first is fine for a single project but is a correctness hazard as
+    # soon as one process serves several (whichever directory the process
+    # started in would win for every project), and it already means running
+    # the app from the wrong directory silently picks up the wrong file.
+    # Setting these pins the files explicitly; leaving them None keeps the
+    # discovery fallback. See docs/multi_project.md.
+    source_params_file: Path | None = None      # source_run_param.csv
+    astrometry_file: Path | None = None         # astrometry_mojave.dat
 
     # Auth
     tokens_file: Path | None = None
@@ -196,6 +211,8 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "recommendations_dir": ("MOJAVE_REVIEW_RECOMMENDATIONS_DIR",),
     "cache_dir":           ("MOJAVE_REVIEW_CACHE_DIR",),
     "fits_data_dir":       ("MOJAVE_REVIEW_FITS_DATA_DIR", "MOJAVE_DATA"),
+    "source_params_file":  ("MOJAVE_REVIEW_SOURCE_PARAMS_FILE",),
+    "astrometry_file":     ("MOJAVE_REVIEW_ASTROMETRY_FILE",),
     "tokens_file":         ("MOJAVE_REVIEW_TOKENS_FILE",),
     "admin_contact":       ("MOJAVE_REVIEW_ADMIN_CONTACT",),
     "cookie_secure":       ("MOJAVE_REVIEW_COOKIE_SECURE",),

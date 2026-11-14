@@ -4,6 +4,51 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Per-project data files and per-app session cookie
+
+Groundwork for serving several projects from one install (see
+[`docs/multi_project.md`](docs/multi_project.md)); both halves are worth having
+on a single-project deployment too.
+
+- **`source_run_param.csv` and `astrometry_mojave.dat` are now configurable.**
+  New `source_params_file` / `astrometry_file` config keys, with
+  `MOJAVE_REVIEW_SOURCE_PARAMS_FILE` / `MOJAVE_REVIEW_ASTROMETRY_FILE` env
+  vars and `--source-params` / `--astrometry-file` flags. Previously neither
+  had a config key at all — they were found by searching the filesystem.
+- **cwd is now the LAST discovery slot, not the first**: `results_dir` parent →
+  `results_dir` → cwd. The old order meant whichever directory the app started
+  in won, which silently applies one project's redshifts to another when one
+  process serves several — and already meant running the app from the wrong
+  directory picked up the wrong file. Keeping cwd last preserves the
+  convenience of a one-off local run without letting it override a project's
+  own file.
+- **An explicit path is returned even when the file is missing**, so a typo
+  reads as "no redshifts" against the path the operator named rather than
+  quietly falling back to a discovered file somewhere else.
+- **The auth session cookie is scoped per app.** `auth/middleware.py` used a
+  single `COOKIE_NAME = "mr_token"` and omitted `path=` on both `set_cookie`
+  calls, so Flask applied `path="/"`. Two apps on one host therefore shared one
+  cookie slot: visiting project B overwrote project A's token, returning to A
+  gave a 403, and with separate `tokens.yaml` files the reviewer would
+  ping-pong indefinitely. `cookie_identity(url_base_prefix)` now derives
+  `(name, path)` — root-mounted keeps the historical `("mr_token", "/")` so no
+  existing session breaks, while a prefix gets
+  `("mr_token_<slug>", "<prefix>")`.
+- Reproduced and fixed end-to-end against two live servers sharing one cookie
+  jar (cookies ignore the port, so that is a faithful browser): returning to
+  the first project was a **403 before** and a **200 after**, with both
+  cookies coexisting in the jar.
+- Verified both projects side by side: MOJAVE loads 409 redshifts plus its
+  astrometry table; BK224 loads its own 25, reports `(no astrometry file)` and
+  disables that option (it will light up by itself if a table is added later),
+  and its Flux view reads `Tb host-frame [K]` — proving BK224's own CSV, since
+  MOJAVE's does not contain its sources.
+- 28 tests in `tests/test_project_scoping.py`. One existing test
+  (`test_astrometry.py::test_find_file_search_order`) asserted the old
+  cwd-first order and was updated to the new contract.
+
+---
+
 ## 2026-11-09 — Auto-balance can give back surplus assignments
 
 - **The gap.** Auto-balance's *add* side always respected the review target

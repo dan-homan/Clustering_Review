@@ -113,19 +113,31 @@ class AstroApplied:
 # ---------------------------------------------------------------------------
 
 
-def find_astrometry_file(results_dir: Path) -> Path | None:
-    """Locate ``astrometry_mojave.dat``. Checks, in order: the current working
-    directory (where the user runs the app from), the parent of ``results_dir``,
-    then ``results_dir`` itself — the same search as ``source_run_param.csv``.
-    Returns None if not found."""
+def find_astrometry_file(
+    results_dir: Path, explicit: Path | str | None = None,
+) -> Path | None:
+    """Locate ``astrometry_mojave.dat`` — the same search as
+    ``source_run_param.csv`` (see
+    :func:`data.source_params.find_source_params` for why cwd is last).
+
+    ``explicit`` (the ``astrometry_file`` config key / ``--astrometry-file``)
+    wins outright when given. Otherwise: the parent of ``results_dir``, then
+    ``results_dir``, then the current working directory.
+
+    Returns None when nothing is found — a perfectly normal state for a
+    project with no astrometry yet, which disables the header option rather
+    than erroring.
+    """
+    if explicit is not None:
+        return Path(explicit).expanduser()
     candidates = [
-        Path.cwd() / _DAT_NAME,
         Path(results_dir).parent / _DAT_NAME,
         Path(results_dir) / _DAT_NAME,
+        Path.cwd() / _DAT_NAME,
     ]
-    for p in candidates:
-        if p.is_file():
-            return p
+    for cand in candidates:
+        if cand.is_file():
+            return cand
     return None
 
 

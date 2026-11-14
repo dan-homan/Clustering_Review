@@ -36,6 +36,7 @@ The launcher exposes this as ``--insecure-cookies``.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from urllib.parse import urlencode
@@ -53,8 +54,17 @@ log = get_logger(__name__)
 # Tunables
 # ---------------------------------------------------------------------------
 
-# Cookie name. ``mr_`` prefix avoids collisions with anything else the
+# Default cookie name. ``mr_`` prefix avoids collisions with anything else the
 # host application may set on the same domain.
+#
+# When SEVERAL apps are served from one host (one project per path prefix —
+# see docs/multi_project.md) a single shared name is not enough: the browser
+# keys cookies on (domain, path, name), so two apps using "mr_token" at
+# path="/" occupy the same slot and overwrite each other. A reviewer who
+# visited project A then project B would find A's token replaced by B's, get a
+# 403 from A, and ping-pong forever if the projects have separate tokens.yaml
+# files. :func:`cookie_identity` derives a per-app (name, path) pair from the
+# app's URL prefix so each project keeps its own slot.
 COOKIE_NAME = "mr_token"
 
 # How long a cookie lives after the last successful resolve. The
@@ -66,6 +76,39 @@ DEFAULT_COOKIE_MAX_AGE_DAYS = 30
 # triggers dozens of Set-Cookie roundtrips. 24 h is a good balance
 # between "kept fresh" and "noisy headers".
 _COOKIE_REFRESH_FLOOR_SECONDS = 24 * 3600
+
+# Characters allowed in the slug appended to the cookie name. Cookie names are
+# tokens per RFC 6265 and may not contain "/" or most punctuation.
+_COOKIE_SLUG_RE = re.compile(r"[^A-Za-z0-9_]+")
+
+
+def cookie_identity(url_base_prefix: str | None) -> tuple[str, str]:
+    """``(cookie_name, cookie_path)`` for an app served under
+    ``url_base_prefix``.
+
+    Root-mounted (``None`` / ``"/"``) keeps the historical
+    ``("mr_token", "/")``, so existing single-project deployments see no
+    change and nobody is logged out by an upgrade.
+
+    Under a prefix the name gains a slug and the path is the prefix itself:
+    ``"/mojave-review/"`` → ``("mr_token_mojave_review", "/mojave-review/")``.
+    Either half alone would fix the collision; both are set because they fail
+    in different directions. The *path* is what actually stops the browser
+    sending project A's cookie to project B — but a path-scoped cookie is
+    invisible to a differently-prefixed sibling, so a stray one is hard to
+    diagnose without a distinguishing *name*. The name also covers the case
+    where one app is root-mounted and another is prefixed, since ``path="/"``
+    matches every request.
+    """
+    prefix = (url_base_prefix or "/").strip()
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    if prefix == "/":
+        return COOKIE_NAME, "/"
+    slug = _COOKIE_SLUG_RE.sub("_", prefix).strip("_").lower()
+    return (f"{COOKIE_NAME}_{slug}" if slug else COOKIE_NAME), prefix
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +191,7 @@ def install_token_middleware(
     cookie_secure: bool = True,
     cookie_max_age_days: int = DEFAULT_COOKIE_MAX_AGE_DAYS,
     admin_contact: str = "the admin",
+    url_base_prefix: str | None = None,
 ) -> None:
     """Wire the before_request hook + the cookie-refresh after_request hook.
 
@@ -174,9 +218,16 @@ def install_token_middleware(
         Dash callback POST.
     admin_contact :
         Free-text "email this person" string shown on the 403 page.
+    url_base_prefix :
+        The path this app is served under, used only to scope the session
+        cookie (see :func:`cookie_identity`). ``None`` → root-mounted, which
+        keeps the historical cookie name and path so an upgrade doesn't log
+        anyone out. Pass the app's real prefix whenever several apps share a
+        host, or their cookies will collide.
     """
     cache = _StoreCache()
     cookie_max_age = int(cookie_max_age_days * 86400)
+    cookie_name, cookie_path = cookie_identity(url_base_prefix)
 
     def _resolve(token: str | None) -> User | None:
         if not token:
@@ -207,8 +258,9 @@ def install_token_middleware(
                 tail = ("?" + urlencode(clean_qs)) if clean_qs else ""
                 resp = redirect(request.path + tail, code=302)
                 resp.set_cookie(
-                    COOKIE_NAME, url_token,
+                    cookie_name, url_token,
                     max_age=cookie_max_age,
+                    path=cookie_path,
                     httponly=True,
                     secure=cookie_secure,
                     samesite="Lax",
@@ -227,7 +279,7 @@ def install_token_middleware(
                         request.headers.get("User-Agent", "")[:120])
 
         # ---- 2) Cookie ------------------------------------------------
-        cookie_token = request.cookies.get(COOKIE_NAME)
+        cookie_token = request.cookies.get(cookie_name)
         user = _resolve(cookie_token)
         if user is not None:
             g.review_user = user
@@ -253,8 +305,9 @@ def install_token_middleware(
         token = getattr(g, "_refresh_cookie_token", None)
         if token:
             resp.set_cookie(
-                COOKIE_NAME, token,
+                cookie_name, token,
                 max_age=cookie_max_age,
+                path=cookie_path,
                 httponly=True,
                 secure=cookie_secure,
                 samesite="Lax",

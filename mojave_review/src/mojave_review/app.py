@@ -41,6 +41,7 @@ def create_app(
     url_base_prefix: str | None = None,
     xviii_path: str | None = None,
     astrometry_path: str | None = None,
+    source_params_path: str | None = None,
 ) -> Dash:
     """Build the Dash app.
 
@@ -169,6 +170,7 @@ def create_app(
         admin=admin,
         fits_data_dir=fits_data_dir,
         astrometry_path=astrometry_path,
+        source_params_path=source_params_path,
     )
 
     # Admin-only dashboard callbacks (auto-balance + reassign-queue).
@@ -200,6 +202,7 @@ def create_app(
         admin=admin,
         fits_data_dir=fits_data_dir,
         xviii_path=xviii_path,
+        source_params_path=source_params_path,
     )
 
     # Prevent the browser from caching the index HTML.
@@ -242,6 +245,12 @@ def create_app(
             tokens_path=tokens_path,
             cookie_secure=cookie_secure,
             admin_contact=admin_contact,
+            # Scopes the session cookie to this app's path, and gives it a
+            # name derived from the prefix. Root-mounted (None) keeps the
+            # historical ("mr_token", "/"), so a single-project deployment
+            # sees no change; with several apps on one host it is what stops
+            # them overwriting each other's token.
+            url_base_prefix=url_base_prefix,
         )
 
     return app

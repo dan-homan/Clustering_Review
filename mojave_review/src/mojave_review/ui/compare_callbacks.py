@@ -204,8 +204,10 @@ def register_compare_callbacks(
     admin: bool = False,
     fits_data_dir: Path | None = None,
     xviii_path: str | None = None,
+    source_params_path: str | None = None,
 ) -> None:
-    _redshift_map = load_redshifts(find_source_params(results_dir))
+    _redshift_map = load_redshifts(
+        find_source_params(results_dir, source_params_path))
 
     def _resolve(kind: str, source_folder: str) -> _Side | None:
         if not source_folder:

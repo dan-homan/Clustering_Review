@@ -104,8 +104,9 @@ sizePA, bmaj, bmin, bpa, inoise, pnoise`.
 ### `source_run_param.csv` (one row per source; local data, gitignored)
 
 NOT under `Results/` — a CSV next to the production data (found via
-`data/source_params.find_source_params`: cwd → `results_dir` parent →
-`results_dir`). App reads only `Source` (band-less, e.g. `0003+380`, matched via
+`data/source_params.find_source_params`: `results_dir` parent → `results_dir`
+→ cwd **last**; `--source-params` / `source_params_file` override). App reads
+only `Source` (band-less, e.g. `0003+380`, matched via
 `split_source_band`) and `redshift` (float `z`, blank = unknown). Loaded once
 into `{source: z}` (`load_redshifts`); blank/non-positive z → treated as z=0.
 Drives host-frame Tb `(1+z)` and Kinematics `beta_app`.
@@ -114,7 +115,8 @@ Drives host-frame Tb `(1+z)` and Kinematics `beta_app`.
 
 NOT under `Results/` — a fixed-layout text file next to the production data,
 found the same way as `source_run_param.csv` (`data/astrometry.find_astrometry_file`:
-cwd → `results_dir` parent → `results_dir`; `--astrometry-file` overrides). Holds
+`results_dir` parent → `results_dir` → cwd **last**; `--astrometry-file` /
+`astrometry_file` override). Holds
 **absolute** RA/Dec of the core (cluster 0) with 1σ errors, for ~271 of our 487
 sources and usually a minority of each one's epochs. Line layout (whitespace-split):
 
@@ -1055,6 +1057,25 @@ auto-discovered otherwise). For Drive data: use Google Drive for Desktop and poi
   arrived carrying the robust flag of the cluster it came from (that's
   `0415+379u` cl 999: the 2017.46 core row, 0 fitted epochs, robust=True). It
   now demotes 999 unconditionally, and still never promotes it.
+- **`source_run_param.csv` / `astrometry_mojave.dat` are per-PROJECT, and cwd
+  is the LAST discovery slot** (`results_dir` parent → `results_dir` → cwd),
+  pinnable via `source_params_file` / `astrometry_file` (config) or
+  `--source-params` / `--astrometry-file`. cwd used to be searched *first*,
+  which silently applied whichever directory the app started in; with one
+  process serving several projects that would give project B project A's
+  redshifts, failing only as wrong Tb / missing `beta_app`. An explicit path is
+  returned **even when the file is missing**, so a typo reads as "no
+  redshifts" against the named path instead of falling back to a stray file.
+- **The auth cookie is scoped per app** —
+  `auth.middleware.cookie_identity(url_base_prefix)` → `(name, path)`.
+  Root-mounted keeps the historical `("mr_token", "/")` so an upgrade logs
+  nobody out; a prefix gives `("mr_token_<slug>", "<prefix>")`. Both halves
+  matter: the *path* stops the browser sending project A's cookie to B, the
+  *name* keeps a stray cookie diagnosable and covers a root-mounted app
+  (whose `path="/"` matches everything) plus nested prefixes (`/review/` is a
+  path-prefix of `/review/bk224/`). Without this, two apps on one host
+  overwrite each other's token and a reviewer 403s on returning to the first
+  — reproduced and fixed against two live servers sharing one cookie jar.
 - **Don't write back into `Results/`.** Recommendations are the only output.
 - **`grab_mojave_image` opens local files, not URLs.** The web app has its own
   fetcher; don't reuse that function.

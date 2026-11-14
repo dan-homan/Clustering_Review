@@ -48,6 +48,10 @@ _app = create_app(
     tokens_path=_config.tokens_file,
     cookie_secure=_config.cookie_secure,
     admin_contact=_config.admin_contact,
+    astrometry_path=(str(_config.astrometry_file)
+                     if _config.astrometry_file else None),
+    source_params_path=(str(_config.source_params_file)
+                        if _config.source_params_file else None),
 )
 
 # What gunicorn looks for.

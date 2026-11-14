@@ -62,10 +62,11 @@ Two consequences of the **zero source overlap**:
 `(no astrometry file)`, and every plot keeps the fitted-core reference. Already
 the correct behaviour.
 
-## The cookie is not scoped per app — fix before per-project tokens
+## The cookie was not scoped per app  *(FIXED 2026-11-14)*
 
-**This is the one real blocker for "different reviewers per project"**, found
-while checking whether it was cheap.
+**This was the one real blocker for "different reviewers per project"**, found
+while checking whether it was cheap. Kept here because the failure mode is
+worth recognising if it ever resurfaces.
 
 `auth/middleware.py` uses a single module constant `COOKIE_NAME = "mr_token"`,
 and both `set_cookie` calls omit `path=`, so Flask applies its default
@@ -83,28 +84,43 @@ harmless (one token is valid everywhere), which is the fallback if this isn't
 fixed — so the choice between shared and per-project reviewers really is a
 choice about whether to do this bit of work.
 
-The fix is small and standard, and doing **both halves** is belt-and-braces:
+The fix (shipped) does **both halves**, because they fail in different
+directions:
 
-- pass `path=<the app's url prefix>` on both `set_cookie` calls, so the browser
-  only sends each project's cookie to that project's paths; **and**
-- make the cookie name per-app (e.g. `mr_token_<project slug>`), which also
-  covers a root-mounted app and makes a stray cookie diagnosable by name.
+- `path=<the app's url prefix>` on both `set_cookie` calls, so the browser only
+  sends each project's cookie to that project's paths — this is what actually
+  prevents the collision; **and**
+- a per-app cookie name (`mr_token_<slug>`), because a path-scoped cookie is
+  invisible to a differently-prefixed sibling and so hard to diagnose without a
+  distinguishing name. It also covers a root-mounted app, whose `path="/"`
+  matches every request, and nested prefixes — `/review/` *is* a path-prefix of
+  `/review/bk224/`, so path alone would not separate them.
 
-Both want the cookie identity threaded from config into
-`auth.middleware.install`, which currently closes over `cookie_secure` and
-`cookie_max_age_days` only — the same shape, so no new pattern.
+`cookie_identity(url_base_prefix)` returns the pair;
+`install_token_middleware(url_base_prefix=)` threads it in alongside the
+`cookie_secure` / `cookie_max_age_days` it already closes over.
 
 ## What is actually left to build
 
 In dependency order. Each step is independently testable, and the first two are
 worth doing on their own merits even if multi-project stalled.
 
-1. **Make the discovered files configured.** Add `source_params_file` and
-   `astrometry_file` to `Config` (the latter is currently a CLI-only
-   pass-through), keep discovery as the fallback, and demote or drop the
-   cwd-first rule. Removes a footgun that already exists single-project.
-2. **Scope the auth cookie per app** (above). Needed only for per-project
-   tokens, but cheap.
+1. ~~**Make the discovered files configured.**~~ **DONE 2026-11-14.**
+   `source_params_file` and `astrometry_file` are `Config` keys (plus
+   `MOJAVE_REVIEW_SOURCE_PARAMS_FILE` / `MOJAVE_REVIEW_ASTROMETRY_FILE` and
+   `--source-params` / `--astrometry-file`), threaded through `create_app` →
+   `register_callbacks` / `register_compare_callbacks`. Discovery remains the
+   fallback but **cwd is now last**, not first. An explicit path is returned
+   even when absent, so a typo surfaces rather than silently falling back.
+   Verified both projects side by side: MOJAVE loads 409 redshifts + its
+   astrometry, BK224 loads its own 25 and correctly reports
+   `(no astrometry file)`.
+2. ~~**Scope the auth cookie per app.**~~ **DONE 2026-11-14.**
+   `auth.middleware.cookie_identity(url_base_prefix)` → `(name, path)`;
+   `install_token_middleware(url_base_prefix=)` uses it for both `set_cookie`
+   calls and the read. Root-mounted is unchanged, so no existing session
+   breaks. The collision was reproduced end-to-end (two live servers, one
+   cookie jar: step 4 returned 403 before, 200 after).
 3. **Split the Dash prefix knobs.** `create_app` passes one
    `url_base_pathname`; mounting behind a dispatcher needs
    `routes_pathname_prefix` + `requests_pathname_prefix` separately. One new

@@ -41,18 +41,42 @@ _CSV_NAME = "source_run_param.csv"
 # ---------------------------------------------------------------------------
 
 
-def find_source_params(results_dir: Path) -> Path | None:
-    """Locate ``source_run_param.csv``. Checks, in order: the current working
-    directory (where the user runs the app from), the parent of ``results_dir``,
-    then ``results_dir`` itself. Returns None if not found."""
+def find_source_params(
+    results_dir: Path, explicit: Path | str | None = None,
+) -> Path | None:
+    """Locate ``source_run_param.csv``.
+
+    ``explicit`` (the ``source_params_file`` config key / ``--source-params``)
+    wins outright when given — returned even if it doesn't exist, so a typo
+    surfaces as "no redshifts" against a path the operator named rather than
+    being papered over by a discovered file from somewhere else.
+
+    Otherwise search, in order:
+
+    1. the parent of ``results_dir`` — the project root, where the production
+       data keeps it;
+    2. ``results_dir`` itself;
+    3. the current working directory, **last**.
+
+    cwd used to be searched *first*. It is now the final fallback: the file is
+    a property of the project, not of wherever the app happened to be started,
+    and with several projects served from one process a cwd hit would silently
+    apply one project's redshifts to all of them. Keeping it last preserves the
+    convenience for a one-off local run without letting it override the
+    project's own file. See ``docs/multi_project.md``.
+
+    Returns None when nothing is found.
+    """
+    if explicit is not None:
+        return Path(explicit).expanduser()
     candidates = [
-        Path.cwd() / _CSV_NAME,
         Path(results_dir).parent / _CSV_NAME,
         Path(results_dir) / _CSV_NAME,
+        Path.cwd() / _CSV_NAME,
     ]
-    for p in candidates:
-        if p.is_file():
-            return p
+    for cand in candidates:
+        if cand.is_file():
+            return cand
     return None
 
 
