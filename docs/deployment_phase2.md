@@ -187,17 +187,57 @@ e.g. `https://mojave-review.denison.edu/`) or under a **path prefix**
   told. The token-bootstrap URL is `https://<host>/mojave-review/?token=…`
   either way.
 
-  **This bit was wrong in production until 2026-11-14.** `wsgi.py` never
-  passed `url_base_prefix` to `create_app`, so the deployed app ran
-  root-mounted behind a stripping proxy. Pages and callbacks worked (every
-  request was stripped on the way in), but two things were quietly broken:
-  every `rel()` link — "📋 Assignment Dashboard", "⚖ XVIII Comparison", the
-  dashboard's `?source=` deep-links, "← Back to review" — resolved to
-  `https://<host>/dashboard` etc., **outside** the proxied location; and the
-  post-`?token=` redirect sent reviewers to the site root. Login still
-  appeared to work because the cookie was set (at `Path=/`) before that
-  redirect, so a second click of the bookmark succeeded — which is probably
-  why it went unreported.
+### What mojave.denison.edu actually does — leave `url_base_prefix` UNSET there
+
+The live Denison proxy is **neither** of the two clean shapes above, and
+`url_base_prefix` must stay unset on that host. Established 2026-11-14 by
+deploying the key and reading the failure pattern:
+
+| config | result |
+|---|---|
+| `url_base_prefix` unset | **works** |
+| set + `proxy_strips_prefix: true` | page spins forever |
+| set + `proxy_strips_prefix: false` | immediate 404 |
+
+A stripping proxy predicts true=works / false=404; a preserving one predicts
+the reverse; **neither** predicts "unset works", because a root-mounted app
+emits root-relative `/_dash-component-suites/…` URLs that would fall outside a
+`location /mojave-review/` and 404. The only shape reproducing all three —
+confirmed by loading `https://mojave.denison.edu/dashboard` and `/` directly,
+both of which serve the app:
+
+```nginx
+location = /mojave-review/ { proxy_pass http://127.0.0.1:8050/; }  # strips, ENTRY PATH ONLY
+location   /               { proxy_pass http://127.0.0.1:8050;  }  # everything else verbatim
+```
+
+Only the bare entry URL is translated; every other path reaches the app
+unchanged. So the app is correctly **root-mounted** there, and every in-app
+link works through the broad rule. The two failures decode as:
+
+- **`true` → spin.** The app serves routes at `/` but emits
+  `/mojave-review/_dash-layout`, which the broad rule passes through verbatim;
+  that misses the route table and falls through Dash's catch-all, returning the
+  **index HTML instead of JSON**. The front-end waits forever for a layout.
+- **`false` → 404.** Routes move to `/mojave-review/`, but the entry rule has
+  already stripped the prefix, so the app sees `/` and matches nothing.
+
+**Implication for hosting several projects:** mount them at **root-level**
+paths (`/mojave/`, `/bk224/`), which the broad rule already proxies verbatim —
+no proxy change, no IT request. A redirect at `/` sends old
+`/mojave-review/?token=…` bookmarks (stripped to `/` by the entry rule) on to
+the default project. Do **not** plan on `/mojave-review/<project>/`: the entry
+rule only translates the bare path, so sub-paths under it arrive unstripped and
+would need the proxy changed.
+
+**A note on the misdiagnosis**, since the reasoning is an easy trap: the live
+page source showing `requests_pathname_prefix: "/"` was read as proof of a
+stripping proxy and therefore of broken `rel()` links. It proved only that the
+app was root-mounted. The decisive evidence was available all along and
+pointed the other way — a root-mounted app whose page *renders* must be
+receiving its root-relative asset requests, which a prefix-only location could
+not deliver. Check which locations exist before concluding anything about
+in-app links.
 
 The local launcher always talks to the bound port directly, so it opens
 `http://127.0.0.1:<port>/mojave-review/` (or `…/` at root) for you.

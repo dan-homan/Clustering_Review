@@ -4,54 +4,69 @@ Changes are grouped by feature area, newest first.
 
 ---
 
-## 2026-11-14 — Fix: in-app links and the login redirect behind a path prefix
+## 2026-11-14 — `proxy_strips_prefix`, and what the Denison proxy actually does
 
-Two latent production bugs, both from one omission: `wsgi.py` never passed
-`url_base_prefix` to `create_app`, so the deployed app ran **root-mounted**
-behind a reverse proxy that strips the prefix. Confirmed from the live page
-source: `"url_base_pathname": null, "requests_pathname_prefix": "/"` while the
-public URL is `https://mojave.denison.edu/mojave-review/`.
+**Correction to this entry as first written.** It claimed two latent
+production bugs (in-app links and the post-login redirect pointing outside the
+app). That diagnosis was **wrong** — see "What the proxy really does" below.
+The code is sound and inert by default, but it fixes nothing on the current
+deployment. Recording the misdiagnosis because the reasoning that produced it
+is an easy trap to fall into twice.
 
-- **Every in-app link pointed outside the app.** `ui.urls.rel()` builds links
-  from `requests_pathname_prefix`, which was `/`, so "📋 Assignment
-  Dashboard" rendered as `/dashboard` → `https://<host>/dashboard`, outside
-  the proxied `location /mojave-review/`. Same for "⚖ XVIII Comparison", the
-  dashboard's `?source=` deep-links and "← Back to review". Reproduced
-  against a faithful nginx simulation: **404 before, 200 after**.
-- **The post-login redirect left the app.** The token middleware redirects to
-  `request.path`, which is the *post-proxy* path — `/` — so a fresh
-  `?token=…` bookmark sent the reviewer to the site root. It self-healed on a
-  second click, because the cookie was already set, which is probably why it
-  was never reported.
-- **The fix** is to use Dash's two prefix knobs properly, via a new
-  `proxy_strips_prefix` config key (`--proxy-strips-prefix`,
-  `MOJAVE_REVIEW_PROXY_STRIPS_PREFIX`):
+### What shipped
 
-  | | `routes_pathname_prefix` | `requests_pathname_prefix` |
+- New `proxy_strips_prefix` config key (`--proxy-strips-prefix`,
+  `MOJAVE_REVIEW_PROXY_STRIPS_PREFIX`), selecting between Dash's two prefix
+  knobs:
+
+  | | `routes_pathname_prefix` (what the app serves) | `requests_pathname_prefix` (what the browser asks for) |
   |---|---|---|
-  | prefix preserved (`proxy_pass …:8050;`) | `/mojave-review/` | `/mojave-review/` |
-  | prefix stripped (`proxy_pass …:8050/;`) | `/` | `/mojave-review/` |
+  | `false` (proxy preserves the prefix) | `/mojave-review/` | `/mojave-review/` |
+  | `true` (proxy strips it) | `/` | `/mojave-review/` |
 
-  The middleware gained `public_path()` for the redirect and now scopes the
-  session cookie to the public prefix.
-- **Root-hosted behaviour is byte-identical**, so a local
-  `mojave-review --results-dir Results` is unaffected and no existing session
-  is invalidated.
-- **The code change alone is inert on the server.** The deployed
-  `config.yaml` sets no `url_base_prefix` at all, so a pull + restart changes
-  nothing until these two keys are added:
-
-  ```yaml
-  url_base_prefix: /mojave-review/
-  proxy_strips_prefix: true
-  ```
-
-- `docs/deployment_phase2.md` previously documented only the prefix-preserving
-  nginx recipe and called the stripping form "the original doc's mistake" —
-  but the stripping form is what is actually deployed, and it works fine once
-  the app is told. Both are now documented, with the page-source diagnostic
-  for identifying an existing deployment.
+- `wsgi.py` now passes `url_base_prefix` (and the new key) to `create_app`;
+  previously it passed neither, so the config key was read but ignored.
+- `auth/middleware.public_path()` builds the post-login redirect against the
+  browser-visible path, and the session cookie is scoped to the public prefix.
+- **Root-hosted behaviour is byte-identical** — both default to off, so a local
+  `mojave-review --results-dir Results` and any existing session are
+  unaffected. This is what makes the change safe to carry unused.
 - 24 tests in `tests/test_proxy_prefix.py`.
+
+### What the proxy really does
+
+Deploying the two keys broke the site in two different ways, and the pattern of
+failures identified the proxy:
+
+| config | result on webby |
+|---|---|
+| both keys absent | **works** |
+| `proxy_strips_prefix: true` | page spins forever |
+| `proxy_strips_prefix: false` | immediate 404 |
+
+No simple prefix-mapped proxy explains all three (a stripping proxy predicts
+true=works/false=404; a preserving one predicts the reverse; and **neither**
+predicts "absent works", since the root-relative `/_dash-component-suites/…`
+URLs a root-mounted app emits would fall outside a `location /mojave-review/`
+and 404). Reproducing all three required this shape, since confirmed by
+loading `https://mojave.denison.edu/dashboard` and `/` directly — both serve
+the app:
+
+```nginx
+location = /mojave-review/ { proxy_pass http://127.0.0.1:8050/; }  # strips, entry path only
+location   /               { proxy_pass http://127.0.0.1:8050;  }  # everything else verbatim
+```
+
+Only the bare entry URL is translated; every other path reaches the app
+unchanged. So the app is **correctly root-mounted** on this host, in-app links
+and the login redirect have always worked (via the broad rule), and
+`url_base_prefix` must stay unset there. The spin was
+`/mojave-review/_dash-layout` falling through Dash's catch-all and returning
+the index HTML instead of JSON; the 404 was routes mounted under a prefix the
+entry rule had already stripped.
+
+`docs/deployment_phase2.md` documented a single prefix-preserving `location`
+that this deployment does not have; it now describes the real arrangement.
 
 ---
 
