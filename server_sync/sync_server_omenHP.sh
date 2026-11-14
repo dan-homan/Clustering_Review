@@ -163,8 +163,18 @@ fi
 # CHANGED item only, so it stays quiet on a routine sync and gets loud exactly
 # when you want it to -- including "*deleting ..." lines, which are the ones
 # worth reading.
+# OS junk is excluded on EVERY leg, not just Results/. Only the Results leg
+# passed --exclude-from, so notes/ and recommendations/_admin/ had been pushing
+# macOS AppleDouble files ("._foo.md") and .DS_Store to the server for months;
+# they then showed up as "*deleting ._*" once --itemize-changes made the plan
+# visible. Harmless metadata either way, but it has no business on the server.
+# The heavy Results-only patterns (PDF/MP4 renders, cluster_fits/) stay in
+# server_update_exclude.txt, which only that leg passes.
+_JUNK=(--exclude='.DS_Store' --exclude='._*' --exclude='*.swp'
+       --exclude='Thumbs.db' --exclude='*.part' --exclude='*.tmp')
+
 mirror() { rsync -az --delete --itemize-changes --timeout=300 \
-                 -e "$SSH" $DRY "$@"; }
+                 "${_JUNK[@]}" -e "$SSH" $DRY "$@"; }
 
 echo "--> notes/  ->  server"
 mirror ./notes/ "$REMOTE:$REMOTE_BASE/notes/"

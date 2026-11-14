@@ -289,6 +289,38 @@ Only switch to `auto` once you're comfortable with how it behaves.
   undo buffer. Your production data dir is also under Dropbox, which keeps its
   own longer-term version history of the workstation copy.
 
+## Reading the rsync plan
+
+`--itemize-changes` prints one line per changed item. The common ones:
+
+| line | meaning |
+|---|---|
+| `>f+++++++ path` | new file being **sent** to the server |
+| `<f..t....  path` | file being **received**, timestamp differs |
+| `.f...p... path` | file **unchanged**; only permissions differ |
+| `.d..t.... path/` | directory; only its timestamp differs |
+| `*deleting path` | exists on the **server**, not locally → `--delete` removes it |
+
+`.f...p...` and `.d..t....` are metadata-only: content is identical and
+nothing is transferred. A first sync after the server copy was created by a
+different tool (or under a different umask) typically shows a wall of these
+once, then settles.
+
+**`*deleting ._something`** is macOS AppleDouble metadata — the `._` sidecars
+the Finder leaves on non-native filesystems. They are not data, and removing
+them from the server is desirable. They were there because only the `Results/`
+leg passed `--exclude-from`; `notes/` and `recommendations/_admin/` did not, so
+they pushed junk for months. All legs now exclude it (`_JUNK` in the script).
+
+One wrinkle from that fix: rsync does **not** delete excluded files, so junk
+already on the server stays. Clear it once:
+
+```bash
+ssh homand@webby.cc.denison.edu \
+    "find /home/homand/mojave-review/data -name '._*' -delete \
+                                       -o -name '.DS_Store' -delete"
+```
+
 ## Gotchas
 
 - **Never reintroduce `--delete` on the `recommendations/` leg.** It is the
