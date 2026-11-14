@@ -39,6 +39,7 @@ def create_app(
     cookie_secure: bool = True,
     admin_contact: str = "the admin",
     url_base_prefix: str | None = None,
+    proxy_strips_prefix: bool = False,
     xviii_path: str | None = None,
     astrometry_path: str | None = None,
 ) -> Dash:
@@ -57,12 +58,44 @@ def create_app(
       ``reviewer`` argument is the single-user fallback used when
       there's no request context (or in Phase 1).
     """
-    # Behind a reverse-proxy prefix, url_base_pathname makes Dash serve its
-    # routes/assets under the prefix; the in-app links use ui.urls.rel
-    # (dash.get_relative_path) so they match. None ⇒ served at root.
+    # Behind a reverse-proxy prefix there are two different paths to keep
+    # straight, and Dash has a knob for each:
+    #
+    #   routes_pathname_prefix   — what the APP serves, i.e. the path as it
+    #                              arrives once the proxy is done with it;
+    #   requests_pathname_prefix — what the BROWSER asks for, used to build
+    #                              every URL the page contains (assets,
+    #                              callback POSTs, and ui.urls.rel links).
+    #
+    # Which combination is right depends on whether the proxy strips the
+    # prefix before forwarding:
+    #
+    #   proxy_strips_prefix=False — nginx `proxy_pass http://host:port;` with
+    #       NO trailing slash, so the prefix is PRESERVED. The app receives
+    #       /mojave-review/... and must serve there too: both prefixes are the
+    #       same, which is what `url_base_pathname` sets.
+    #
+    #   proxy_strips_prefix=True  — nginx `proxy_pass http://host:port/;` WITH
+    #       a trailing slash, so the prefix is REMOVED. The app receives plain
+    #       /... and must serve at the root, but the page it returns still has
+    #       to point at /mojave-review/... or every link escapes the proxied
+    #       location. Hence the asymmetric split.
+    #
+    # Getting it backwards is loud rather than subtle: serving routes under a
+    # prefix the proxy has already removed makes every request 404.
+    #
+    # Until 2026-11-14 the WSGI entry point never passed url_base_prefix at
+    # all, so the deployed app ran root-mounted behind a stripping proxy:
+    # requests worked, but every rel() link (Dashboard, XVIII Comparison, the
+    # dashboard's source deep-links, "Back to review") pointed outside the
+    # app, and the post-login redirect sent reviewers to the site root.
     dash_kwargs = {}
     if url_base_prefix:
-        dash_kwargs["url_base_pathname"] = url_base_prefix
+        if proxy_strips_prefix:
+            dash_kwargs["routes_pathname_prefix"] = "/"
+            dash_kwargs["requests_pathname_prefix"] = url_base_prefix
+        else:
+            dash_kwargs["url_base_pathname"] = url_base_prefix
     app = Dash(
         __name__,
         title="MOJAVE Cluster Review",
@@ -242,6 +275,12 @@ def create_app(
             tokens_path=tokens_path,
             cookie_secure=cookie_secure,
             admin_contact=admin_contact,
+            # The middleware works in Flask terms (``request.path``), which is
+            # the POST-proxy path. It needs the public prefix to redirect the
+            # reviewer back to where their browser actually is after a
+            # ``?token=`` login.
+            url_base_prefix=url_base_prefix,
+            proxy_strips_prefix=proxy_strips_prefix,
         )
 
     return app

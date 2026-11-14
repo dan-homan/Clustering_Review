@@ -147,12 +147,19 @@ e.g. `https://mojave-review.denison.edu/`) or under a **path prefix**
 - **Root path (simplest):** launch with no prefix; proxy the subdomain to
   `http://127.0.0.1:<port>`. Nothing else to configure — all in-app links
   are already root-relative.
-- **Path prefix:** launch with `--url-base-prefix /mojave-review/` (or
-  `MOJAVE_REVIEW_URL_BASE_PREFIX=/mojave-review/`). Dash then serves its
-  pages, assets, and `_dash-update-component` callbacks under that prefix,
-  and every in-app link / navigation is prefixed to match (via
-  `dash.get_relative_path`). The proxy **must preserve the prefix** — use
-  a `proxy_pass` with **no trailing slash** so it doesn't get stripped:
+- **Path prefix:** set `url_base_prefix` (config / `--url-base-prefix` /
+  `MOJAVE_REVIEW_URL_BASE_PREFIX`) **and** tell the app whether the proxy
+  strips it with `proxy_strips_prefix`. Both proxy styles work; what matters
+  is that the app knows which one it is behind.
+
+  Dash has two separate knobs and `create_app` picks the pair for you:
+
+  | | `routes_pathname_prefix` (what the app serves) | `requests_pathname_prefix` (what the browser asks for) |
+  |---|---|---|
+  | `proxy_strips_prefix: false` | `/mojave-review/` | `/mojave-review/` |
+  | `proxy_strips_prefix: true` | `/` | `/mojave-review/` |
+
+  **Prefix preserved** — `proxy_pass` with **no** trailing slash:
 
   ```nginx
   location /mojave-review/ {
@@ -162,12 +169,35 @@ e.g. `https://mojave-review.denison.edu/`) or under a **path prefix**
       proxy_set_header X-Forwarded-Proto $scheme;
   }
   ```
+  → `proxy_strips_prefix: false` (the default).
 
-  (A trailing slash — `proxy_pass http://127.0.0.1:8050/;` — strips the
-  prefix before it reaches the app, which then mismatches the prefix Dash
-  serves under and breaks asset/callback URLs. This was the original
-  doc's mistake.) The token-bootstrap URL is then
-  `https://<host>/mojave-review/?token=…`.
+  **Prefix stripped** — `proxy_pass` **with** a trailing slash
+  (`proxy_pass http://127.0.0.1:8050/;`). The app then receives plain `/…`,
+  so it must serve at the root while still building links with the prefix
+  → `proxy_strips_prefix: true`.
+
+  Getting it backwards is loud: routes under a prefix the proxy already
+  removed makes every request 404, and a restart with the key flipped undoes
+  it.
+
+  **How to tell which you have** without reading the nginx config: open the
+  live page source and find `requests_pathname_prefix` in the
+  `_dash-config` blob. If it is `"/"` while the public URL has a prefix, the
+  app is root-mounted — meaning the proxy strips, and the app has not been
+  told. The token-bootstrap URL is `https://<host>/mojave-review/?token=…`
+  either way.
+
+  **This bit was wrong in production until 2026-11-14.** `wsgi.py` never
+  passed `url_base_prefix` to `create_app`, so the deployed app ran
+  root-mounted behind a stripping proxy. Pages and callbacks worked (every
+  request was stripped on the way in), but two things were quietly broken:
+  every `rel()` link — "📋 Assignment Dashboard", "⚖ XVIII Comparison", the
+  dashboard's `?source=` deep-links, "← Back to review" — resolved to
+  `https://<host>/dashboard` etc., **outside** the proxied location; and the
+  post-`?token=` redirect sent reviewers to the site root. Login still
+  appeared to work because the cookie was set (at `Path=/`) before that
+  redirect, so a second click of the bookmark succeeded — which is probably
+  why it went unreported.
 
 The local launcher always talks to the bound port directly, so it opens
 `http://127.0.0.1:<port>/mojave-review/` (or `…/` at root) for you.

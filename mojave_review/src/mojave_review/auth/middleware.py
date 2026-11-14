@@ -68,6 +68,44 @@ DEFAULT_COOKIE_MAX_AGE_DAYS = 30
 _COOKIE_REFRESH_FLOOR_SECONDS = 24 * 3600
 
 
+def normalise_prefix(prefix: str | None) -> str:
+    """``"mojave-review"`` / ``"/mojave-review"`` → ``"/mojave-review/"``;
+    blank or ``None`` → ``"/"``. Mirrors the normalisation ``Config`` applies
+    to ``url_base_prefix`` so this module is correct even when called
+    directly (tests, a future dispatcher)."""
+    p = (prefix or "/").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    if not p.endswith("/"):
+        p = p + "/"
+    return p
+
+
+def public_path(app_path: str, url_base_prefix: str | None,
+                proxy_strips_prefix: bool) -> str:
+    """Translate an app-internal path into the one the BROWSER is using.
+
+    ``request.path`` is whatever reached Flask, which is not necessarily what
+    is in the address bar. With a stripping proxy the app sees ``/dashboard``
+    while the browser shows ``/mojave-review/dashboard``; redirecting to the
+    former sends the reviewer outside the proxied location. With a
+    non-stripping proxy the two are already the same.
+
+    Used for the post-``?token=`` redirect, which is the one place this
+    middleware builds a URL for the browser to follow.
+    """
+    if not proxy_strips_prefix or not url_base_prefix:
+        return app_path
+    prefix = normalise_prefix(url_base_prefix).rstrip("/")
+    if not app_path.startswith("/"):
+        app_path = "/" + app_path
+    # Defensive: if the prefix is somehow already present (a proxy that only
+    # strips sometimes, a direct hit on the bound port) don't double it.
+    if app_path == prefix or app_path.startswith(prefix + "/"):
+        return app_path
+    return prefix + app_path
+
+
 # ---------------------------------------------------------------------------
 # Mtime-fingerprint cache for the parsed TokenStore
 # ---------------------------------------------------------------------------
@@ -148,6 +186,8 @@ def install_token_middleware(
     cookie_secure: bool = True,
     cookie_max_age_days: int = DEFAULT_COOKIE_MAX_AGE_DAYS,
     admin_contact: str = "the admin",
+    url_base_prefix: str | None = None,
+    proxy_strips_prefix: bool = False,
 ) -> None:
     """Wire the before_request hook + the cookie-refresh after_request hook.
 
@@ -174,9 +214,21 @@ def install_token_middleware(
         Dash callback POST.
     admin_contact :
         Free-text "email this person" string shown on the 403 page.
+    url_base_prefix :
+        The public path the app is served under, or None for root. Two uses:
+        the session cookie is scoped to it (so a cookie set under one app's
+        prefix is not sent to a sibling app on the same host), and the
+        post-login redirect is built against it.
+    proxy_strips_prefix :
+        Whether the reverse proxy removes ``url_base_prefix`` before
+        forwarding (see :func:`mojave_review.app.create_app`). Decides whether
+        ``request.path`` already carries the prefix.
     """
     cache = _StoreCache()
     cookie_max_age = int(cookie_max_age_days * 86400)
+    # Cookie path is always the PUBLIC prefix: it is the browser that decides
+    # whether to send a cookie, and the browser only knows public paths.
+    cookie_path = normalise_prefix(url_base_prefix)
 
     def _resolve(token: str | None) -> User | None:
         if not token:
@@ -205,10 +257,14 @@ def install_token_middleware(
                     if k != "token"
                 ]
                 tail = ("?" + urlencode(clean_qs)) if clean_qs else ""
-                resp = redirect(request.path + tail, code=302)
+                resp = redirect(
+                    public_path(request.path, url_base_prefix,
+                                proxy_strips_prefix) + tail,
+                    code=302)
                 resp.set_cookie(
                     COOKIE_NAME, url_token,
                     max_age=cookie_max_age,
+                    path=cookie_path,
                     httponly=True,
                     secure=cookie_secure,
                     samesite="Lax",
@@ -255,6 +311,7 @@ def install_token_middleware(
             resp.set_cookie(
                 COOKIE_NAME, token,
                 max_age=cookie_max_age,
+                path=cookie_path,
                 httponly=True,
                 secure=cookie_secure,
                 samesite="Lax",

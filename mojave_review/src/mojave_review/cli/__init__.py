@@ -94,6 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Bind address. Default 127.0.0.1.")
     p.add_argument("--port", type=int, default=None,
                    help="TCP port. Default 8050.")
+    p.add_argument(
+        "--proxy-strips-prefix", action="store_true", default=None,
+        help="Set when the reverse proxy REMOVES --url-base-prefix before "
+             "forwarding (nginx proxy_pass with a trailing slash). The app "
+             "then serves at the root but still builds links with the "
+             "prefix. Without this the prefix is assumed to be preserved.",
+    )
     p.add_argument("--url-base-prefix", default=None,
                    help="Public path prefix when behind a reverse proxy "
                         "(e.g. /mojave-review/). Default: served at root.")
@@ -166,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         "host":                args.host,
         "port":                args.port,
         "url_base_prefix":     args.url_base_prefix,
+        "proxy_strips_prefix": args.proxy_strips_prefix,
         "no_browser":          args.no_browser,
         "debug":               args.debug,
         "admin":               args.admin,
@@ -212,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         cookie_secure=cfg.cookie_secure,
         admin_contact=cfg.admin_contact,
         url_base_prefix=cfg.url_base_prefix,
+        proxy_strips_prefix=cfg.proxy_strips_prefix,
         xviii_path=str(args.xviii_table) if args.xviii_table else None,
         astrometry_path=(str(args.astrometry_file)
                          if args.astrometry_file else None),

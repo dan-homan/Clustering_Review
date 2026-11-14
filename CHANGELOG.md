@@ -4,6 +4,57 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Fix: in-app links and the login redirect behind a path prefix
+
+Two latent production bugs, both from one omission: `wsgi.py` never passed
+`url_base_prefix` to `create_app`, so the deployed app ran **root-mounted**
+behind a reverse proxy that strips the prefix. Confirmed from the live page
+source: `"url_base_pathname": null, "requests_pathname_prefix": "/"` while the
+public URL is `https://mojave.denison.edu/mojave-review/`.
+
+- **Every in-app link pointed outside the app.** `ui.urls.rel()` builds links
+  from `requests_pathname_prefix`, which was `/`, so "📋 Assignment
+  Dashboard" rendered as `/dashboard` → `https://<host>/dashboard`, outside
+  the proxied `location /mojave-review/`. Same for "⚖ XVIII Comparison", the
+  dashboard's `?source=` deep-links and "← Back to review". Reproduced
+  against a faithful nginx simulation: **404 before, 200 after**.
+- **The post-login redirect left the app.** The token middleware redirects to
+  `request.path`, which is the *post-proxy* path — `/` — so a fresh
+  `?token=…` bookmark sent the reviewer to the site root. It self-healed on a
+  second click, because the cookie was already set, which is probably why it
+  was never reported.
+- **The fix** is to use Dash's two prefix knobs properly, via a new
+  `proxy_strips_prefix` config key (`--proxy-strips-prefix`,
+  `MOJAVE_REVIEW_PROXY_STRIPS_PREFIX`):
+
+  | | `routes_pathname_prefix` | `requests_pathname_prefix` |
+  |---|---|---|
+  | prefix preserved (`proxy_pass …:8050;`) | `/mojave-review/` | `/mojave-review/` |
+  | prefix stripped (`proxy_pass …:8050/;`) | `/` | `/mojave-review/` |
+
+  The middleware gained `public_path()` for the redirect and now scopes the
+  session cookie to the public prefix.
+- **Root-hosted behaviour is byte-identical**, so a local
+  `mojave-review --results-dir Results` is unaffected and no existing session
+  is invalidated.
+- **The code change alone is inert on the server.** The deployed
+  `config.yaml` sets no `url_base_prefix` at all, so a pull + restart changes
+  nothing until these two keys are added:
+
+  ```yaml
+  url_base_prefix: /mojave-review/
+  proxy_strips_prefix: true
+  ```
+
+- `docs/deployment_phase2.md` previously documented only the prefix-preserving
+  nginx recipe and called the stripping form "the original doc's mistake" —
+  but the stripping form is what is actually deployed, and it works fine once
+  the app is told. Both are now documented, with the page-source diagnostic
+  for identifying an existing deployment.
+- 24 tests in `tests/test_proxy_prefix.py`.
+
+---
+
 ## 2026-11-09 — Auto-balance can give back surplus assignments
 
 - **The gap.** Auto-balance's *add* side always respected the review target

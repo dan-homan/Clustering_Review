@@ -48,6 +48,12 @@ _app = create_app(
     tokens_path=_config.tokens_file,
     cookie_secure=_config.cookie_secure,
     admin_contact=_config.admin_contact,
+    # Previously omitted, which left the deployed app root-mounted no matter
+    # what config.yaml said: requests worked (the proxy strips the prefix) but
+    # every in-app link pointed outside the proxied location, and the
+    # post-login redirect sent reviewers to the site root.
+    url_base_prefix=_config.url_base_prefix,
+    proxy_strips_prefix=_config.proxy_strips_prefix,
 )
 
 # What gunicorn looks for.

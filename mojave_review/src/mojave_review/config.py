@@ -48,6 +48,7 @@ Environment variables
 * ``MOJAVE_REVIEW_TOKENS_FILE``
 * ``MOJAVE_REVIEW_ADMIN_CONTACT``
 * ``MOJAVE_REVIEW_COOKIE_SECURE`` (``true``/``false``)
+* ``MOJAVE_REVIEW_PROXY_STRIPS_PREFIX`` (``true``/``false``)
 * ``MOJAVE_REVIEW_HOST``
 * ``MOJAVE_REVIEW_PORT``
 * ``MOJAVE_REVIEW_REVIEWER``
@@ -100,6 +101,14 @@ class Config:
     # ``proxy_pass`` that PRESERVES the prefix (no trailing slash on the
     # upstream), so the path the browser uses matches the path Dash serves.
     url_base_prefix: str | None = None
+    # Does the reverse proxy REMOVE url_base_prefix before forwarding?
+    #   nginx `proxy_pass http://127.0.0.1:8050/;`  (trailing slash) → True
+    #   nginx `proxy_pass http://127.0.0.1:8050;`   (no slash)       → False
+    # Decides how the prefix is handed to Dash; see
+    # ``app.create_app`` for the full explanation, and
+    # ``docs/deployment_phase2.md`` for how to tell which one you have.
+    # Ignored when ``url_base_prefix`` is unset (root-hosted).
+    proxy_strips_prefix: bool = False
 
     # Identity & roles
     reviewer: str | None = None                 # None ⇒ resolve to $USER
@@ -202,6 +211,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "host":                ("MOJAVE_REVIEW_HOST",),
     "port":                ("MOJAVE_REVIEW_PORT",),
     "url_base_prefix":     ("MOJAVE_REVIEW_URL_BASE_PREFIX",),
+    "proxy_strips_prefix": ("MOJAVE_REVIEW_PROXY_STRIPS_PREFIX",),
     "reviewer":            ("MOJAVE_REVIEW_REVIEWER",),
     "admin":               ("MOJAVE_REVIEW_ADMIN",),
     "log_file":            ("MOJAVE_REVIEW_LOG_FILE",),
