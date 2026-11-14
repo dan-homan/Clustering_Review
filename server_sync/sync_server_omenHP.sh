@@ -41,10 +41,14 @@ DATA_DIR="${DATA_DIR:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXCLUDE_FILE="$SCRIPT_DIR/server_update_exclude.txt"
 
-REMOTE="homand@74.140.113.72"
+REMOTE="${REMOTE:-homand@74.140.113.72}"
 # The server's data root — the directory holding one subdirectory per project.
-REMOTE_DATA="/home/homand/mojave-review/data"
-SSH="ssh -i /Users/homand/.ssh/id_ed25519 -o StrictHostKeyChecking=no -p 2121"
+# On webby /home/homand/mojave-review is a symlink to the vhost directory
+# under /var/www/html/, so this short path is the stable way to name it.
+# Overridable (REMOTE / REMOTE_DATA / SSH) so an alternate host or a test
+# harness needs no edit to this file.
+REMOTE_DATA="${REMOTE_DATA:-/home/homand/mojave-review/data}"
+SSH="${SSH:-ssh -i /Users/homand/.ssh/id_ed25519 -o StrictHostKeyChecking=no -p 2121}"
 
 # === Project (mandatory) ===
 # Multi-project: the server keeps <REMOTE_DATA>/<PROJECT>/{Results,
@@ -117,16 +121,37 @@ done
 # The app itself logs the project roots it mounted at startup ("mounted
 # project <name> at /<name>/ (root=...)"), so that journal line is the
 # authority for what PROJECT should be.
-if ! $SSH "$REMOTE" "test -d '$REMOTE_BASE'" 2>/dev/null; then
+# NOTE: stderr is deliberately NOT redirected here. ssh writes its password
+# and key-passphrase prompts to stderr, so swallowing it makes an
+# authentication prompt invisible and the script merely LOOKS hung while it
+# waits for input you cannot see. Noise is the lesser evil.
+if $SSH "$REMOTE" "test -d '$REMOTE_BASE'"; then
+  :   # remote project root is there — carry on
+elif $SSH "$REMOTE" true; then
+  # We can reach the host, so it is the path that is wrong.
   cat >&2 <<EOM
 ERROR: remote project root does not exist:
   $REMOTE:$REMOTE_BASE
 
 Either PROJECT is wrong, or this project has not been set up on the server
-yet. To create it (first sync of a new project):
+yet. The app's own startup log is the authority for the project name:
+  $SSH $REMOTE "journalctl -u mojave -n 30 --no-pager" | grep 'mounted project'
+
+To create it (first sync of a new project):
   $SSH $REMOTE 'mkdir -p $REMOTE_BASE'
 and remember the two support files, which are NOT synced by this script:
   scp source_run_param.csv astrometry_mojave.dat $REMOTE:$REMOTE_BASE/
+EOM
+  exit 1
+else
+  cat >&2 <<EOM
+ERROR: cannot ssh to $REMOTE
+
+The project-root check could not run, so nothing was synced. Check the host
+is reachable and your key is available:
+  $SSH $REMOTE true
+  ssh-add -l                 # is the agent holding your key?
+  ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 EOM
   exit 1
 fi

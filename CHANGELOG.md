@@ -4,6 +4,32 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-15 — Fix: the new sync guard swallowed ssh's password prompt
+
+Reported within minutes of shipping the project-aware sync: the script printed
+its header and then appeared to hang.
+
+The remote-project-root guard ran `ssh … "test -d …" 2>/dev/null`. ssh writes
+its password and key-passphrase prompts to **stderr**, so suppressing stderr
+made an authentication prompt invisible — the script was not hung, it was
+waiting for input nobody could see.
+
+- stderr is no longer redirected on that probe. Noise is the lesser evil.
+- The failure paths are now distinguished, since "can't reach the host" and
+  "that project isn't there" want different fixes: a second `ssh … true`
+  decides which, and each gets its own message. The path error also names the
+  app's `mounted project` startup log as the authority for the project name.
+- `REMOTE`, `REMOTE_DATA` and `SSH` became overridable
+  (`${VAR:-default}`), so an alternate host or a test harness needs no edit.
+  Verified all three guard outcomes against a fake-ssh harness: root present
+  proceeds, root missing explains the path, host unreachable surfaces ssh's own
+  message *and* the `ssh-add` hint.
+- Also noted in the script: on webby `/home/homand/mojave-review` is a symlink
+  into the `/var/www/html/` vhost tree, so the short path is the stable way to
+  name the data root.
+
+---
+
 ## 2026-11-15 — `server_sync/sync_server.sh` is project-aware
 
 The admin's actual by-hand sync — three legs, including the two-way Unison
