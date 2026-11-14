@@ -583,10 +583,15 @@ A throwaway two-project setup should demonstrate, before any real deployment:
       (source selection, view switching, epoch stepping). The
       `allow_duplicate` hashed output keys are derived per app instance; a
       mismatch kills the whole client callback graph for that mode, so the
-      graph initialising and the plots responding is the evidence that they
-      resolve. **Not separately exercised:** the heavier edit paths
-      (selection → edits → recommendations autosave), which is where most of
-      the `allow_duplicate` outputs live.
+      graph initialising and the plots responding is evidence that they
+      resolve.
+- [x] **The edit path works in a mounted project** (2026-11-15): a real
+      recommendation was created in MOJAVE at `/mojave/` and then synced back
+      to the workstation by the Unison leg. That exercises what the
+      checklist was short of — selection → edits → autosave, which is where
+      most of the `allow_duplicate` outputs live — plus the round trip
+      through `recommendations/`, which no amount of page-loading would have
+      covered.
 - [x] `ui/urls.rel()` produces correct in-app links in both — this is the one
       that initially FAILED; see step 3 above. The dashboard's `?source=`
       deep-links go through the same helper, so they are covered by the fix,

@@ -228,11 +228,12 @@ Closes the last open items on the step-3 checklist.
   callback registry, and the layout is rebuilt per request anyway. A process
   per project would have cost ~172 MB each: ~347 MB for these two against
   ~176 MB for one process, and ~172 MB for every project after that.
-- Still not separately exercised: the heavier edit paths (selection → edits →
-  recommendations autosave), where most of the `allow_duplicate` outputs live.
-  The callback graph initialising and the plots responding is good evidence
-  those keys resolve per app, since a mismatch kills the whole graph for a
-  mode rather than failing quietly.
+- The heavier edit paths (selection → edits → recommendations autosave), where
+  most of the `allow_duplicate` outputs live, were the one thing left
+  unexercised here — **since confirmed 2026-11-15**: a real recommendation
+  created in MOJAVE at `/mojave/` and synced back to the workstation by the
+  Unison leg, which covers both the per-app callback keys and the
+  `recommendations/` round trip.
 
 ---
 
