@@ -9,6 +9,7 @@ these files capture the *why* and the *who*.
 | [audience.md](audience.md) | Who this tool is for and who's building it. |
 | [plot_conventions.md](plot_conventions.md) | Astronomical plot conventions (always apply to new plots). |
 | [product_decisions.md](product_decisions.md) | Locked product/architecture decisions and phase plan. |
+| [multi_project.md](multi_project.md) | **Proposal, not implemented.** Options for serving several projects (own Results/recommendations/notes) from one install. |
 | [deployment_phase2.md](deployment_phase2.md) | Phase 2 hosting plan (university web server + per-user static tokens). Lift sections directly for the IT conversation. |
 | [astrometric_reference.md](astrometric_reference.md) | The absolute-astrometry origin option: data format, sign convention, what it touches. |
 | [references.md](references.md) | External pointers: MOJAVE FITS URL pattern, Google Drive sharing flow. |
