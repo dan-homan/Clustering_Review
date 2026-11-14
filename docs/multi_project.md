@@ -541,16 +541,25 @@ A throwaway two-project setup should demonstrate, before any real deployment:
 
 - [x] Both apps load their own `results_dir` and source list, with no bleed
       (484 vs 26 sources, disjoint).
-- [x] Assets resolve under each prefix — verified for all 18 URLs the index
-      references, in both projects. **Browser-side behaviour of the clientside
-      scripts (`equal_aspect.js`, `xy_epoch.js`, `keyboard.js`,
-      `subplot_resize.js`) is still unverified** — they load, but nothing has
-      exercised them in a real browser under a prefix.
-- [x] Callback POSTs reach the right app — exercised via the page-content
-      router and the astrometry-status callback on both. **The
-      `allow_duplicate` hashed output keys are still unverified** and remain
-      the most likely remaining hazard, since they are derived per app
-      instance.
+- [x] Assets resolve under each prefix — all 18 URLs the index references, in
+      both projects.
+- [x] Clientside scripts work under a prefix. Confirmed in a real browser
+      (BK224, Position view): drag-zoom holds equal aspect, the resizable
+      divider works, and ←/→ epoch stepping behaves — exercising
+      `equal_aspect.js`, `subplot_resize.js`, `xy_epoch.js` and
+      `keyboard.js`. Consistent with inspection: all five scripts are purely
+      DOM-based (element IDs, `.js-plotly-plot`, `Plotly.*` on drawn figures)
+      with no `fetch`, no `XMLHttpRequest`, no `window.location` and no
+      constructed URLs — so there is nothing for a path prefix to break.
+- [x] Callback POSTs reach the right app — the page-content router and the
+      astrometry-status callback over HTTP on both, plus real browser use
+      (source selection, view switching, epoch stepping). The
+      `allow_duplicate` hashed output keys are derived per app instance; a
+      mismatch kills the whole client callback graph for that mode, so the
+      graph initialising and the plots responding is the evidence that they
+      resolve. **Not separately exercised:** the heavier edit paths
+      (selection → edits → recommendations autosave), which is where most of
+      the `allow_duplicate` outputs live.
 - [x] `ui/urls.rel()` produces correct in-app links in both — this is the one
       that initially FAILED; see step 3 above. The dashboard's `?source=`
       deep-links go through the same helper, so they are covered by the fix,
@@ -567,8 +576,22 @@ A throwaway two-project setup should demonstrate, before any real deployment:
       loaded) vs BK224 `(no astrometry file)`. Note `(none for this source)`
       is a THIRD state — file loaded, that source absent — and mistaking it
       for a failure cost a test iteration.
-- [ ] Memory footprint measured, to confirm C actually beats A by enough to
-      justify the extra moving part.
+- [x] Memory footprint measured — and it settles the A-vs-C question
+      decisively. Peak RSS after building the apps and serving each a request
+      and a `_dash-layout`:
+
+      | mounted | peak RSS |
+      |---|---|
+      | MOJAVE alone | 175.2 MB |
+      | BK224 alone | 172.2 MB |
+      | both together | **175.8 MB** |
+
+      The libraries (dash, pandas, scipy, astropy, plotly) dominate at
+      ~160 MB, so a **second project costs about 0.6 MB** — the app instance
+      is a layout plus a callback registry, and the layout is rebuilt per
+      request anyway. Option A would have paid ~172 MB per project: ~347 MB
+      for these two against ~176 MB for one process, and ~172 MB for every
+      project after that.
 
 ## See also
 

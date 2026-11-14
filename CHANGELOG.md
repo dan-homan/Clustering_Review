@@ -4,6 +4,34 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Multi-project: browser-verified, and the memory question settled
+
+Closes the last open items on the step-3 checklist.
+
+- **Verified in a real browser** (both projects mounted): clicking between
+  projects works, and in BK224's Position view drag-zoom holds equal aspect,
+  the resizable divider works and ←/→ epoch stepping behaves — exercising
+  `equal_aspect.js`, `subplot_resize.js`, `xy_epoch.js` and `keyboard.js`
+  under a path prefix. Consistent with inspection: all five clientside scripts
+  are purely DOM-based (element IDs, `.js-plotly-plot`, `Plotly.*` on drawn
+  figures) with no `fetch`, no `XMLHttpRequest`, no `window.location` and no
+  constructed URLs, so a path prefix has nothing to break.
+- **Memory measured, and it settles one-process-vs-process-per-project
+  decisively.** Peak RSS after building the apps and serving each a request:
+  MOJAVE alone 175.2 MB, BK224 alone 172.2 MB, **both together 175.8 MB**. The
+  libraries (dash, pandas, scipy, astropy, plotly) dominate at ~160 MB, so a
+  second project costs about **0.6 MB** — an app instance is a layout plus a
+  callback registry, and the layout is rebuilt per request anyway. A process
+  per project would have cost ~172 MB each: ~347 MB for these two against
+  ~176 MB for one process, and ~172 MB for every project after that.
+- Still not separately exercised: the heavier edit paths (selection → edits →
+  recommendations autosave), where most of the `allow_duplicate` outputs live.
+  The callback graph initialising and the plots responding is good evidence
+  those keys resolve per app, since a mismatch kills the whole graph for a
+  mode rather than failing quietly.
+
+---
+
 ## 2026-11-14 — Multi-project step 5: header switcher + one shared login
 
 - **Project switcher in the header.** `ui.layout.build_project_switcher`
