@@ -31,30 +31,67 @@ README covers installation and day-to-day usage.
 
 ### Requirements
 
-- Python ≥ 3.10
-- A read-only copy of `Results/` (typically mirrored from Google Drive
-  via Drive for Desktop).
-- For `mojave-apply` only: a writable copy of `Results/` plus
-  `find_clusters.py` and `cluster_code.py` discoverable from the same
-  parent directory (one symbol — `save_summary_plots` — is imported to
-  regenerate the PDF + MP4).
+- Python ≥ 3.10.
+- A copy of `Results/` — the clustering output. The app only reads it.
+- For `mojave-apply` only (applying a recommendation, not reviewing): a
+  **writable** `Results/` plus `find_clusters.py` and `cluster_code.py`
+  discoverable from the same parent directory — one symbol,
+  `save_summary_plots`, is imported to regenerate the PDF + MP4.
+
+Dependencies are declared in `mojave_review/pyproject.toml` and install
+automatically; nothing else is needed. Everything is pure-Python plus
+numpy/scipy/pandas/astropy/plotly wheels.
 
 ### Install the package
 
 ```bash
-git clone <this-repo>
-cd <this-repo>/mojave_review
+git clone <this-repo> Clustering_Review
+cd Clustering_Review/mojave_review
 pip install -e .
 ```
 
-That gives you `mojave-review` and `mojave-apply` on your PATH. Both are
-verifiable with `--help`.
+That puts `mojave-review` and `mojave-apply` on your PATH; both take
+`--help`. Drop the `-e` for a non-development install
+(`pip install ./mojave_review`).
 
-For a non-development install just drop the `-e`:
+On a host with no system Python ≥ 3.10 and no root, [`uv`](https://docs.astral.sh/uv/)
+is the path of least resistance — it fetches a prebuilt interpreter with no
+compiler or system packages required:
 
 ```bash
-pip install ./mojave_review
+uv python install 3.12
+uv venv --python 3.12
+uv pip install -e ./mojave_review        # note: `uv venv` creates no pip
 ```
+
+### Check it works
+
+```bash
+cd <the directory holding Results/>
+mojave-review --results-dir Results --reviewer "Your Name"
+```
+
+It opens a browser at `http://127.0.0.1:8050`. Run it **from the directory
+that holds `Results/`** if you want `source_run_param.csv` picked up
+automatically — see "Supporting data files" below.
+
+Run the test suite with `cd mojave_review && python3 -m pytest tests -q`
+(405 tests, a couple of seconds, no data or network needed).
+
+### Supporting data files
+
+Two optional tables sit **beside** `Results/`, not inside it, and are found
+automatically by searching the parent of `results_dir`, then `results_dir`,
+then the current directory:
+
+| file | what it does when present | when absent |
+|---|---|---|
+| `source_run_param.csv` | per-source redshift → host-frame Tb, `beta_app` | every source treated as z unknown; Tb reads `Tb obs [K]` |
+| `astrometry_mojave.dat` | absolute core positions → "Astrometric reference" option | option shown disabled, `(no astrometry file)` |
+
+Pin either explicitly with `--source-params` / `--astrometry-file`, or the
+`source_params_file` / `astrometry_file` config keys. Neither is required —
+the app works without both.
 
 ---
 
@@ -86,10 +123,53 @@ mojave-review serving on http://127.0.0.1:8050
 | `--fits-data-dir` | `$MOJAVE_DATA` env if set, else unused | Path to an already-on-disk MOJAVE FITS tree (`<source>/<epoch>/<source>.<band>.<epoch>.icn.fits.gz`). When set, the overlay reads these directly instead of fetching from NRAO. Missing files silently fall back to fetch+cache. If you already run the production pipeline, just `export MOJAVE_DATA=/path/to/your/data` once. |
 | `--port` | `8050` | HTTP port. |
 | `--no-browser` | off | Don't auto-open a browser tab. |
-| `--admin` | off | Show the **Generate Apply Command** button + (future) aggregation dialog. Only enable on the machine where you'll be running `mojave-apply`. |
+| `--admin` | off | Show the **Generate Apply Command** button + the Stage-3 aggregation and Window-N panels, and the dashboard's balancing actions. Only enable on the machine where you'll be running `mojave-apply`. |
+| `--source-params` | discovered | Pin `source_run_param.csv` instead of searching for it. |
+| `--astrometry-file` | discovered | Pin `astrometry_mojave.dat` instead of searching for it. |
+| `--project NAME=PATH` | — | Serve several projects from one process; repeatable. See "Several projects at once" below. |
+| `--projects-dir DIR` | — | Serve every subdirectory of `DIR` that holds a `Results/` as a project. |
 
 If you want stable paths regardless of where you launch from, pass
 absolute paths for `--results-dir` and `--recommendations-dir`.
+
+### Several projects at once
+
+A *project* is an independent review effort — a different sample, band or
+epoch range — with its own sources, recommendations and notes. One directory
+holds each:
+
+```
+<root>/
+├── Results/              ← required
+├── recommendations/      ← created on demand
+├── notes/                ← must be a SIBLING of recommendations/
+├── source_run_param.csv  ← optional
+└── astrometry_mojave.dat ← optional
+```
+
+Serve two of them:
+
+```bash
+mojave-review --project mojave=~/data/MOJAVE_1996.00-2026.00 \
+              --project bk224=~/data/BK224
+```
+
+Each is mounted at its own path (`/mojave/`, `/bk224/`), `/` redirects to the
+first, and the header grows a project switcher. The name becomes the URL
+segment and is derived from the directory basename when you omit it
+(`MOJAVE_1996.00-2026.00` → `mojave`). If the project directories happen to be
+siblings, `--projects-dir ~/data` finds them all.
+
+Passing **no** `--project` leaves everything exactly as it was: one project at
+the root, no switcher.
+
+Per project: `Results/`, `recommendations/`, `notes/`, the two data tables.
+Shared: the FITS cache (keyed by MOJAVE data identity, so project-independent)
+and — on a token-auth deployment — `tokens.yaml`, so one token per reviewer
+covers every project.
+
+Rationale and the deployment shape are in
+[`docs/multi_project.md`](docs/multi_project.md).
 
 ### What the web app does
 
@@ -277,6 +357,22 @@ The simplest setup:
 [`CLAUDE.md`](CLAUDE.md) is the architecture reference: file layout,
 data schemas, plot conventions, schema for the recommendation JSON,
 gotchas. Worth a read before making non-trivial changes.
+
+Under [`docs/`](docs/):
+
+| | |
+|---|---|
+| [`deployment_phase2.md`](docs/deployment_phase2.md) | Serving it to a group: host setup, reverse proxy, per-user tokens. Includes what a real proxy turned out to be doing, which is not what the plan assumed. |
+| [`syncing_results.md`](docs/syncing_results.md) | Getting `Results/` onto the server safely, per project. **Read before setting up a sync** — it mirrors with `--delete`. |
+| [`multi_project.md`](docs/multi_project.md) | Why several projects are laid out and mounted the way they are. |
+| [`review_workflow.md`](docs/review_workflow.md) | The three-stage review process the app implements. |
+| [`plot_conventions.md`](docs/plot_conventions.md) | Astronomical plotting conventions — apply to any new plot. |
+| [`uncertainty_estimates.md`](docs/uncertainty_estimates.md) | How the 1σ position error bars are derived. |
+| [`astrometric_reference.md`](docs/astrometric_reference.md) | The absolute-astrometry origin option. |
+| [`product_decisions.md`](docs/product_decisions.md) | Locked decisions and the phase plan. |
+
+Deployment templates — systemd units, config and sync examples — are in
+[`deploy/`](deploy/), each annotated inline.
 
 The original matplotlib review flow that this tool replaces is
 `find_clusters.py --show_results`, with the underlying functions in

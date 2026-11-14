@@ -4,6 +4,71 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-15 — Sync safety + docs for installing from GitHub
+
+Prompted by setting up the second project's sync. Two latent ways to lose data
+or waste an afternoon, plus the documentation a stranger needs.
+
+### `rsync --delete` could have destroyed `recommendations/`
+
+`sync-results.sh` mirrors with `--delete`, so everything in `TARGET_DIR` that
+isn't in `SOURCE_DIR` is removed. Point `TARGET_DIR` one level short — at the
+project root instead of its `Results/` — and it deletes `recommendations/` and
+`notes/`, the only irreplaceable data on the server. **`MAX_DELETE` does not
+help**: that mistake removes about six entries, far under the default cap of
+1000. Confirmed with a dry-run against a mock tree:
+
+```
+*deleting recommendations/0003-066u/mll.json
+*deleting recommendations/
+*deleting notes/
+```
+
+Multi-project made the slip likelier, since `TARGET_DIR` gained a path segment
+(`data/MOJAVE/Results`, not `data/Results`). The script now **refuses** a
+target containing `recommendations`, `notes`, `config`, `tokens.yaml`,
+`fits_cache` or `logs`, with `ALLOW_UNSAFE_TARGET=1` as the override. Verified
+across four cases: project root refused, correct `Results/` passes,
+non-existent target (first run) passes, override honoured.
+
+### The sync script couldn't run from a macOS sender
+
+`--info=stats2,progress2` arrived in rsync 3.1; macOS ships openrsync ("rsync
+version 2.6.9 compatible"), which aborts with a usage dump **before
+transferring anything**. Since the Drive/Dropbox mirror often lives on a Mac,
+that made the sender unusable there. The flag is now version-probed, falling
+back to `--stats --verbose`. Verified both branches against the local
+openrsync.
+
+### Per-project sync
+
+- `deploy/mojave-results-sync@.service` / `@.timer` — templated units, so one
+  file serves every project: `mojave-results-sync@bk224.timer` reads
+  `~/.config/mojave-results-sync-bk224.conf`. Adding a project is a config
+  file plus one `enable`. The non-templated pair still works for one project.
+- `deploy/mojave-results-sync.conf.example` rewritten around one-file-per-
+  project, with the `TARGET_DIR` rule boxed where it can't be skimmed past.
+- No "sync all projects" mode, deliberately: a single `--delete` mirror
+  spanning project roots *is* the mistake above.
+
+### Documentation
+
+- **`docs/syncing_results.md`** (new) — the two rules, sender setup,
+  per-project config, scheduling, adding a project, a table of what is and
+  isn't synced, the safety rails and what each does *not* cover, and
+  troubleshooting keyed to actual error text.
+- **`deploy/config.yaml.example`** rewritten for multi-project: the two modes
+  marked mutually exclusive, every key annotated, and the reverse-proxy keys
+  flagged as the ones that break the Denison deployment if set. Verified by
+  booting the WSGI app from the shipped file with only paths rewritten.
+- **`README.md`** — install now works for a fresh clone: a `uv` path for hosts
+  without a modern system Python, a "check it works" step, a table of the two
+  optional supporting data files and what happens without them, a
+  several-projects section, the new flags, and a table of every doc under
+  `docs/`.
+
+---
+
 ## 2026-11-14 — Fix: one unusable project no longer takes down the whole service
 
 Found immediately on the first real multi-project deploy. `data/BK224` had not

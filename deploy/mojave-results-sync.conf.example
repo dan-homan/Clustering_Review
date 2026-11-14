@@ -1,22 +1,57 @@
 # mojave-review-sync configuration (sender-side)
 #
-# Copy to ~/.config/mojave-results-sync.conf and edit the four required
-# values. This file is shell-sourced by deploy/sync-results.sh; quote
-# anything that contains spaces.
+# ONE FILE PER PROJECT. Copy to:
+#
+#   ~/.config/mojave-results-sync-<project>.conf
+#
+# ...and edit the four required values. The templated systemd units
+# (mojave-results-sync@.service / @.timer) derive that filename from the
+# instance name, so `systemctl --user enable --now
+# mojave-results-sync@bk224.timer` reads
+# ~/.config/mojave-results-sync-bk224.conf. To run one by hand:
+#
+#   MOJAVE_SYNC_CONF=~/.config/mojave-results-sync-bk224.conf \
+#       mojave-review-sync --dry-run
+#
+# A single-project deployment can still use the plain
+# ~/.config/mojave-results-sync.conf, which is the default path.
+#
+# This file is shell-sourced by deploy/sync-results.sh; quote anything
+# that contains spaces.
 
 # --- Required ---------------------------------------------------------
 
 # Local path on THIS (sender) machine where Drive desktop has mirrored
 # the shared Results/ folder. Must already exist.
-SOURCE_DIR="$HOME/Google Drive/My Drive/MOJAVE/Results"
+# One project's Results/ — NOT a directory containing several projects.
+SOURCE_DIR="$HOME/Dropbox/Research/Clustering_CC/MOJAVE_1996.00-2026.00/Results"
 
-# SSH credentials for the laptop (the host running mojave-review).
+# SSH credentials for the host running mojave-review.
 TARGET_USER="homand"
-TARGET_HOST="192.168.1.23"           # LAN IP or resolvable hostname
+TARGET_HOST="mojave.denison.edu"     # hostname or LAN IP
 
-# Absolute path on the laptop where Results/ should live. Must match
-# `results_dir` in the laptop's ~/mojave-review/config/config.yaml.
-TARGET_DIR="/home/homand/mojave-review/data/Results"
+# Absolute path on the HOST where this project's Results/ should live.
+#
+# ######################################################################
+# #  This MUST be the project's Results directory, never its parent.   #
+# #                                                                    #
+# #    right:  .../data/MOJAVE/Results                                 #
+# #    WRONG:  .../data/MOJAVE                                         #
+# #                                                                    #
+# #  The sync mirrors with --delete, so pointing one level short        #
+# #  deletes recommendations/ and notes/ — the only irreplaceable data  #
+# #  on the server. MAX_DELETE does not protect you: that mistake       #
+# #  removes a handful of entries, far under the cap.                   #
+# #                                                                    #
+# #  sync-results.sh refuses such a target outright (it looks for       #
+# #  recommendations/ and friends in the target first), so this is      #
+# #  belt-and-braces — but get it right anyway.                        #
+# ######################################################################
+#
+# In multi-project mode this is <project root>/Results, where the project
+# root is what config.yaml's `projects:` block names. In single-project
+# mode it matches `results_dir`.
+TARGET_DIR="/var/www/html/mojave.denison.edu/mojave-review/data/MOJAVE/Results"
 
 # --- Optional ---------------------------------------------------------
 
@@ -34,3 +69,8 @@ MAX_DELETE=1000
 #   EXTRA_RSYNC_OPTS="--bwlimit=2M"      # cap to 2 MB/s
 #   EXTRA_RSYNC_OPTS="-v"                # verbose per-file output
 EXTRA_RSYNC_OPTS=""
+
+# Escape hatch for the target-sanity guard described above. Only set this
+# if you genuinely mean to mirror into a directory that holds
+# recommendations/ or notes/ — which for this project is never.
+# ALLOW_UNSAFE_TARGET=1

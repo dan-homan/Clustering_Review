@@ -1,67 +1,141 @@
-# mojave-review production config — laptop staging (Path A)
+# mojave-review configuration
 #
-# Copy to ~/mojave-review/config/config.yaml and edit the obvious
-# placeholders. The systemd unit (deploy/mojave-review.service) points
-# at this file via MOJAVE_REVIEW_CONFIG_FILE.
+# Copy to the path the systemd unit's MOJAVE_REVIEW_CONFIG_FILE points at
+# (production: <app root>/config/config.yaml) and edit the placeholders.
 #
 # Layering reminder (highest priority wins):
 #   CLI flag  >  env var  >  this file  >  built-in default
-# The WSGI entry point (mojave_review.wsgi) reads no CLI flags, so for
-# the production deploy this file + the unit's Environment= block are
-# the only knobs.
+# The WSGI entry point (mojave_review.wsgi) reads no CLI flags, so for a
+# production deploy this file plus the unit's Environment= block are the
+# only knobs. Every MOJAVE_REVIEW_<KEY> env var maps to the same key here.
+#
+# Two modes. Pick ONE:
+#   * multi-project — set `projects:` (below). results_dir /
+#     recommendations_dir are then unused and not even checked.
+#   * single-project — leave `projects:` out and set results_dir.
+# Everything else in this file applies to both.
 
-# --- Paths -------------------------------------------------------------
-# results_dir must exist (failed import otherwise — systemd will not
-# bring the service up, which is what we want).
-results_dir: /home/homand/mojave-review/data/Results
-recommendations_dir: /home/homand/mojave-review/data/recommendations
-cache_dir: /home/homand/mojave-review/data/fits_cache
+# =====================================================================
+# MULTI-PROJECT (preferred once there is more than one review effort)
+# =====================================================================
+#
+# Each project is ONE directory holding the standard layout:
+#
+#   <root>/
+#   ├── Results/              # <source>_<emin>-<emax> folders  (REQUIRED)
+#   ├── recommendations/      # reviewer JSON + _admin/   (created if absent)
+#   ├── notes/                # MUST be a sibling of recommendations/
+#   ├── source_run_param.csv  # redshifts; optional but see below
+#   └── astrometry_mojave.dat # optional; absent just disables the option
+#
+# Only Results/ is required. The two data tables are DISCOVERED from the
+# project root, so they need no config keys — but they must live in the
+# project root, not in a shared parent, or one project will silently use
+# another's redshifts.
+#
+# `name` becomes the URL segment: /mojave/, /bk224/. It is validated as a
+# URL segment and refused if it collides with a path the app serves
+# (dashboard, compare, assets, static). Omit it and it is derived from the
+# directory basename (MOJAVE_1996.00-2026.00 -> "mojave").
+#
+# `label` is what the header switcher shows. Defaults to the directory
+# basename, which is often longer than you want on screen.
+#
+# The FIRST project is the default: "/" redirects to it, and so does any
+# unmatched path (/dashboard -> /mojave/dashboard), which keeps bookmarks
+# from before projects existed working.
+#
+# A project that can't be used (data not synced yet, path typo) is logged
+# at ERROR and SKIPPED; the others still serve. Startup fails only if no
+# project is usable. Check the journal for "project skipped:".
+projects:
+  - name: mojave
+    label: MOJAVE 1994-2026
+    root: /var/www/html/mojave.denison.edu/mojave-review/data/MOJAVE
+  - name: bk224
+    label: BK224
+    root: /var/www/html/mojave.denison.edu/mojave-review/data/BK224
+
+# =====================================================================
+# SINGLE-PROJECT (omit the `projects:` block above to use these)
+# =====================================================================
+#
+# results_dir must exist — a missing one aborts startup, which is what we
+# want from systemd. recommendations_dir defaults to
+# <results_dir parent>/recommendations.
+#results_dir: /var/www/html/mojave.denison.edu/mojave-review/data/Results
+#recommendations_dir: /var/www/html/mojave.denison.edu/mojave-review/data/recommendations
+
+# =====================================================================
+# SHARED — applies in both modes
+# =====================================================================
+
+# FITS cache. SHARED across projects on purpose: the cache path is keyed
+# by the real MOJAVE data identity (source/epoch/stokes), which is
+# project-independent, so overlapping projects hit the same entries.
+cache_dir: /var/www/html/mojave.denison.edu/mojave-review/data/fits_cache
+
 # Optional read-only local mirror of MOJAVE FITS. If absent, the app
 # transparently falls back to live HTTP fetch from www.cv.nrao.edu.
-# fits_data_dir: /home/homand/mojave-review/data/mojave_fits
+#fits_data_dir: /var/www/html/mojave.denison.edu/mojave-review/data/mojave_fits
 
-# --- Authentication ----------------------------------------------------
-# tokens_file enables Phase 2 token-auth mode. With this set, anyone
-# without a valid cookie or ?token=... sees the 403 page.
-tokens_file: /home/homand/mojave-review/config/tokens.yaml
-admin_contact: "homand@denison.edu"
-# HTTP-only LAN deploy on the laptop — real browsers refuse to send
-# Secure cookies over plain HTTP, so this MUST be false here. Flip to
-# true when migrating to the university host (HTTPS termination at
-# nginx).
-cookie_secure: false
-
-# --- Reverse proxy -----------------------------------------------------
-# Public path prefix, when the app is served under one (e.g. behind nginx
-# at https://host/mojave-review/). Leave both unset for root hosting.
+# --- Authentication ---------------------------------------------------
+# tokens_file enables token-auth mode. Without it anyone who can reach
+# the port can use the app; with it, anyone lacking a valid cookie or
+# ?token=... sees the 403 page. Manage entries with `mojave-review-tokens`.
 #
-# proxy_strips_prefix says whether the proxy REMOVES the prefix before
-# forwarding -- it is the difference between these two nginx lines:
-#     proxy_pass http://127.0.0.1:8050;    # preserved  -> false
-#     proxy_pass http://127.0.0.1:8050/;   # stripped   -> true
-# Get it wrong and every request 404s (loud, and a restart reverts it).
-# To check an already-running deployment: look for requests_pathname_prefix
-# in the live page's _dash-config blob.
-# url_base_prefix: /mojave-review/
-# proxy_strips_prefix: true
+# SHARED across projects: one token per reviewer covers every project, and
+# the session cookie is scoped to the mount root so a single login works
+# everywhere. That is deliberate — reviewers wanted one bookmark.
+tokens_file: /var/www/html/mojave.denison.edu/mojave-review/config/tokens.yaml
+admin_contact: "homand@denison.edu"
 
-# --- Bind --------------------------------------------------------------
+# Set the cookie's Secure attribute. TRUE whenever the site is served
+# over HTTPS (which it should be). Only set false for a plain-HTTP dev or
+# LAN deploy — browsers refuse to send Secure cookies over http://, so
+# leaving it true there locks everyone out.
+cookie_secure: true
+
+# --- Reverse proxy ----------------------------------------------------
+# Only needed when the app is served under a path prefix AND the proxy
+# forwards that prefix to the app. Leave both unset when the proxy passes
+# paths through unchanged (see docs/deployment_phase2.md — the Denison
+# deployment is this case, and setting them there breaks the site).
+#
+# proxy_strips_prefix says whether the proxy REMOVES the prefix first:
+#   proxy_pass http://127.0.0.1:8050;    # preserved -> false
+#   proxy_pass http://127.0.0.1:8050/;   # stripped  -> true
+# Getting it wrong is loud: every request 404s, and a restart reverts it.
+# To inspect a running deployment, look for requests_pathname_prefix in
+# the live page's _dash-config blob.
+#url_base_prefix: /mojave-review/
+#proxy_strips_prefix: false
+
+# --- Bind -------------------------------------------------------------
 # These two only drive `app.run()` in the dev launcher (`mojave-review`).
-# Under gunicorn the bind is set on the command line in the systemd
-# unit's ExecStart — change it there, not here.
-host: 0.0.0.0
+# Under gunicorn the bind is set in the systemd unit's ExecStart.
+host: 127.0.0.1
 port: 8050
 
-# --- Logging -----------------------------------------------------------
-# Package logger writes to stderr (captured by systemd journald) AND
-# rotates into this file at 5 MB × 5 backups = 25 MB cap. The gunicorn
-# access / error logs are separate (see the systemd unit).
-log_file: /home/homand/mojave-review/data/logs/mojave-review.log
+# --- Logging ----------------------------------------------------------
+# The package logger writes to stderr (captured by journald) AND rotates
+# into this file at 5 MB x 5 backups = 25 MB cap. The gunicorn access /
+# error logs are separate (see the systemd unit).
+#
+# In multi-project mode each request line is tagged with the project
+# handling it — "[bk224] mojave_review.auth.middleware | ..." — and the
+# mount table is logged once at startup.
+log_file: /var/www/html/mojave.denison.edu/mojave-review/data/logs/mojave-review.log
 log_level: INFO
 
-# --- Single-user fallback ----------------------------------------------
-# Only consulted when tokens_file is missing/empty (i.e. NOT in this
-# deploy). Left here so a corrupt tokens.yaml fails with an obvious
-# identity rather than crashing.
+# --- Identity ---------------------------------------------------------
+# `reviewer` is the single-user fallback, consulted only when tokens_file
+# is missing or empty. Left set so a corrupt tokens.yaml fails with an
+# obvious identity rather than crashing.
 reviewer: homand
+
+# `admin` enables the Stage-3 aggregation panel, the Window-N panel and
+# the dashboard's balancing actions. Usually FALSE on a shared server —
+# the admin does that work from a local checkout against the same
+# recommendations tree.
 admin: false

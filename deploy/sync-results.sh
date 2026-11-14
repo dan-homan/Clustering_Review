@@ -79,6 +79,52 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=10 \
 fi
 
 # ---------------------------------------------------------------------
+# Target sanity guard
+#
+# This script mirrors with --delete, so everything in TARGET_DIR that is
+# not in SOURCE_DIR is removed. TARGET_DIR must therefore be the project's
+# *Results* directory and nothing higher.
+#
+# Point it one level short -- at the project root, e.g.
+# .../data/MOJAVE instead of .../data/MOJAVE/Results -- and rsync happily
+# deletes recommendations/ and notes/, which are the only irreplaceable
+# artifacts on the server. MAX_DELETE does not save you: that mistake
+# deletes a handful of entries, far under the cap.
+#
+# This is a likelier slip since multi-project added a path segment to
+# TARGET_DIR, so refuse outright when the target looks like a project root
+# or a data root. ALLOW_UNSAFE_TARGET=1 overrides, for the rare case of a
+# deliberately unusual layout.
+# ---------------------------------------------------------------------
+
+if [[ -z "${ALLOW_UNSAFE_TARGET:-}" ]]; then
+    # A non-existent target lists as empty, which is fine -- first run.
+    target_entries=$(ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        "$TARGET_USER@$TARGET_HOST" "ls -1 '$TARGET_DIR' 2>/dev/null" || true)
+    for forbidden in recommendations notes config tokens.yaml fits_cache logs; do
+        if grep -qxF "$forbidden" <<<"$target_entries"; then
+            cat >&2 <<EOM
+mojave-review-sync: REFUSING to sync -- the target does not look like a
+Results/ directory.
+
+  TARGET_DIR = $TARGET_DIR
+  It contains: $forbidden
+
+This script mirrors with --delete, so it would DELETE that, along with
+everything else here that is not a source folder. recommendations/ and
+notes/ are the only irreplaceable data on the server.
+
+TARGET_DIR must be the project's Results directory, e.g.
+  .../data/MOJAVE/Results      (not .../data/MOJAVE)
+
+If this layout really is intentional, re-run with ALLOW_UNSAFE_TARGET=1.
+EOM
+            exit 2
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------
 # rsync
 # ---------------------------------------------------------------------
 
@@ -86,7 +132,6 @@ RSYNC_OPTS=(
     --archive                  # -rlptgoD: perms, times, symlinks
     --human-readable
     --partial                  # resume an interrupted transfer cleanly
-    --info=stats2,progress2    # one line per file + final summary
     --delete                   # mirror upstream deletions
     --exclude='.DS_Store'      # macOS Finder turds
     --exclude='._*'            # macOS resource forks
@@ -95,6 +140,17 @@ RSYNC_OPTS=(
     --exclude='*.tmp'
     --exclude='*.partial'
 )
+
+# Progress/stats reporting differs by rsync vintage. --info= arrived in
+# rsync 3.1; macOS ships openrsync ("rsync version 2.6.9 compatible"), where
+# passing it aborts with a usage dump before anything is transferred. Probe
+# instead of assuming, so the same script works from a Linux or a macOS
+# sender -- and the Drive/Dropbox mirror often lives on a Mac.
+if rsync --info=stats2 --version >/dev/null 2>&1; then
+    RSYNC_OPTS+=(--info=stats2,progress2)   # one line per file + a summary
+else
+    RSYNC_OPTS+=(--stats --verbose)         # closest equivalent pre-3.1
+fi
 
 # MAX_DELETE=0 (or empty after the default) disables the safety brake.
 # Any positive integer caps deletions per run; rsync exits non-zero if

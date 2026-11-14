@@ -174,10 +174,22 @@ URL.
 
 ## On the SENDER machine — Results/ sync
 
-These steps run on the OTHER machine (the one with the Google Drive
-desktop mirror). The sync is strictly one-way: Drive → laptop. The
-laptop's `recommendations/`, `fits_cache/`, and `logs/` are never
-touched.
+> **For a multi-project deployment, read
+> [`../docs/syncing_results.md`](../docs/syncing_results.md) instead.** It is
+> the current reference: one config file per project, templated systemd units
+> (`mojave-results-sync@<project>.timer`), and the two rules that keep a
+> `--delete` mirror from eating `recommendations/`. The steps below remain
+> accurate for a single-project host.
+>
+> The one rule worth repeating here: **`TARGET_DIR` is the project's
+> `Results/` directory, never its parent.** This sync mirrors with
+> `--delete`, so pointing one level short deletes `recommendations/` and
+> `notes/` — and `MAX_DELETE` will not stop it, because that mistake removes
+> only a handful of entries. `sync-results.sh` now refuses such a target.
+
+These steps run on the OTHER machine (the one with the Drive/Dropbox
+desktop mirror). The sync is strictly one-way: mirror → host. The host's
+`recommendations/`, `fits_cache/`, and `logs/` are never touched.
 
 ### S1. Prereqs
 
@@ -199,6 +211,9 @@ chmod +x ~/bin/mojave-review-sync
 cp ~/Clustering_Review/deploy/mojave-results-sync.conf.example \
    ~/.config/mojave-results-sync.conf
 ```
+
+(Multi-project: name it `mojave-results-sync-<project>.conf` instead, one per
+project, and select it with `MOJAVE_SYNC_CONF=…` or the templated unit.)
 
 (Adjust `~/Clustering_Review/` if you cloned the repo elsewhere on the
 sender. Or just transfer the four `deploy/` files by hand — they have

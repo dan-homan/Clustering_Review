@@ -1,0 +1,28 @@
+# systemd --user TEMPLATE timer for mojave-results-sync@<project>.
+#
+# Enable one per project:
+#   systemctl --user enable --now mojave-results-sync@mojave.timer
+#   systemctl --user enable --now mojave-results-sync@bk224.timer
+#
+# Check them all:  systemctl --user list-timers 'mojave-results-sync@*'
+
+[Unit]
+Description=Nightly mojave-review Results sync (project %i)
+
+[Timer]
+# 03:30 local every day. Pick a time when both the sender and the host
+# are usually online.
+OnCalendar=*-*-* 03:30:00
+
+# Run on next boot/login if the scheduled tick was missed.
+Persistent=true
+
+# Stagger up to 20 min. With several projects enabled this also keeps
+# them from starting at the same instant and competing for bandwidth —
+# each project is an independent rsync.
+RandomizedDelaySec=1200
+
+Unit=mojave-results-sync@%i.service
+
+[Install]
+WantedBy=timers.target

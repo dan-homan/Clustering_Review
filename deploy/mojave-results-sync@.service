@@ -1,0 +1,47 @@
+# systemd --user TEMPLATE service: push one project's Results/ from this
+# (sender) machine to the mojave-review host. Install on the SENDER.
+#
+# The instance name is the project: `mojave-results-sync@bk224` reads
+# ~/.config/mojave-results-sync-bk224.conf. One unit file serves every
+# project, so adding a project is a config file plus an `enable`, with no
+# unit to copy or edit.
+#
+# Install (once):
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/mojave-results-sync@.service ~/.config/systemd/user/
+#   cp deploy/mojave-results-sync@.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#
+# Then per project:
+#   cp deploy/mojave-results-sync.conf.example \
+#      ~/.config/mojave-results-sync-mojave.conf      # and edit it
+#   systemctl --user enable --now mojave-results-sync@mojave.timer
+#   loginctl enable-linger $USER     # so timers fire while logged out
+#
+# Single-project deployments can keep using the non-templated
+# mojave-results-sync.service / .timer pair; this template supersedes it
+# for anything with more than one project.
+
+[Unit]
+Description=Push MOJAVE Results/ to mojave-review host (project %i)
+# Don't even try if the network's down.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Which project's config to read. The script also accepts this as an
+# environment variable, so nothing in the script is project-aware.
+Environment=MOJAVE_SYNC_CONF=%h/.config/mojave-results-sync-%i.conf
+
+# The script is expected at ~/bin/mojave-review-sync per the README.
+ExecStart=%h/bin/mojave-review-sync
+
+# Keep the sync low-priority — it's a background catchup, not
+# latency-sensitive work.
+Nice=10
+IOSchedulingClass=idle
+
+StandardOutput=journal
+StandardError=journal
