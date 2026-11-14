@@ -4,6 +4,41 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-14 — Multi-project step 6: per-project log context
+
+With several projects in one process, `mojave_review.auth.middleware | session
+established` doesn't say *which* project. Now it does:
+
+```
+2026-11-14T14:55:06 INFO  mojave_review.projects | mounted project mojave at /mojave/  (root=…)
+2026-11-14T14:55:06 INFO  mojave_review.projects | mounted project bk224 at /bk224/  (root=…)
+2026-11-14T14:55:06 INFO  [mojave] mojave_review.auth.middleware | session established …
+2026-11-14T14:55:06 INFO  [bk224]  mojave_review.auth.middleware | session established …
+```
+
+- `_logging._ProjectContextFilter` resolves the project **per record** from the
+  Flask app in context — the same mechanism `ui.urls.rel` uses — because
+  `configure_logging` runs once before any app exists, so it can't be baked
+  into the formatter. Being a filter means **no call site changed**: every
+  existing `get_logger(__name__)` call in the package gets the tag for free.
+- Attached to the **handlers**, not the logger: a logger's filters only see
+  records logged directly through it, and child loggers propagate up to the
+  package root's handlers without passing its filters.
+- **Single-project output is byte-identical** — the tag is empty, not `[]` or a
+  stray space. `create_app` stashes the project name only when given one.
+- Startup happens outside any request, so `build_dispatcher` logs the mount
+  table explicitly: the one place the name → path → root mapping is stated,
+  which is what you want when someone reports the wrong data under a URL.
+- The formatter carries `defaults={"project_tag": ""}`, so a record reaching a
+  handler whose filter was skipped formats cleanly instead of raising a
+  KeyError and being dropped. This also removed an ordering dependence found
+  while probing the tests: the filter *mutates* the shared record, so
+  whichever handler ran first was silently supplying the attribute to the
+  rest — which made the tests unable to detect a missing filter.
+- 8 tests in `tests/test_log_project_context.py` (398 total).
+
+---
+
 ## 2026-11-14 — Multi-project: browser-verified, and the memory question settled
 
 Closes the last open items on the step-3 checklist.

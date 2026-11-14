@@ -45,6 +45,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ._logging import get_logger
+
+_log = get_logger(__name__)
+
 __all__ = [
     "ProjectSpec", "ProjectConfigError",
     "parse_project_spec", "discover_projects", "projects_from_config",
@@ -327,6 +331,13 @@ def build_dispatcher(
         apps[spec.name] = dash_app
         # DispatcherMiddleware keys on the prefix WITHOUT a trailing slash.
         mounts[prefix.rstrip("/")] = dash_app.server
+        # Startup happens outside any request, so per-request tagging can't
+        # cover it — log the mount table explicitly instead. This is the only
+        # place the name→path mapping is stated, and it is what you want in
+        # the log when a reviewer reports the wrong data under a URL.
+        _log.info("mounted project %s at %s  (root=%s%s)",
+                  spec.name, prefix, spec.root,
+                  "" if spec.label == spec.root.name else f", label={spec.label!r}")
 
     def _fallback(environ, start_response):
         path = environ.get("PATH_INFO", "/") or "/"

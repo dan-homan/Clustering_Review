@@ -15,6 +15,7 @@ from .ui.dashboard import build_dashboard_page
 from .ui.dashboard_callbacks import register_dashboard_callbacks
 from .ui.layout import build_layout
 from .ui.callbacks import register_callbacks
+from ._logging import PROJECT_NAME_KEY
 from .ui.urls import REQUESTS_PREFIX_KEY
 
 # Dash auto-loads .js / .css from this dir at app start.
@@ -114,6 +115,10 @@ def create_app(
     # every project's links the final project's prefix once several apps share
     # a process. See ui/urls.py.
     app.server.config[REQUESTS_PREFIX_KEY] = app.config.requests_pathname_prefix
+    # Which project this app serves, for the per-project log tag. None in
+    # single-project mode, which leaves log output byte-identical.
+    if current_project:
+        app.server.config[PROJECT_NAME_KEY] = current_project
 
     # gzip every response, including the /_dash-update-component callback
     # payloads. The overlay figure is ~hundreds of KB of float/JSON per epoch;

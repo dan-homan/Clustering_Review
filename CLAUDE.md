@@ -1042,7 +1042,15 @@ second project.
 callback and each project keeps its own URL/Back behaviour. `project_nav` is
 `[(name, label, href)]` — plain data, so `ui` never imports `projects`.
 
-Rationale and the remaining steps are in `docs/multi_project.md`.
+**Logging:** `_logging._ProjectContextFilter` tags each record with the project
+handling the request (`[bk224] …`), resolved per record from the Flask app in
+context (`create_app` stashes the name under `PROJECT_NAME_KEY`). Attached to
+the **handlers** — a logger's filters don't see records that merely propagate
+up from children. Single-project output is byte-identical (empty tag);
+`build_dispatcher` logs the mount table at startup, since that happens outside
+any request.
+
+Rationale and the full history are in `docs/multi_project.md`.
 
 ## Running the web app
 

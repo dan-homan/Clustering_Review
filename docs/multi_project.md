@@ -324,8 +324,30 @@ worth doing on their own merits even if multi-project stalled.
    - **Labels default to the directory basename**, so MOJAVE reads as
      `MOJAVE_1996.00-2026.00` in the header. Set `label:` in the config
      `projects:` block (or name the symlink) for something shorter.
-6. **Per-project log context**, since `configure_logging` is global and log
-   lines would otherwise not say which project they came from.
+6. ~~**Per-project log context.**~~ **DONE 2026-11-14.**
+   - `_logging._ProjectContextFilter` tags each record with the project whose
+     app is handling the request — `[bk224] mojave_review.auth.middleware |
+     …`. Resolved **per record** from the Flask app in context (the same
+     mechanism `ui.urls.rel` uses), because `configure_logging` runs once
+     before any app exists, so the project cannot be baked into the formatter.
+   - A filter, not a wrapper, means **no call site changed**: every existing
+     `get_logger(__name__).info(...)` in the package picks the tag up for free.
+   - Attached to the **handlers**, not the logger: a logger's filters only see
+     records logged directly through it, while child loggers propagate up to
+     the package root's handlers without passing its filters.
+   - **Single-project output is byte-identical** — the tag is `""` when no
+     project is set, not `[]` or a stray space. `create_app` only stashes the
+     name when it is given one, i.e. by the dispatcher.
+   - Startup is outside any request, so per-request tagging cannot cover it;
+     `build_dispatcher` logs the mount table explicitly instead
+     (`mounted project bk224 at /bk224/ (root=…)`), which is the line you want
+     when someone reports the wrong data under a URL.
+   - The formatter carries `defaults={"project_tag": ""}`. Without it a record
+     reaching a handler whose filter was skipped would raise a formatting
+     KeyError and be dropped — and it removes an ordering dependence found
+     while testing: the filter *mutates* the shared record, so whichever
+     handler ran first was silently supplying the attribute to the others.
+   - 8 tests in `tests/test_log_project_context.py`.
 7. **Prove it with the checklist below** before touching webby.
 
 Deployment-side, already fine: `deploy/sync-results.sh` reads
