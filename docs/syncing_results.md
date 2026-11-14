@@ -1,4 +1,23 @@
-# Syncing `Results/` to the server
+# Syncing data to the server
+
+> **Two different tools live in this repo. Pick the right one.**
+>
+> | | `server_sync/sync_server.sh` | `deploy/sync-results.sh` |
+> |---|---|---|
+> | trees | `notes/` + `Results/` (rsync) **and** `recommendations/` (Unison, two-way) | `Results/` only |
+> | run | **by hand**, from the workstation project dir | unattended, systemd timer |
+> | use when | you are the admin, and `recommendations/` must come *back* from the server | a sender machine only ever pushes `Results/` |
+>
+> **The admin workflow is `server_sync/sync_server.sh`** — it is the only one
+> that brings reviewer submissions back. See
+> [its README](../server_sync/README.md), and the
+> [by-hand multi-project section](#by-hand-admin-sync-server_syncsync_serversh)
+> below. The rest of this file documents `deploy/sync-results.sh`, the
+> push-only timer-driven tool.
+
+---
+
+## Part 1 — `deploy/sync-results.sh`: pushing `Results/` only
 
 How clustering output gets from the machine that produces it (the **sender**)
 to the machine that serves the review app (the **host**), one project at a
@@ -250,8 +269,109 @@ wrong.
 
 ---
 
+---
+
+## By-hand admin sync (`server_sync/sync_server.sh`)
+
+The tool above pushes `Results/` and nothing else. The admin workflow needs
+three legs, because `recommendations/` is written on **both** sides —
+reviewers submit on the server, the admin aggregates and applies locally:
+
+| tree | direction | tool | `--delete`? |
+|---|---|---|---|
+| `notes/` | workstation → server | rsync mirror | yes |
+| `Results/` | workstation → server | rsync mirror | yes |
+| `recommendations/` | workstation ⇄ server | **Unison** | no |
+| `recommendations/_admin/` | workstation → server | rsync mirror | yes |
+
+Full rationale — why Unison rather than two-way rsync, conflict handling, the
+backup buffer — is in [`../server_sync/README.md`](../server_sync/README.md).
+
+### Multi-project: the project name is now mandatory
+
+```bash
+cd ~/Dropbox/Research/Clustering_CC/MOJAVE_1996.00-2026.00
+/path/to/repo/server_sync/sync_server.sh MOJAVE            # preview
+/path/to/repo/server_sync/sync_server.sh MOJAVE run        # apply
+```
+
+`PROJECT` is the **server-side** directory name under `REMOTE_DATA`
+(`MOJAVE`, `BK224`) — not the workstation directory name, which may differ
+(`MOJAVE_1996.00-2026.00` → `MOJAVE`). It has no default on purpose: the old
+flat layout would otherwise be silently assumed, which both strands the data
+in a stale tree and — the dangerous part — points Unison at a root its
+archive no longer matches.
+
+The script refuses if the remote project root doesn't exist, rather than
+letting rsync create `…/data/<typo>/Results` and report success.
+
+The authority for what `PROJECT` should be is the app's own startup log:
+
+```bash
+sudo journalctl -u mojave -n 30 --no-pager | grep 'mounted project'
+```
+
+### One Unison profile per project
+
+Unison keys its state archive on the **root pair**. One profile reused across
+projects would thrash a single archive between two remote roots, and each
+switch would read as "everything was deleted over there". So:
+
+```bash
+cp server_sync/mojave-recs-webby-PROJECT.prf ~/.unison/mojave-recs-webby-MOJAVE.prf
+cp server_sync/mojave-recs-webby-PROJECT.prf ~/.unison/mojave-recs-webby-BK224.prf
+```
+
+Edit the one marked `root = ssh://…` line in each to that project's
+`recommendations` directory. The profile name after `mojave-recs-webby-` must
+match the `PROJECT` argument — `sync_server.sh` derives it.
+
+### The hazard worth understanding before the first run
+
+Unison's archive remembers the previous state **of a specific root pair**. The
+server's `recommendations/` has just moved from `…/data/recommendations` to
+`…/data/<PROJECT>/recommendations`. Two outcomes:
+
+- **New root in the profile** (what you want): no archive for the new pair, so
+  Unison reconciles from scratch. Safe — it compares contents, so identical
+  files produce no action — but it may surface conflicts to decide, and takes
+  one slow pass.
+- **Old root left in place**: the path no longer exists. Unison either errors
+  (safe) or, if something recreated an empty directory there, reads the
+  archive and concludes the remote deleted everything — then proposes deleting
+  it on the **workstation** too.
+
+So, in order:
+
+1. Install the per-project profiles with the **new** roots.
+2. Run `preview` and actually read the Unison plan. Deletions on the
+   workstation side are the thing to look for.
+3. Only use `run` once the plan looks right.
+4. **Do not use `auto` until an interactive run has succeeded.** `auto` passes
+   `-batch -auto -prefer newer`, which answers those prompts for you.
+
+Overwritten and deleted files are kept under `/tmp/unison-mojave-backups/`
+(last 5 versions) on whichever host the change landed — a short-term undo
+buffer, cleared on reboot.
+
+### Support files are not synced by either tool
+
+`source_run_param.csv` and `astrometry_mojave.dat` live in the project root,
+outside all four legs. Copy them by hand when they change:
+
+```bash
+scp source_run_param.csv astrometry_mojave.dat     homand@HOST:/…/data/MOJAVE/
+```
+
+Symptom of a missing redshift table: the Flux view reads `Tb obs [K]` instead
+of `Tb host-frame [K]`, and `beta_app` vanishes from the Kinematics hovers.
+
+---
+
 ## See also
 
+- [`../server_sync/README.md`](../server_sync/README.md) — the admin
+  three-leg sync in full: why Unison, conflict handling, gotchas.
 - [`deployment_phase2.md`](deployment_phase2.md) — host setup, the reverse
   proxy, tokens, and what the Denison proxy actually does.
 - [`multi_project.md`](multi_project.md) — why projects are laid out this way.

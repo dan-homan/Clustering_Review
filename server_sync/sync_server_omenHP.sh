@@ -13,9 +13,15 @@
 # ~/.unison/mojave-recs.prf.
 #
 # Usage:
-#   ./sync_server.sh            # preview: rsync --dry-run + interactive Unison
-#   ./sync_server.sh run        # apply:   rsync for real  + interactive Unison
-#   ./sync_server.sh auto       # unattended: rsync real + Unison -batch -auto
+#   ./sync_server.sh PROJECT            # preview: rsync --dry-run + interactive Unison
+#   ./sync_server.sh PROJECT run        # apply:   rsync for real  + interactive Unison
+#   ./sync_server.sh PROJECT auto       # unattended: rsync real + Unison -batch -auto
+#
+# PROJECT is the server-side project directory name (e.g. MOJAVE, BK224) under
+# REMOTE_DATA. It is MANDATORY and has no default, on purpose: the server now
+# keeps one directory per project, and silently falling back to the old flat
+# layout would push this project's data into a stale tree -- and, worse, point
+# Unison at a root its archive no longer matches. See "Multi-project" below.
 #
 # In preview/run, Unison lists every proposed change and asks before doing
 # anything, so nothing happens you didn't approve. Use `auto` only once you
@@ -36,14 +42,48 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXCLUDE_FILE="$SCRIPT_DIR/server_update_exclude.txt"
 
 REMOTE="homand@74.140.113.72"
-REMOTE_BASE="/home/homand/mojave-review/data"
+# The server's data root — the directory holding one subdirectory per project.
+REMOTE_DATA="/home/homand/mojave-review/data"
 SSH="ssh -i /Users/homand/.ssh/id_ed25519 -o StrictHostKeyChecking=no -p 2121"
-# Unison profile (~/.unison/mojave-recs.prf). Its LOCAL root is relative
-# ("recommendations"), resolved against DATA_DIR because we cd there below.
-UNISON_PROFILE="mojave-recs"
+
+# === Project (mandatory) ===
+# Multi-project: the server keeps <REMOTE_DATA>/<PROJECT>/{Results,
+# recommendations,notes}. One workstation project dir maps to one server
+# project dir, and both the rsync targets and the Unison profile are derived
+# from it below.
+PROJECT="${PROJECT:-${1:-}}"
+if [[ -z "$PROJECT" || "$PROJECT" == "preview" || "$PROJECT" == "run" \
+      || "$PROJECT" == "auto" ]]; then
+  cat >&2 <<EOM
+usage: $0 PROJECT [preview|run|auto]
+
+PROJECT is the server-side project directory under
+  $REMOTE:$REMOTE_DATA
+e.g.  MOJAVE  or  BK224
+
+It is mandatory. The server keeps one directory per project, so guessing
+would push this project's data into the wrong place -- and would point
+Unison at a root its state archive no longer matches, which in 'auto' mode
+can propagate deletions.
+
+Run from the workstation project dir (the one holding notes/,
+recommendations/, Results/), e.g.:
+  cd ~/Dropbox/Research/Clustering_CC/MOJAVE_1996.00-2026.00
+  $0 MOJAVE            # preview
+  $0 MOJAVE run        # apply
+EOM
+  exit 1
+fi
+
+REMOTE_BASE="$REMOTE_DATA/$PROJECT"
+
+# Unison profile, one per project: its REMOTE root must name this project's
+# recommendations dir. The LOCAL root is relative ("recommendations"),
+# resolved against DATA_DIR because we cd there below.
+UNISON_PROFILE="${UNISON_PROFILE:-mojave-recs-$PROJECT}"
 
 # === Mode ===
-MODE="${1:-preview}"
+MODE="${2:-preview}"
 case "$MODE" in
   preview) DRY="--dry-run"; UNISON_FLAGS="" ;;
   run)     DRY="";          UNISON_FLAGS="" ;;
@@ -51,7 +91,11 @@ case "$MODE" in
   *) echo "usage: $0 [preview|run|auto]" >&2; exit 1 ;;
 esac
 
-echo "=== sync_server.sh ($MODE) — data dir: $DATA_DIR ==="
+echo "=== sync_server.sh ($MODE) ==="
+echo "    project:   $PROJECT"
+echo "    local:     $DATA_DIR"
+echo "    remote:    $REMOTE:$REMOTE_BASE"
+echo "    unison:    $UNISON_PROFILE"
 cd "$DATA_DIR"
 
 # Fail fast if we're not actually in the data dir (parent of the three trees).
@@ -60,6 +104,32 @@ for d in notes recommendations Results; do
                      echo "Run this from the dir holding notes/ recommendations/ Results/," >&2
                      echo "or set DATA_DIR=/path/to/data." >&2; exit 1; }
 done
+
+# === 0) remote project root must already exist ===
+# Refuse rather than create it. rsync would happily make
+# <REMOTE_DATA>/<typo>/Results and report success, leaving a stale tree the
+# app never reads and this project's data not where it belongs. And a
+# mistyped project means the Unison root below is wrong too, which is the
+# dangerous one: its archive would read an empty/absent remote as "everything
+# was deleted there" and, in auto mode, mirror those deletions onto the
+# workstation.
+#
+# The app itself logs the project roots it mounted at startup ("mounted
+# project <name> at /<name>/ (root=...)"), so that journal line is the
+# authority for what PROJECT should be.
+if ! $SSH "$REMOTE" "test -d '$REMOTE_BASE'" 2>/dev/null; then
+  cat >&2 <<EOM
+ERROR: remote project root does not exist:
+  $REMOTE:$REMOTE_BASE
+
+Either PROJECT is wrong, or this project has not been set up on the server
+yet. To create it (first sync of a new project):
+  $SSH $REMOTE 'mkdir -p $REMOTE_BASE'
+and remember the two support files, which are NOT synced by this script:
+  scp source_run_param.csv astrometry_mojave.dat $REMOTE:$REMOTE_BASE/
+EOM
+  exit 1
+fi
 
 # === 1) one-way MIRROR (delete OK): notes + Results, workstation -> server ===
 mirror() { rsync -az --delete --timeout=300 -e "$SSH" $DRY "$@"; }

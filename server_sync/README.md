@@ -38,7 +38,8 @@ Unison keeps a **state archive on each side**, so it:
 |---|---|
 | `sync_server.sh` | The wrapper that runs all three legs. **This is what you run.** |
 | `server_update_exclude.txt` | rsync `--exclude-from` patterns for the `Results/` mirror (junk by default; commented examples for skipping heavy PDF/MP4 renders and `backups/`). |
-| `mojave-recs.prf` | **Reference copy** of the Unison profile. The *active* profile must live at `~/.unison/mojave-recs.prf` (see setup). |
+| `mojave-recs-webby-PROJECT.prf` | **Per-project template** for the webby server. Copy to `~/.unison/mojave-recs-webby-<PROJECT>.prf` and edit the one marked root line. |
+| `mojave-recs.prf` | **Reference copy** of the original single-project profile (omenHP laptop). The *active* copy must live under `~/.unison/` (see setup). Keep the two in step — drift here is silent. |
 | `README.md` | This file. |
 
 ## One-time setup
@@ -99,14 +100,102 @@ Unison keeps a **state archive on each side**, so it:
 **Run from your production data directory** — the one that holds `notes/`,
 `recommendations/`, and `Results/`. The script operates on the current working
 directory by default (`DATA_DIR=$PWD`) and fails fast with a clear message if
-those three trees aren't present:
+those three trees aren't present.
+
+**The first argument is the PROJECT** — the server-side directory name under
+`REMOTE_DATA`. It is mandatory (see "Multi-project" below):
 
 ```bash
 cd /path/to/production/data            # parent of notes/ recommendations/ Results/
-/path/to/repo/server_sync/sync_server.sh           # preview  (default)
-/path/to/repo/server_sync/sync_server.sh run       # apply
-/path/to/repo/server_sync/sync_server.sh auto      # unattended
+/path/to/repo/server_sync/sync_server.sh MOJAVE           # preview  (default)
+/path/to/repo/server_sync/sync_server.sh MOJAVE run       # apply
+/path/to/repo/server_sync/sync_server.sh MOJAVE auto      # unattended
 ```
+
+## Multi-project
+
+The server keeps one directory per project:
+
+```
+<REMOTE_DATA>/
+├── MOJAVE/{Results,recommendations,notes}
+└── BK224/{Results,recommendations,notes}
+```
+
+So each run targets exactly one of them, and `PROJECT` names it. Three
+consequences:
+
+**1. `PROJECT` is mandatory, with no default.** The old flat layout
+(`<REMOTE_DATA>/{Results,recommendations,notes}`) would otherwise be assumed
+silently — stranding the data in a tree the app never reads, and pointing
+Unison at a root its archive no longer matches.
+
+The workstation directory name and the server project name need not match
+(`MOJAVE_1996.00-2026.00` on disk here → `MOJAVE` there). The authority for
+the server name is the app's own startup log:
+
+```bash
+ssh <server> "journalctl -u mojave -n 30 --no-pager" | grep 'mounted project'
+```
+
+**2. The script refuses if the remote project root doesn't exist** rather than
+letting rsync create `<REMOTE_DATA>/<typo>/Results` and report success. To set
+up a new project there:
+
+```bash
+ssh <server> 'mkdir -p <REMOTE_DATA>/NEWPROJ'
+```
+
+**3. One Unison profile per project.** Unison keys its state archive on the
+**root pair**, so a single profile reused across projects would thrash one
+archive between two remote roots — and each switch would read as "everything
+was deleted over there". The script derives the profile name from `PROJECT`
+(`mojave-recs-webby-MOJAVE`), so install one per project:
+
+```bash
+cp server_sync/mojave-recs-webby-PROJECT.prf \
+   ~/.unison/mojave-recs-webby-MOJAVE.prf
+cp server_sync/mojave-recs-webby-PROJECT.prf \
+   ~/.unison/mojave-recs-webby-BK224.prf
+```
+
+...editing the one marked `root = ssh://…` line in each.
+
+### Before the first multi-project run — read this
+
+The server's `recommendations/` has moved from `<REMOTE_DATA>/recommendations`
+to `<REMOTE_DATA>/<PROJECT>/recommendations`. Unison's archive remembers the
+previous state **of a specific root pair**, so:
+
+- **With the new root in the profile** (what you want): no archive exists for
+  the new pair, so Unison reconciles from scratch. Safe — it compares contents,
+  so identical files produce no action — but it may surface conflicts to
+  decide, and takes one slow pass.
+- **With the old root still in place**: that path no longer exists. Unison
+  either errors out (safe) or, if something recreated an empty directory
+  there, reads its archive and concludes the remote deleted everything — then
+  proposes deleting it on the **workstation** too.
+
+In order:
+
+1. Install the per-project profiles with the **new** roots.
+2. `sync_server.sh <PROJECT>` (preview) and actually read the Unison plan.
+   Deletions on the workstation side are the thing to look for.
+3. `sync_server.sh <PROJECT> run` once the plan looks right.
+4. **Don't use `auto` until an interactive run has succeeded** — it passes
+   `-batch -auto -prefer newer`, which answers those prompts for you.
+
+### Support files are not synced
+
+`source_run_param.csv` and `astrometry_mojave.dat` sit in the project root,
+outside all four legs. Copy them by hand when they change:
+
+```bash
+scp source_run_param.csv astrometry_mojave.dat <server>:<REMOTE_DATA>/MOJAVE/
+```
+
+Symptom of a missing redshift table: the Flux view reads `Tb obs [K]` instead
+of `Tb host-frame [K]`, and `beta_app` disappears from the Kinematics hovers.
 
 You can invoke the script by any path — it locates its own helper file
 (`server_update_exclude.txt`) relative to itself, so it doesn't matter where it
@@ -142,9 +231,9 @@ especially any deletions — before committing to it:
 
 ```bash
 cd /path/to/production/data
-/path/to/repo/server_sync/sync_server.sh preview   # rsync dry-run + interactive Unison
+/path/to/repo/server_sync/sync_server.sh MOJAVE          # preview
 # looks right? then:
-/path/to/repo/server_sync/sync_server.sh run
+/path/to/repo/server_sync/sync_server.sh MOJAVE run
 ```
 
 With no archive yet, Unison reconciles both sides from scratch on that first
@@ -188,5 +277,16 @@ Only switch to `auto` once you're comfortable with how it behaves.
   treat the server as the single authority for reviewer submissions to avoid
   surprises.
 - **Server-side paths** are configured at the top of `sync_server.sh`
-  (`REMOTE`, `REMOTE_BASE`, `SSH`) and in the roots/`sshargs` of the profile.
+  (`REMOTE`, `REMOTE_DATA`, `SSH`) and in the roots/`sshargs` of the profile.
   Change them in **both** places if the host, port, key, or layout changes.
+  `REMOTE_BASE` is now derived as `$REMOTE_DATA/$PROJECT` — don't hardcode it.
+- **Profile drift is silent.** The active `~/.unison/*.prf` and the reference
+  copy here can disagree for months without any symptom, because Unison only
+  reads the active one. The `ignore = Path _admin` line matters in particular:
+  `sync_server.sh` pushes `_admin/` one-way with `--delete` in leg 3, so if
+  Unison *also* syncs it two-way the two legs fight over the same files.
+  Compare them when something behaves oddly:
+  ```bash
+  diff <(grep -vE '^\s*#|^\s*$' server_sync/mojave-recs.prf) \
+       <(grep -vE '^\s*#|^\s*$' ~/.unison/mojave-recs.prf)
+  ```

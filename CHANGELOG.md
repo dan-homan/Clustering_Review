@@ -4,6 +4,49 @@ Changes are grouped by feature area, newest first.
 
 ---
 
+## 2026-11-15 — `server_sync/sync_server.sh` is project-aware
+
+The admin's actual by-hand sync — three legs, including the two-way Unison
+merge of `recommendations/` — still assumed the old flat server layout. (The
+earlier entry today documented `deploy/sync-results.sh`, which pushes
+`Results/` only and is *not* the admin workflow.)
+
+- **`PROJECT` is now the first argument and is mandatory**:
+  `sync_server.sh MOJAVE run`. No default, deliberately — the old layout would
+  otherwise be assumed silently, stranding data in a tree the app never reads
+  and pointing Unison at a root its archive no longer matches. The
+  workstation and server names need not agree
+  (`MOJAVE_1996.00-2026.00` → `MOJAVE`); the app's `mounted project` startup
+  log is the authority.
+- `REMOTE_BASE` is derived as `$REMOTE_DATA/$PROJECT`, and the script
+  **refuses when the remote project root doesn't exist** rather than letting
+  rsync create `…/data/<typo>/Results` and report success.
+- **One Unison profile per project.** Unison keys its archive on the root
+  pair, so one profile reused across projects would thrash a single archive
+  between two remote roots — each switch reading as "everything was deleted
+  over there". New `server_sync/mojave-recs-webby-PROJECT.prf` template; the
+  script derives the profile name from `PROJECT`.
+- `sync_server_omenHP.sh` given the same treatment, so the two don't drift —
+  they now differ only in host, ssh args and profile prefix.
+- **The hazard documented in both READMEs.** The server's `recommendations/`
+  just moved. With the new root in the profile, Unison reconciles from scratch
+  (safe). With the *old* root, the path is gone — Unison either errors, or if
+  something recreated an empty directory there, reads its archive as "remote
+  deleted everything" and proposes deleting the **workstation** copy.
+  So: install the new profiles, `preview` and read the plan, then `run` — and
+  **don't use `auto` until an interactive run has succeeded**, since it
+  answers those prompts for you.
+- `docs/syncing_results.md` now opens by distinguishing the two tools, and
+  carries a by-hand admin section; `server_sync/README.md` gained
+  Multi-project, the first-run hazard, and support-file notes.
+- New gotcha recorded: **profile drift is silent.** The active
+  `~/.unison/*.prf` and the repo reference can disagree indefinitely, since
+  Unison only reads the active one. `ignore = Path _admin` matters especially
+  — leg 3 pushes `_admin/` one-way with `--delete`, so if Unison also syncs it
+  two-way the legs fight. A `diff` recipe is in the README.
+
+---
+
 ## 2026-11-15 — Sync safety + docs for installing from GitHub
 
 Prompted by setting up the second project's sync. Two latent ways to lose data

@@ -1,0 +1,89 @@
+# TEMPLATE -- Bidirectional sync of ONE PROJECT's review recommendations:
+#   workstation  <->  university server (webby)
+#
+# ONE PROFILE PER PROJECT. Copy this to ~/.unison/ once per project and edit
+# the single marked line:
+#
+#   cp server_sync/mojave-recs-webby-PROJECT.prf \
+#      ~/.unison/mojave-recs-webby-MOJAVE.prf
+#   cp server_sync/mojave-recs-webby-PROJECT.prf \
+#      ~/.unison/mojave-recs-webby-BK224.prf
+#
+# ...then set the remote root in each to that project's directory. The name
+# after "mojave-recs-webby-" must match the PROJECT argument you pass to
+# sync_server.sh, which derives the profile name from it.
+#
+# WHY per project: Unison keys its state archive on the ROOT PAIR. One profile
+# reused across projects would thrash a single archive between two different
+# remote roots, and each switch would look like "everything was deleted over
+# there". Separate profiles keep separate archives.
+#
+# See sync_server.sh in the Clustering_Review repo for the wrapper that
+# drives this alongside the one-way rsync mirror of notes/ and Results/.
+#
+# IMPORTANT: Unison profile syntax does NOT allow a trailing inline comment on
+# a preference line ("times = true  # ..." is a parse error — the comment is
+# read as part of the value). Keep every comment on its own line beginning
+# with '#'.
+
+# --- the two roots ---
+# Local root is RELATIVE: resolved against the directory Unison is launched
+# from. sync_server.sh cd's into your production data dir first, so this
+# becomes <that dir>/recommendations. Always invoke via sync_server.sh (or run
+# unison from that same production dir) so the relative root -- and Unison's
+# per-side state archive -- stay consistent run to run.
+root = recommendations
+# >>> EDIT THIS LINE per project <<<
+# Double slash = absolute remote path. The final component must be
+# <REMOTE_DATA>/<PROJECT>/recommendations, matching REMOTE_DATA in
+# sync_server.sh and the project `root` in the server's config.yaml.
+# Changing it after a sync starts a FRESH archive for the new pair, which is
+# safe (Unison compares contents) but reconciles from scratch once.
+root = ssh://homand@webby.cc.denison.edu//home/homand/mojave-review/data/MOJAVE/recommendations
+
+# --- ssh transport ---
+# webby uses the default port and key, so no sshargs are needed. Uncomment
+# and adjust if that changes.
+# sshargs = -i /Users/homand/.ssh/id_ed25519 -p 2121 -o StrictHostKeyChecking=no
+# If `unison` isn't on the server's default login PATH, point at it explicitly:
+# servercmd = /usr/bin/unison
+
+# --- reconciliation behaviour ---
+# times: preserve mtimes (required for `prefer = newer`).
+times = true
+# auto: auto-apply NON-conflicting changes (adds / updates / moves).
+auto = true
+# batch = false: STOP and ask on a genuine conflict (interactive).
+batch = false
+# prefer = newer -> uncomment for unattended runs: the newer file wins. Leave
+# it commented while building trust so real conflicts pause instead of silently
+# resolving. (sync_server.sh's `auto` mode passes -prefer newer on the CLI.)
+# prefer = newer
+
+# --- safety net: keep backups of anything replaced or deleted ---
+# Central location in /tmp so the SAME absolute path is valid AND writable on
+# BOTH the macOS workstation and the Linux server -- a single profile is sent
+# to both ends and can't set a per-host path, so a $HOME path (/Users/... vs
+# /home/...) fails on the server. /tmp exists on both; Unison creates the leaf
+# dir. Backups live OUTSIDE the synced tree so the app never globs them as
+# recs. Note: /tmp is cleared on reboot, so treat these as a short-term undo.
+backup = Name *
+backuplocation = central
+backupdir = /tmp/unison-mojave-backups
+maxbackups = 5
+# confirmbigdel: extra prompt before any large deletion.
+confirmbigdel = true
+
+# --- never sync junk / atomic-write temp files ---
+ignore = Name .DS_Store
+ignore = Name *.part
+ignore = Name .*.swp
+ignore = Path .git
+# --- _admin/ is workstation-authoritative, NOT bidirectional ---
+# assignments.json / team roster / target dates / manual credits are authored
+# on the workstation (the admin curates locally; reviewers only author their
+# own submissions, which DO flow back). Syncing _admin/ bidirectionally let the
+# server's older assignments.json overwrite a fresh local rebalance (Unison
+# prefer=newer / archive resolution). It is pushed one-way workstation->server
+# by sync_server.sh's rsync leg instead. (backups/ never syncs either.)
+ignore = Path _admin
