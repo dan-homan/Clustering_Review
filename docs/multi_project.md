@@ -107,7 +107,30 @@ cover would get a 403 with a perfectly valid token. The per-project form stays
 available for the case where token files genuinely differ — it's a call-site
 choice, not a code change.
 
-### Mount inside the existing prefix — then IT does nothing
+### Mount at ROOT-LEVEL paths — then IT does nothing
+
+> **Supersedes the "mount inside `/mojave-review/`" plan below (2026-11-14),**
+> once the real Denison proxy was identified — see the deployment doc. Its
+> entry rule translates **only** the bare `/mojave-review/`; sub-paths under it
+> arrive at the app unstripped, so `/mojave-review/bk224/` would require a
+> proxy change after all. But a broad `location /` already proxies every other
+> path verbatim, so **root-level** project paths need no proxy change at all:
+>
+> ```
+> /            -> redirect to the default project
+> /mojave/     -> project 1   (proxied verbatim by the broad rule)
+> /bk224/      -> project 2
+> ```
+>
+> Old `/mojave-review/?token=…` bookmarks keep working: the entry rule strips
+> them to `/`, which redirects on to the default project. Nothing has to be
+> reissued. Each app instance takes its project path as its own
+> `routes_pathname_prefix` / `requests_pathname_prefix`, and the shared cookie
+> goes at `/` (the common mount root here *is* the site root — so the
+> per-project cookie name from step 2 earns its keep, since the path alone no
+> longer separates the projects).
+
+### (superseded) Mount inside the existing prefix — then IT does nothing
 
 The current public path is `/mojave-review/`, and reviewers have bookmarks
 with `?token=…` on it. Mounting projects *beneath* that same prefix:
