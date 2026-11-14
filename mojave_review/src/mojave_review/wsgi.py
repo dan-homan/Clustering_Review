@@ -52,6 +52,13 @@ _app = create_app(
                      if _config.astrometry_file else None),
     source_params_path=(str(_config.source_params_file)
                         if _config.source_params_file else None),
+    # Previously omitted, so the config key was read and then ignored and the
+    # app was always root-mounted. Both default to off, which is the correct
+    # setting for the Denison deployment (see docs/deployment_phase2.md) --
+    # these exist for a proxy or dispatcher that really does mount the app
+    # under a prefix.
+    url_base_prefix=_config.url_base_prefix,
+    proxy_strips_prefix=_config.proxy_strips_prefix,
 )
 
 # What gunicorn looks for.

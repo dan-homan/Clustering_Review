@@ -31,6 +31,20 @@ admin_contact: "homand@denison.edu"
 # nginx).
 cookie_secure: false
 
+# --- Reverse proxy -----------------------------------------------------
+# Public path prefix, when the app is served under one (e.g. behind nginx
+# at https://host/mojave-review/). Leave both unset for root hosting.
+#
+# proxy_strips_prefix says whether the proxy REMOVES the prefix before
+# forwarding -- it is the difference between these two nginx lines:
+#     proxy_pass http://127.0.0.1:8050;    # preserved  -> false
+#     proxy_pass http://127.0.0.1:8050/;   # stripped   -> true
+# Get it wrong and every request 404s (loud, and a restart reverts it).
+# To check an already-running deployment: look for requests_pathname_prefix
+# in the live page's _dash-config blob.
+# url_base_prefix: /mojave-review/
+# proxy_strips_prefix: true
+
 # --- Bind --------------------------------------------------------------
 # These two only drive `app.run()` in the dev launcher (`mojave-review`).
 # Under gunicorn the bind is set on the command line in the systemd

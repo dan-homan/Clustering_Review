@@ -82,6 +82,19 @@ _COOKIE_REFRESH_FLOOR_SECONDS = 24 * 3600
 _COOKIE_SLUG_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 
+def normalise_prefix(prefix: str | None) -> str:
+    """``"mojave-review"`` / ``"/mojave-review"`` → ``"/mojave-review/"``;
+    blank or ``None`` → ``"/"``. Mirrors the normalisation ``Config`` applies
+    to ``url_base_prefix`` so this module is correct even when called
+    directly (tests, a future dispatcher)."""
+    p = (prefix or "/").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    if not p.endswith("/"):
+        p = p + "/"
+    return p
+
+
 def cookie_identity(url_base_prefix: str | None) -> tuple[str, str]:
     """``(cookie_name, cookie_path)`` for an app served under
     ``url_base_prefix``.
@@ -100,15 +113,36 @@ def cookie_identity(url_base_prefix: str | None) -> tuple[str, str]:
     where one app is root-mounted and another is prefixed, since ``path="/"``
     matches every request.
     """
-    prefix = (url_base_prefix or "/").strip()
-    if not prefix.startswith("/"):
-        prefix = "/" + prefix
-    if not prefix.endswith("/"):
-        prefix = prefix + "/"
+    prefix = normalise_prefix(url_base_prefix)
     if prefix == "/":
         return COOKIE_NAME, "/"
     slug = _COOKIE_SLUG_RE.sub("_", prefix).strip("_").lower()
     return (f"{COOKIE_NAME}_{slug}" if slug else COOKIE_NAME), prefix
+
+
+def public_path(app_path: str, url_base_prefix: str | None,
+                proxy_strips_prefix: bool) -> str:
+    """Translate an app-internal path into the one the BROWSER is using.
+
+    ``request.path`` is whatever reached Flask, which is not necessarily what
+    is in the address bar. With a stripping proxy the app sees ``/dashboard``
+    while the browser shows ``/mojave-review/dashboard``; redirecting to the
+    former sends the reviewer outside the proxied location. With a
+    non-stripping proxy the two are already the same.
+
+    Used for the post-``?token=`` redirect, which is the one place this
+    middleware builds a URL for the browser to follow.
+    """
+    if not proxy_strips_prefix or not url_base_prefix:
+        return app_path
+    prefix = normalise_prefix(url_base_prefix).rstrip("/")
+    if not app_path.startswith("/"):
+        app_path = "/" + app_path
+    # Defensive: if the prefix is somehow already present (a proxy that only
+    # strips sometimes, a direct hit on the bound port) don't double it.
+    if app_path == prefix or app_path.startswith(prefix + "/"):
+        return app_path
+    return prefix + app_path
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +226,7 @@ def install_token_middleware(
     cookie_max_age_days: int = DEFAULT_COOKIE_MAX_AGE_DAYS,
     admin_contact: str = "the admin",
     url_base_prefix: str | None = None,
+    proxy_strips_prefix: bool = False,
 ) -> None:
     """Wire the before_request hook + the cookie-refresh after_request hook.
 
@@ -219,14 +254,23 @@ def install_token_middleware(
     admin_contact :
         Free-text "email this person" string shown on the 403 page.
     url_base_prefix :
-        The path this app is served under, used only to scope the session
-        cookie (see :func:`cookie_identity`). ``None`` → root-mounted, which
-        keeps the historical cookie name and path so an upgrade doesn't log
-        anyone out. Pass the app's real prefix whenever several apps share a
-        host, or their cookies will collide.
+        The public path this app is served under, or None for root. Two
+        uses: the session cookie is scoped to it and named after it (see
+        :func:`cookie_identity`), so sibling apps on one host cannot overwrite
+        each other's token; and the post-login redirect is built against it.
+        ``None`` → root-mounted, which keeps the historical
+        ``("mr_token", "/")`` so an upgrade logs nobody out.
+    proxy_strips_prefix :
+        Whether something upstream — a reverse proxy, or a WSGI dispatcher
+        mounting this app under a path — removes ``url_base_prefix`` before
+        the app sees it (see :func:`mojave_review.app.create_app`). Decides
+        whether ``request.path`` already carries the prefix.
     """
     cache = _StoreCache()
     cookie_max_age = int(cookie_max_age_days * 86400)
+    # Cookie identity is always derived from the PUBLIC prefix: it is the
+    # browser that decides whether to send a cookie, and the browser only
+    # knows public paths.
     cookie_name, cookie_path = cookie_identity(url_base_prefix)
 
     def _resolve(token: str | None) -> User | None:
@@ -256,7 +300,10 @@ def install_token_middleware(
                     if k != "token"
                 ]
                 tail = ("?" + urlencode(clean_qs)) if clean_qs else ""
-                resp = redirect(request.path + tail, code=302)
+                resp = redirect(
+                    public_path(request.path, url_base_prefix,
+                                proxy_strips_prefix) + tail,
+                    code=302)
                 resp.set_cookie(
                     cookie_name, url_token,
                     max_age=cookie_max_age,
