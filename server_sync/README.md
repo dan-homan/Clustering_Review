@@ -78,11 +78,33 @@ Unison keeps a **state archive on each side**, so it:
    > is read as part of the value). Every comment must be on its own line
    > starting with `#`.
 
-3. **(Recommended) Load your SSH key into the agent** so the three legs don't
-   each prompt for your key passphrase. Once per login session:
+3. **Stop the six password prompts.** The script opens a fresh SSH connection
+   per leg (plus one for the project-root check), so *password* authentication
+   means typing it five or six times per run — and makes `auto` impossible.
+
+   If you are being asked for `homand@host's password:` then you are on
+   password auth, and `ssh-add` won't help — install a key instead:
+
+   ```bash
+   ssh-keygen -t ed25519                      # if you don't have one
+   ssh-copy-id homand@webby.cc.denison.edu    # then: no prompts at all
+   ```
+
+   If you are asked for a *key passphrase* instead, load it into the agent
+   once per login session:
 
    ```bash
    ssh-add --apple-use-keychain ~/.ssh/id_ed25519   # macOS: also stores in Keychain
+   ```
+
+   Either way, SSH connection multiplexing collapses the per-leg connections
+   into one, so even a password is typed once. Add to `~/.ssh/config`:
+
+   ```
+   Host webby.cc.denison.edu
+       ControlMaster auto
+       ControlPath  ~/.ssh/cm-%r@%h:%p
+       ControlPersist 10m
    ```
 
    To make it automatic on future logins, add to `~/.ssh/config`:
@@ -213,9 +235,21 @@ Unison's state archive stays consistent run to run.
 
 | Mode | rsync legs | Unison leg |
 |---|---|---|
-| `preview` *(default)* | `--dry-run` — shows what *would* change | interactive — lists every proposed change and asks before doing anything |
+| `preview` *(default)* | `--dry-run` — shows what *would* change | **LIVE, but asks first** — see below |
 | `run` | applies for real | interactive |
 | `auto` | applies for real | `-batch -auto -prefer newer` — no prompts, newer file wins |
+
+> **`preview` is not a full dry run.** Unison has no dry-run mode: its
+> interactive prompt *is* the review gate. So in `preview` the two rsync legs
+> are a genuine `--dry-run`, but the Unison leg lists its plan and then
+> **applies whatever you approve**. Answer `n` to decline. The practical
+> difference between `preview` and `run` is therefore the rsync legs only —
+> which is exactly what you want when the question is "what would this push?"
+>
+> The rsync legs use `--itemize-changes`, so a dry run actually shows its plan
+> (one line per changed item, `*deleting …` included) and stays silent on a
+> routine sync. Before that was added they printed nothing at all, which made
+> `preview` useless for those two legs.
 
 In `preview`/`run`, Unison won't touch anything you don't approve — review the
 listed changes and accept, or quit to abort. `auto` is for cron/unattended use

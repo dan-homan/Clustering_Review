@@ -157,7 +157,14 @@ EOM
 fi
 
 # === 1) one-way MIRROR (delete OK): notes + Results, workstation -> server ===
-mirror() { rsync -az --delete --timeout=300 -e "$SSH" $DRY "$@"; }
+# --itemize-changes is what makes `preview` actually preview. Without it a
+# --dry-run prints NOTHING (no -v, no --stats), so the rsync legs were silent
+# in both modes and you learned nothing from them. -i lists one line per
+# CHANGED item only, so it stays quiet on a routine sync and gets loud exactly
+# when you want it to -- including "*deleting ..." lines, which are the ones
+# worth reading.
+mirror() { rsync -az --delete --itemize-changes --timeout=300 \
+                 -e "$SSH" $DRY "$@"; }
 
 echo "--> notes/  ->  server"
 mirror ./notes/ "$REMOTE:$REMOTE_BASE/notes/"
@@ -172,7 +179,12 @@ mirror --exclude-from="$EXCLUDE_FILE" \
 # considered/, applied/, notes ledgers) merges bidirectionally as before.
 echo "--> recommendations/  <->  server (unison; _admin/ excluded)"
 if [[ "$MODE" == "preview" ]]; then
-  echo "    (interactive Unison: review the listed changes, then accept or quit)"
+  # Be blunt about this: the rsync legs above were --dry-run, but Unison has
+  # no dry-run mode. Its interactive prompt IS the review gate, so this leg
+  # is live and WILL apply whatever you approve. Answering 'n' declines.
+  echo "    NOTE: the rsync legs above were a dry run; this Unison leg is LIVE."
+  echo "    It lists every proposed change and asks first — answer 'n' to"
+  echo "    decline, or 'y' to apply. Nothing happens without your answer."
 fi
 unison "$UNISON_PROFILE" $UNISON_FLAGS
 
