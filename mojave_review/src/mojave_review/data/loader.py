@@ -13,8 +13,9 @@ The on-disk layout produced by find_clusters.py is:
           backup_NNN_summary_plots.pdf
           backup_NNN_epoch_overplots.mp4
         alt_models/                              (optional alternate models)
-          alt_model_NNN_merged_win_results.csv
-          alt_model_NNN_plotdata.npz             (unlike backups, ships its npz)
+          alt_model_<tag>_merged_win_results.csv (<tag> = 001, recalcIDs, ...)
+          alt_model_<tag>_plotdata.npz           (unlike backups, ships its npz)
+          alt_model_<tag>_config.json
         cluster_fits/...
         config_win.json
         run_string.txt
@@ -123,24 +124,62 @@ def list_models(src: SourceRef) -> list[ModelFile]:
             models.append(
                 ModelFile(key=key, label=key, csv_path=csv, npz_path=None)
             )
-    # Alternate models live in alt_models/ parallel to backups/, but DO ship
-    # their own plotdata npz (alt_model_NNN_plotdata.npz) so the overlay panel
-    # can render their own clean components instead of borrowing current's.
-    # They're surfaced in the dropdown like backups (read-only — recommendations
-    # only apply to "current").
-    alt_dir = src.folder / "alt_models"
-    if alt_dir.is_dir():
-        for csv in sorted(alt_dir.glob("alt_model_*_merged_win_results.csv")):
-            m = re.match(r"alt_model_(\d+)_merged_win_results\.csv$", csv.name)
-            if not m:
-                continue
-            key = f"alt_model_{m.group(1)}"
-            npz = alt_dir / f"alt_model_{m.group(1)}_plotdata.npz"
-            models.append(
-                ModelFile(key=key, label=key, csv_path=csv,
-                          npz_path=npz if npz.is_file() else None)
-            )
+    models.extend(list_alt_models(src, taken={mf.key for mf in models}))
     return models
+
+
+# Files an alternate model is made of, as suffixes on its shared stem
+# (e.g. stem "alt_model_recalcIDs" + "_config.json").
+_ALT_CONFIG_SUFFIX = "_config.json"
+_ALT_CSV_SUFFIX = "_merged_win_results.csv"
+_ALT_NPZ_SUFFIX = "_plotdata.npz"
+
+
+def list_alt_models(src: SourceRef,
+                    taken: set[str] | None = None) -> list[ModelFile]:
+    """Alternate models in ``alt_models/``, discovered by their file stem.
+
+    Alternate models live parallel to ``backups/`` but DO ship their own
+    plotdata npz, so the overlay panel can render *their* clean components
+    instead of borrowing current's. They're surfaced in the dropdown like
+    backups (read-only — recommendations only apply to "current").
+
+    Names are **not** restricted to ``alt_model_NNN``: the pipeline also
+    writes descriptive ones like ``alt_model_recalcIDs_*``, and those tags
+    may contain underscores. So rather than parse a number out of the CSV
+    name, we collect the stems of the per-model ``_config.json`` and
+    ``_merged_win_results.csv`` files and treat each distinct stem as one
+    model. The CSV is the one indispensable file — a stem without it (a
+    config left behind by an aborted run, say) is skipped.
+    """
+    taken = set(taken or ())
+    alt_dir = src.folder / "alt_models"
+    if not alt_dir.is_dir():
+        return []
+
+    stems: set[str] = set()
+    for suffix in (_ALT_CONFIG_SUFFIX, _ALT_CSV_SUFFIX):
+        for f in alt_dir.glob(f"*{suffix}"):
+            stems.add(f.name[: -len(suffix)])
+
+    out: list[ModelFile] = []
+    for stem in sorted(stems):
+        csv = alt_dir / f"{stem}{_ALT_CSV_SUFFIX}"
+        if not csv.is_file():
+            continue
+        # The stem is the model key, so it namespaces itself ("alt_model_...").
+        # Guard anyway: a key colliding with "current" or a backup would make
+        # the dropdown ambiguous and load_bundle resolve the wrong file.
+        key = stem if stem.startswith("alt_model") else f"alt_model_{stem}"
+        if key in taken:
+            continue
+        taken.add(key)
+        npz = alt_dir / f"{stem}{_ALT_NPZ_SUFFIX}"
+        out.append(
+            ModelFile(key=key, label=key, csv_path=csv,
+                      npz_path=npz if npz.is_file() else None)
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------

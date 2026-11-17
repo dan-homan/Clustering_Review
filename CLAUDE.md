@@ -27,7 +27,7 @@ Clustering_Review/
 │       ├── <prefix>.merged_win_results.plotdata.npz # epoch_info + raw clean components
 │       ├── <prefix>.summary_plots.pdf / .epoch_overplots.mp4  # reference renders (read-only)
 │       ├── backups/backup_NNN_*.{csv,pdf,mp4,json,txt}    # prior models (NO npz)
-│       ├── alt_models/alt_model_NNN_*.{csv,npz,json,txt}  # optional alt models (WITH npz)
+│       ├── alt_models/alt_model_<tag>_*.{csv,npz,json,txt} # optional alt models (WITH npz)
 │       ├── cluster_fits/                                  # per-window cluster fits
 │       ├── config_win.json / history.txt / run_string.txt
 └── mojave_review/               # the web app (pip-installable)
@@ -247,7 +247,7 @@ resize on the right).
 
 Scoped to (source, view) so zoom survives epoch scrubbing, selection clicks,
 the visualize/astrometry toggles, pending edits — **and model switches**
-(`current` ⇄ `backup_NNN` ⇄ `alt_model_NNN` ⇄ `Rec:<slug>`), which is how a
+(`current` ⇄ `backup_NNN` ⇄ `alt_model_<tag>` ⇄ `Rec:<slug>`), which is how a
 reviewer compares models and only works at a fixed zoom. Every model under one
 source covers the same source/epochs, so the axes mean the same thing; a source
 or view change still flushes (different data domain / axis identities), as do
@@ -548,7 +548,7 @@ current status, and autosave wrote the wiped draft over
 and edits survived. Wiring is pinned by `tests/test_rec_panel_state_sources.py`.
 
 **Read-only modes:** `current` = editable/autosaves; `backup_NNN` /
-`alt_model_NNN` = locked, empty; `Rec: <slug>` = locked, shows that reviewer's
+`alt_model_<tag>` = locked, empty; `Rec: <slug>` = locked, shows that reviewer's
 **submitted** JSON (drafts under `current/` stay private). Visual lock =
 `opacity:0.7; pointer-events:none` on `#recommendations-panel`.
 
@@ -599,16 +599,27 @@ before summary + overlay build:
 |---|---|---|
 | `current` | off (default) | raw current |
 | `current` | on | current + user's in-progress UI recs |
-| `backup_NNN` / `alt_model_NNN` | disabled/off | raw that-model data |
+| `backup_NNN` / `alt_model_<tag>` | disabled/off | raw that-model data |
 | `Rec: <slug>` | forced on | current + that reviewer's JSON recs |
 
 Model dropdown (`_populate_models`): `current` + `backup_*` + `alt_model_*` + a
 `Rec: <slug>` per **other-reviewer submitted** JSON (drafts never surfaced).
 
-**Alt models (`alt_models/`)** ship their own `alt_model_NNN_plotdata.npz`, so
+**Alt models (`alt_models/`)** ship their own `alt_model_<tag>_plotdata.npz`, so
 the loader sets `npz_path` and the overlay renders the alt model's own CCs.
 Otherwise treated exactly like backups (read-only) — every `model_key !=
 "current"` gate already covers them; no alt-specific branching.
+
+`<tag>` is **not** a number: the pipeline also writes descriptive ones
+(`alt_model_recalcIDs_*`), possibly containing underscores. So
+`loader.list_alt_models` discovers them **by file stem** — the stems of the
+per-model `_config.json` and `_merged_win_results.csv` — instead of matching
+`alt_model_(\d+)`, which silently dropped every named model (it never reached
+the dropdown). The CSV is the indispensable file; a stem without it (a config
+from an aborted run) is skipped. The stem **is** the model key, so it
+namespaces itself; a stem that would collide with `current`/`backup_NNN` is
+prefixed/dropped. Model keys are only ever compared against `"current"` and
+`"rec:"`, so an arbitrary key needs no other change.
 
 ### Stage-3 aggregation panel (admin only)
 
